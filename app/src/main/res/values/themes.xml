@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.HermesMobile" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#FF070712</item>
+        <item name="android:navigationBarColor">#FF070712</item>
+    </style>
+</resources>

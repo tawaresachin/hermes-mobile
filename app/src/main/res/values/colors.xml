@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="hermes_primary">#FF7C4DFF</color>
+    <color name="hermes_secondary">#FF00E5FF</color>
+    <color name="hermes_background_dark">#FF070712</color>
+    <color name="hermes_surface_dark">#FF0D0D1A</color>
+</resources>

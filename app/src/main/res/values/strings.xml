@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Hermes Mobile</string>
+    <string name="chat_title">Chat</string>
+    <string name="sessions_title">Sessions</string>
+    <string name="settings_title">Settings</string>
+    <string name="home_title">Home</string>
+    <string name="voice_title">Voice</string>
+    <string name="send">Send</string>
+    <string name="type_message">Type a message…</string>
+    <string name="record_voice">Record voice</string>
+    <string name="connecting">Connecting…</string>
+    <string name="connected">Connected</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="server_url">Server URL</string>
+    <string name="api_key">API Key</string>
+    <string name="no_sessions">No sessions yet</string>
+    <string name="resume">Resume</string>
+    <string name="delete">Delete</string>
+    <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="theme_mode">Theme</string>
+    <string name="voice_settings">Voice Settings</string>
+    <string name="clear_chat">Clear Chat</string>
+</resources>
