@@ -90,12 +90,6 @@ class ChatViewModel @Inject constructor(
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
 
     // ── Streaming state ──
-    private val _voiceText = MutableStateFlow("")
-    val voiceText: StateFlow<String> = _voiceText.asStateFlow()
-
-    private val _pendingVoiceText = MutableStateFlow("")
-    val pendingVoiceText: StateFlow<String> = _pendingVoiceText.asStateFlow()
-
     private val _streamingContent = MutableStateFlow("")
     val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
 
@@ -267,10 +261,6 @@ class ChatViewModel @Inject constructor(
         // No-op — voice recording managed by permission launcher
     }
 
-    fun clearPendingVoiceText() {
-        _pendingVoiceText.value = ""
-    }
-
     // ── Connection ──
     fun checkConnection() {
         viewModelScope.launch {
@@ -324,8 +314,6 @@ fun ChatScreen(
     val connectionStatus by vm.connectionStatus.collectAsState()
     val isRecording by vm.isRecording.collectAsState()
     val recordingAmplitude by vm.recordingAmplitude.collectAsState()
-    val voiceText by vm.voiceText.collectAsState()
-    val pendingVoiceText by vm.pendingVoiceText.collectAsState()
     val toolCalls by vm.toolCalls.collectAsState()
     val errorMessage by vm.errorMessage.collectAsState()
     val sessionIdState by vm.sessionId.collectAsState()

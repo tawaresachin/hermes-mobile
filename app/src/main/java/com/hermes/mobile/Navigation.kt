@@ -59,6 +59,7 @@ fun MainNavigation(
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
+    val startDestId = navController.graph.findStartDestination().id
 
     Scaffold(
         bottomBar = {
@@ -67,7 +68,7 @@ fun MainNavigation(
                 currentDestination = currentDestination,
                 onNavigate = { screen ->
                     navController.navigate(screen.route) {
-                        popUpTo(navController.graph.findStartDestination().id)
+                        popUpTo(startDestId)
                         launchSingleTop = true
                     }
                 }
@@ -84,7 +85,7 @@ fun MainNavigation(
                     onNavigateToChat = { sessionId ->
                         ChatNav.pendingSessionId = sessionId
                         navController.navigate(Screen.Chat.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
+                            popUpTo(startDestId) {
                                 saveState = true
                             }
                             launchSingleTop = true
@@ -107,7 +108,7 @@ fun MainNavigation(
                     onSessionSelected = { sessionId ->
                         ChatNav.pendingSessionId = sessionId
                         navController.navigate(Screen.Chat.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
+                            popUpTo(startDestId) {
                                 saveState = true
                             }
                             launchSingleTop = true
@@ -120,6 +121,7 @@ fun MainNavigation(
                     onNewChat = {
                         ChatNav.pendingSessionId = null
                         navController.navigate(Screen.Chat.route) {
+                            popUpTo(startDestId)
                             launchSingleTop = true
                         }
                     }

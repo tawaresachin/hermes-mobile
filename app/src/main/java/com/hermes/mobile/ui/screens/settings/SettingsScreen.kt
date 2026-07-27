@@ -49,8 +49,6 @@ data class SettingsUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val errorDetail: String? = null,
     val isDarkTheme: Boolean = false,
-    val voiceEnabled: Boolean = true,
-    val ttsEnabled: Boolean = false,
 )
 
 @HiltViewModel
@@ -94,14 +92,6 @@ class SettingsViewModel @Inject constructor(
         val newValue = !_uiState.value.isDarkTheme
         _uiState.value = _uiState.value.copy(isDarkTheme = newValue)
         repository.saveDarkTheme(newValue)
-    }
-
-    fun toggleVoice() {
-        _uiState.value = _uiState.value.copy(voiceEnabled = !_uiState.value.voiceEnabled)
-    }
-
-    fun toggleTts() {
-        _uiState.value = _uiState.value.copy(ttsEnabled = !_uiState.value.ttsEnabled)
     }
 
     fun testConnection() {
@@ -272,27 +262,6 @@ fun SettingsScreen(
                 subtitle = if (uiState.isDarkTheme) "Dark mode active" else "Light mode active",
                 checked = uiState.isDarkTheme,
                 onCheckedChange = { viewModel.toggleTheme() }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // ─── Voice Section ───
-        SettingsSection("Voice & Audio") {
-            SettingsToggle(
-                icon = Icons.Filled.Mic,
-                title = "Voice Input",
-                subtitle = if (uiState.voiceEnabled) "Voice recording enabled" else "Voice recording disabled",
-                checked = uiState.voiceEnabled,
-                onCheckedChange = { viewModel.toggleVoice() }
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            SettingsToggle(
-                icon = Icons.Filled.VolumeUp,
-                title = "Text-to-Speech",
-                subtitle = if (uiState.ttsEnabled) "Responses read aloud" else "Text only",
-                checked = uiState.ttsEnabled,
-                onCheckedChange = { viewModel.toggleTts() }
             )
         }
 

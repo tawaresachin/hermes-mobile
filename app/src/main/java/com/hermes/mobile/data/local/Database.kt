@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface SessionDao {
-    @Query("SELECT * FROM sessions ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM sessions ORDER BY updatedAt DESC LIMIT 10")
     fun getAllSessions(): Flow<List<Session>>
 
     @Query("SELECT * FROM sessions WHERE id = :sessionId")

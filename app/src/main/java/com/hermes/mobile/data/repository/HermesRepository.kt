@@ -22,7 +22,7 @@ class HermesRepository @Inject constructor(
     suspend fun getSession(sessionId: String): Session? = sessionDao.getSession(sessionId)
 
     suspend fun createSession(): Session {
-        val session = Session(id = UUID.randomUUID().toString().take(8))
+        val session = Session(id = UUID.randomUUID().toString())
         sessionDao.upsertSession(session)
         return session
     }

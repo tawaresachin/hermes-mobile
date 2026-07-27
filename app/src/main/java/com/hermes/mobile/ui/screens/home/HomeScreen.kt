@@ -176,7 +176,12 @@ class HomeViewModel @Inject constructor(
             if (savedConfig != null) {
                 // Check connection with saved config (won't overwrite with empty values)
                 val status = repository.checkConnection(savedConfig)
-                val latency = if (status == ConnectionStatus.CONNECTED) 42L else 0L
+                val latency = if (status == ConnectionStatus.CONNECTED) {
+                    // Perform a lightweight connection check to measure RTT
+                    val start = System.currentTimeMillis()
+                    repository.checkConnection(savedConfig)
+                    System.currentTimeMillis() - start
+                } else 0L
                 _uiState.update { state ->
                     state.copy(
                         connectionStatus = status,
