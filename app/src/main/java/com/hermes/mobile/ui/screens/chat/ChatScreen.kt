@@ -356,8 +356,8 @@ fun ChatScreen(
         }
     }
 
-    // Initialise session — observe pending session from ChatNav (works even with restoreState)
-    LaunchedEffect(com.hermes.mobile.ChatNav.pendingSessionId) {
+    // Initialise session — read pending session once on creation
+    LaunchedEffect(Unit) {
         val pending = com.hermes.mobile.ChatNav.pendingSessionId
         com.hermes.mobile.ChatNav.pendingSessionId = null // consume
         vm.initSession(pending)
