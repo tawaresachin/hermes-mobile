@@ -18,10 +18,6 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideHermesApiService(): HermesApiService = HermesApiService()
-
-    @Provides
-    @Singleton
     fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
         return AppDatabase.create(context)
     }

@@ -33,12 +33,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
@@ -54,12 +58,16 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.scale
@@ -77,8 +85,6 @@ import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.Session
 import com.hermes.mobile.data.repository.HermesRepository
-import com.hermes.mobile.ui.theme.DarkOnSurface
-import com.hermes.mobile.ui.theme.DarkOnSurfaceVariant
 import com.hermes.mobile.ui.theme.DarkSurfaceVariant
 import com.hermes.mobile.ui.theme.ErrorRed
 import com.hermes.mobile.ui.theme.GlassWhite
@@ -92,6 +98,7 @@ import com.hermes.mobile.ui.theme.SuccessGreen
 import com.hermes.mobile.ui.theme.WarningAmber
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -129,6 +136,16 @@ class HomeViewModel @Inject constructor(
         observeSessions()
         updateGreeting()
         checkConnection()
+        // Poll connection every 5s when not connected
+        viewModelScope.launch {
+            while (isActive) {
+                delay(5000)
+                val current = _uiState.value.connectionStatus
+                if (current != ConnectionStatus.CONNECTED) {
+                    checkConnection()
+                }
+            }
+        }
     }
 
     private fun observeSessions() {
@@ -154,16 +171,27 @@ class HomeViewModel @Inject constructor(
     fun checkConnection() {
         viewModelScope.launch {
             _uiState.update { state -> state.copy(connectionStatus = ConnectionStatus.CONNECTING) }
-            // Simulate a short delay for UX polish
-            delay(400L)
-            val config = com.hermes.mobile.data.model.ServerConfig()
-            val status = repository.checkConnection(config)
-            _uiState.update { state ->
-                state.copy(
-                    connectionStatus = status,
-                    serverBaseUrl = config.baseUrl,
-                    connectionLatency = if (status == ConnectionStatus.CONNECTED) 42L else 0L
-                )
+            // Use saved config (from Settings) instead of blank defaults
+            val savedConfig = repository.getSavedConfig()
+            if (savedConfig != null) {
+                // Check connection with saved config (won't overwrite with empty values)
+                val status = repository.checkConnection(savedConfig)
+                val latency = if (status == ConnectionStatus.CONNECTED) 42L else 0L
+                _uiState.update { state ->
+                    state.copy(
+                        connectionStatus = status,
+                        serverBaseUrl = savedConfig.baseUrl,
+                        connectionLatency = latency
+                    )
+                }
+            } else {
+                // No config saved yet — show disconnected state
+                _uiState.update { state ->
+                    state.copy(
+                        connectionStatus = ConnectionStatus.DISCONNECTED,
+                        serverBaseUrl = "http://localhost:8080"
+                    )
+                }
             }
         }
     }
@@ -197,6 +225,18 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    // Re-check connection when returning from Settings
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshConnection()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -310,7 +350,7 @@ private fun GreetingSection(
     )
 }
 
-// ─── Connection Hero Card (Glassmorphism) ───
+// ─── Connection Hero Card ───
 
 @Composable
 private fun ConnectionHeroCard(
@@ -334,7 +374,7 @@ private fun ConnectionHeroCard(
         targetValue = when (status) {
             ConnectionStatus.CONNECTED -> SuccessGreen
             ConnectionStatus.CONNECTING -> WarningAmber
-            ConnectionStatus.DISCONNECTED -> DarkOnSurfaceVariant
+            ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
             ConnectionStatus.ERROR -> ErrorRed
         },
         animationSpec = tween(600),
@@ -342,149 +382,86 @@ private fun ConnectionHeroCard(
     )
 
     val statusText = when (status) {
-        ConnectionStatus.CONNECTED -> "Connected to Hermes"
+        ConnectionStatus.CONNECTED -> "Connected"
         ConnectionStatus.CONNECTING -> "Connecting…"
         ConnectionStatus.DISCONNECTED -> "Disconnected"
         ConnectionStatus.ERROR -> "Connection Error"
     }
 
     val statusIcon = when (status) {
-        ConnectionStatus.CONNECTED -> Icons.Filled.Wifi
-        ConnectionStatus.CONNECTING -> Icons.Filled.Wifi
-        ConnectionStatus.DISCONNECTED -> Icons.Filled.WifiOff
-        ConnectionStatus.ERROR -> Icons.Filled.WifiOff
+        ConnectionStatus.CONNECTED -> Icons.Filled.CheckCircle
+        ConnectionStatus.CONNECTING -> Icons.Filled.Sync
+        ConnectionStatus.DISCONNECTED -> Icons.Filled.CloudOff
+        ConnectionStatus.ERROR -> Icons.Filled.Error
     }
 
     Card(
+        onClick = onRefresh,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color.Transparent
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .drawWithCache {
-                    // Glassmorphism base
-                    val glassBrush = Brush.linearGradient(
-                        colors = listOf(
-                            GlassWhite,
-                            GlassWhiteStrong.copy(alpha = 0.15f)
-                        )
-                    )
-                    onDrawBehind {
-                        // Outer glow
-                        drawRoundRect(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(
-                                    HermesPrimary.copy(alpha = 0.08f),
-                                    Color.Transparent
-                                )
-                            ),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(24.dp.toPx())
-                        )
-                        // Glass background
-                        drawRoundRect(
-                            brush = glassBrush,
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(24.dp.toPx())
-                        )
-                        // Border gradient
-                        drawRoundRect(
-                            brush = Brush.horizontalGradient(
-                                colors = listOf(
-                                    GlassWhiteStrong,
-                                    HermesPrimary.copy(alpha = 0.3f),
-                                    HermesSecondary.copy(alpha = 0.3f),
-                                    GlassWhiteStrong
-                                )
-                            ),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(24.dp.toPx()),
-                            style = Stroke(width = 1.dp.toPx())
-                        )
-                    }
-                }
-                .clickable { onRefresh() }
-                .padding(20.dp)
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                // Status row
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
+            // Status icon with pulse
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(statusColor.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .alpha(
+                            if (status == ConnectionStatus.CONNECTING) pulseAlpha else 1f
+                        )
                 ) {
-                    // Pulsing dot
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .alpha(
-                                if (status == ConnectionStatus.CONNECTING) pulseAlpha else 1f
-                            )
-                            .clip(CircleShape)
-                            .background(statusColor)
-                            .shadow(
-                                elevation = if (status == ConnectionStatus.CONNECTED) 4.dp else 0.dp,
-                                shape = CircleShape,
-                                ambientColor = statusColor,
-                                spotColor = statusColor
-                            )
-                    )
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
                     Icon(
                         imageVector = statusIcon,
                         contentDescription = null,
                         tint = statusColor,
                         modifier = Modifier.size(20.dp)
                     )
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = DarkOnSurface
-                    )
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    // Latency badge (only when connected)
-                    if (status == ConnectionStatus.CONNECTED) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = SuccessGreen.copy(alpha = 0.12f)
-                        ) {
-                            Text(
-                                text = "${latency}ms",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = SuccessGreen,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.width(14.dp))
 
-                // Server URL
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
                 Text(
                     text = serverUrl.ifBlank { "Not configured" },
                     style = MaterialTheme.typography.bodySmall,
-                    color = DarkOnSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
 
-                // Action hint
-                if (status != ConnectionStatus.CONNECTED) {
-                    Spacer(modifier = Modifier.height(8.dp))
+            if (status == ConnectionStatus.CONNECTED) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = SuccessGreen.copy(alpha = 0.12f)
+                ) {
                     Text(
-                        text = "Tap to retry connection",
+                        text = "${latency}ms",
                         style = MaterialTheme.typography.labelSmall,
-                        color = HermesSecondary.copy(alpha = 0.7f)
+                        color = SuccessGreen,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }
@@ -558,69 +535,54 @@ private fun QuickActionButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
-    val brush = remember(gradientColors) {
-        Brush.verticalGradient(gradientColors)
-    }
-
     Card(
         onClick = onClick,
-        modifier = modifier.height(128.dp),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         enabled = enabled
     ) {
-        Box(
+        Column(
             modifier = Modifier
-                .fillMaxSize()
-                .drawWithCache {
-                    onDrawBehind {
-                        // Gradient accent top border
-                        drawRoundRect(
-                            brush = brush,
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(20.dp.toPx()),
-                            style = Stroke(width = 2.dp.toPx())
-                        )
-                    }
-                }
-                .padding(12.dp)
+                .fillMaxWidth()
+                .padding(10.dp)
         ) {
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.SpaceBetween
+            // Icon with solid background
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(gradientColors[0].copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
             ) {
-                // Icon with gradient background
-                Surface(
-                    shape = CircleShape,
-                    color = gradientColors[0].copy(alpha = 0.15f),
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = label,
-                            tint = gradientColors[0],
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
-                Column {
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = DarkOnSurface
-                    )
-                    Text(
-                        text = description,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = DarkOnSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = gradientColors[0],
+                    modifier = Modifier.size(16.dp)
+                )
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -648,26 +610,30 @@ private fun RecentSessionsHeader(
         Text(
             text = "$sessionCount total",
             style = MaterialTheme.typography.labelSmall,
-            color = DarkOnSurfaceVariant,
-            modifier = Modifier.padding(end = 4.dp)
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(end = 2.dp)
         )
 
-        IconButton(onClick = onSeeAll) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "See all",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = HermesPrimary,
-                    fontWeight = FontWeight.Medium
-                )
-                Spacer(modifier = Modifier.width(2.dp))
-                Icon(
-                    imageVector = Icons.Outlined.ChevronRight,
-                    contentDescription = "See all sessions",
-                    tint = HermesPrimary,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
+        // Clickable "See all" instead of IconButton to avoid min-size clipping
+        Row(
+            modifier = Modifier
+                .clickable(onClick = onSeeAll)
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "See all",
+                style = MaterialTheme.typography.labelMedium,
+                color = HermesPrimary,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.width(2.dp))
+            Icon(
+                imageVector = Icons.Outlined.ChevronRight,
+                contentDescription = "See all",
+                tint = HermesPrimary,
+                modifier = Modifier.size(16.dp)
+            )
         }
     }
 }
@@ -679,7 +645,7 @@ private fun EmptySessionsPlaceholder() {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant.copy(alpha = 0.5f))
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(
             modifier = Modifier
@@ -690,21 +656,21 @@ private fun EmptySessionsPlaceholder() {
             Icon(
                 imageVector = Icons.Filled.History,
                 contentDescription = null,
-                tint = DarkOnSurfaceVariant.copy(alpha = 0.5f),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                 modifier = Modifier.size(48.dp)
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = "No recent sessions",
                 style = MaterialTheme.typography.titleMedium,
-                color = DarkOnSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.Medium
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "Start a new chat or resume a previous one",
                 style = MaterialTheme.typography.bodySmall,
-                color = DarkOnSurfaceVariant.copy(alpha = 0.7f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center
             )
         }
@@ -788,7 +754,7 @@ private fun SessionItem(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
@@ -820,7 +786,7 @@ private fun SessionItem(
                     text = session.title ?: "Untitled Session",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium,
-                    color = DarkOnSurface,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -829,18 +795,18 @@ private fun SessionItem(
                     Text(
                         text = "${session.messageCount} message${if (session.messageCount != 1) "s" else ""}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = DarkOnSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (session.messageCount > 0) {
                         Text(
                             text = " · ",
                             style = MaterialTheme.typography.labelSmall,
-                            color = DarkOnSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
                             text = formatRelativeTime(session.updatedAt),
                             style = MaterialTheme.typography.labelSmall,
-                            color = DarkOnSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -849,7 +815,7 @@ private fun SessionItem(
             Icon(
                 imageVector = Icons.Outlined.ChevronRight,
                 contentDescription = "Open session",
-                tint = DarkOnSurfaceVariant.copy(alpha = 0.5f),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                 modifier = Modifier.size(20.dp)
             )
         }

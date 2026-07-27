@@ -2,6 +2,8 @@ package com.hermes.mobile.ui.screens.chat
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -39,7 +41,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -47,12 +48,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.hermes.mobile.data.model.ConnectionStatus
-import com.hermes.mobile.data.model.Message
-import com.hermes.mobile.data.model.MessageRole
+import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.theme.*
-import com.hermes.mobile.voice.VoiceRecorder
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -74,13 +72,12 @@ data class ToolCallInfo(
 enum class ToolCallStatus { PENDING, RUNNING, COMPLETED, FAILED }
 
 // ═══════════════════════════════════════════════════════════════
-// ViewModel
+// ViewModel  —  uses @HiltViewModel so hiltViewModel() works
 // ═══════════════════════════════════════════════════════════════
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val repository: HermesRepository,
-    private val voiceRecorder: VoiceRecorder,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -93,8 +90,11 @@ class ChatViewModel @Inject constructor(
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
 
     // ── Streaming state ──
-    private val _streamingMessageId = MutableStateFlow<Long?>(null)
-    val streamingMessageId: StateFlow<Long?> = _streamingMessageId.asStateFlow()
+    private val _voiceText = MutableStateFlow("")
+    val voiceText: StateFlow<String> = _voiceText.asStateFlow()
+
+    private val _pendingVoiceText = MutableStateFlow("")
+    val pendingVoiceText: StateFlow<String> = _pendingVoiceText.asStateFlow()
 
     private val _streamingContent = MutableStateFlow("")
     val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
@@ -123,50 +123,75 @@ class ChatViewModel @Inject constructor(
 
     // ── Initialisation ──
     private var messageJob: Job? = null
-    private var amplitudeJob: Job? = null
+    private var _connectionJob: Job? = null
+    private var initJob: Job? = null
 
+    /**
+     * Initialise the session. If a session ID is provided, resume it.
+     * Otherwise, create a new empty session.
+     * Cancel any previous init to prevent the "StandaloneCoroutine was cancelled" race.
+     */
+    fun initSession(sessionId: String?) {
+        initJob?.cancel()
+        // Don't skip even if same ID — a fresh observeMessages ensures we show latest data
+        initJob = viewModelScope.launch {
+            if (sessionId != null) {
+                resumeSession(sessionId)
+            } else {
+                createNewSession()
+            }
+        }
+    }
     init {
         checkConnection()
-    }
-
-    fun initSession(sessionId: String?) {
-        if (_sessionId.value != null && _sessionId.value == sessionId) return
-        if (sessionId != null) {
-            resumeSession(sessionId)
-        } else {
-            createNewSession()
+        // Poll connection every 5s when not connected
+        viewModelScope.launch {
+            try {
+                while (isActive) {
+                    delay(5000)
+                    if (_connectionStatus.value != ConnectionStatus.CONNECTED) {
+                        checkConnection()
+                    }
+                }
+            } catch (_: Exception) { }
         }
     }
 
-    fun createNewSession() {
-        viewModelScope.launch {
-            try {
-                val session = repository.createSession()
-                _sessionId.value = session.id
-                observeMessages(session.id)
-            } catch (e: Exception) {
-                _errorMessage.value = "Failed to create session: ${e.message}"
-            }
+    private suspend fun createNewSession() {
+        try {
+            val session = repository.createSession()
+            _sessionId.value = session.id
+            observeMessages(session.id)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Legitimate cancellation when scope is torn down — suppress
+        } catch (e: Exception) {
+            _errorMessage.value = "Failed to create session: ${e.message}"
         }
     }
 
-    fun resumeSession(sessionId: String) {
-        viewModelScope.launch {
-            try {
-                _sessionId.value = sessionId
-                observeMessages(sessionId)
-                repository.resumeSession(sessionId) // warm cache
-            } catch (e: Exception) {
-                _errorMessage.value = "Failed to resume session: ${e.message}"
-            }
+    private suspend fun resumeSession(sessionId: String) {
+        try {
+            _sessionId.value = sessionId
+            observeMessages(sessionId)
+            repository.resumeSession(sessionId) // warm cache
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Legitimate cancellation when scope is torn down — suppress
+        } catch (e: Exception) {
+            _errorMessage.value = "Failed to resume session: ${e.message}"
         }
     }
 
     private fun observeMessages(sessionId: String) {
         messageJob?.cancel()
         messageJob = viewModelScope.launch {
-            repository.getMessages(sessionId).collect { msgList ->
-                _messages.value = msgList
+            try {
+                repository.getMessages(sessionId).collect { msgList ->
+                    _messages.value = msgList
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Legitimate cancellation when session changes — suppress error
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to load messages: ${e.message}"
             }
         }
     }
@@ -194,12 +219,10 @@ class ChatViewModel @Inject constructor(
                 )
                 // streaming finished – mark as done
                 _isStreaming.value = false
-                _streamingMessageId.value = null
                 _streamingContent.value = ""
                 _toolCalls.value = emptyList()
             } catch (e: Exception) {
                 _isStreaming.value = false
-                _streamingMessageId.value = null
                 _errorMessage.value = "Send failed: ${e.message}"
             }
         }
@@ -234,56 +257,31 @@ class ChatViewModel @Inject constructor(
         sendMessage(lastUserMsg.content)
     }
 
-    // ── Voice recording ──
+    // ── Voice dictation ──
     fun startRecording() {
-        if (!voiceRecorder.hasPermission()) {
-            _errorMessage.value = "Microphone permission required"
-            return
-        }
-        val context = voiceRecorder::class.java.name // not ideal, but we get cache dir from context
-        // In a real app we'd pass the context; here we simulate via the recorder
-        val file = voiceRecorder.startRecording(
-            java.io.File(
-                android.os.Environment.getDataDirectory(),
-                "hermes_voice_cache"
-            )
-        )
-        if (file != null) {
-            _isRecording.value = true
-            _recordingAmplitude.value = 0f
-            startAmplitudeSimulation()
-        } else {
-            _errorMessage.value = "Failed to start recording"
-        }
+        // Voice recording handled by startVoiceDictation() in ChatScreen directly
+        // via SpeechRecognizer with permission launcher
     }
 
-    fun stopRecording(): String? {
-        amplitudeJob?.cancel()
-        amplitudeJob = null
-        _isRecording.value = false
-        val file = voiceRecorder.stopRecording()
-        _recordingAmplitude.value = 0f
-        // In production we'd transcribe the file; for now return a placeholder
-        return file?.absolutePath
+    fun stopRecording() {
+        // No-op — voice recording managed by permission launcher
     }
 
-    private fun startAmplitudeSimulation() {
-        amplitudeJob?.cancel()
-        amplitudeJob = viewModelScope.launch {
-            while (isActive) {
-                _recordingAmplitude.value = (0.1f..1f).random()
-                delay(100L)
-            }
-        }
+    fun clearPendingVoiceText() {
+        _pendingVoiceText.value = ""
     }
 
     // ── Connection ──
     fun checkConnection() {
         viewModelScope.launch {
             _connectionStatus.value = ConnectionStatus.CONNECTING
-            val config = com.hermes.mobile.data.model.ServerConfig()
-            val status = repository.checkConnection(config)
-            _connectionStatus.value = status
+            val savedConfig = repository.getSavedConfig()
+            if (savedConfig != null) {
+                val status = repository.checkConnection(savedConfig)
+                _connectionStatus.value = status
+            } else {
+                _connectionStatus.value = ConnectionStatus.DISCONNECTED
+            }
         }
     }
 
@@ -295,13 +293,16 @@ class ChatViewModel @Inject constructor(
             _messages.value = emptyList()
             _streamingContent.value = ""
             _isStreaming.value = false
-            _streamingMessageId.value = null
         }
     }
 
     // ── Dismiss error ──
     fun dismissError() {
         _errorMessage.value = null
+    }
+
+    fun setError(msg: String) {
+        _errorMessage.value = msg
     }
 }
 
@@ -312,32 +313,57 @@ class ChatViewModel @Inject constructor(
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
 @Composable
 fun ChatScreen(
-    paddingValues: PaddingValues,
-    sessionId: String? = null,
-    viewModel: ChatViewModel = hiltViewModel()
+    paddingValues: PaddingValues
 ) {
-    val messages by viewModel.messages.collectAsState()
-    val streamingContent by viewModel.streamingContent.collectAsState()
-    val streamingMessageId by viewModel.streamingMessageId.collectAsState()
-    val isStreaming by viewModel.isStreaming.collectAsState()
-    val connectionStatus by viewModel.connectionStatus.collectAsState()
-    val isRecording by viewModel.isRecording.collectAsState()
-    val recordingAmplitude by viewModel.recordingAmplitude.collectAsState()
-    val toolCalls by viewModel.toolCalls.collectAsState()
-    val errorMessage by viewModel.errorMessage.collectAsState()
-    val sessionIdState by viewModel.sessionId.collectAsState()
+    val context = LocalContext.current
+    val vm: ChatViewModel = hiltViewModel()
+
+    val messages by vm.messages.collectAsState()
+    val streamingContent by vm.streamingContent.collectAsState()
+    val isStreaming by vm.isStreaming.collectAsState()
+    val connectionStatus by vm.connectionStatus.collectAsState()
+    val isRecording by vm.isRecording.collectAsState()
+    val recordingAmplitude by vm.recordingAmplitude.collectAsState()
+    val voiceText by vm.voiceText.collectAsState()
+    val pendingVoiceText by vm.pendingVoiceText.collectAsState()
+    val toolCalls by vm.toolCalls.collectAsState()
+    val errorMessage by vm.errorMessage.collectAsState()
+    val sessionIdState by vm.sessionId.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Initialise session on first composition
-    LaunchedEffect(sessionId) {
-        viewModel.initSession(sessionId)
+    // Permission launcher for microphone voice dictation
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            // Permission granted — use Android SpeechRecognizer inline
+            startVoiceDictation(
+                context = context,
+                onFinalText = { text ->
+                    if (text.isNotBlank()) {
+                        inputText = text
+                        vm.sendMessage(text.trim())
+                        inputText = ""
+                    }
+                },
+                onError = { msg -> vm.setError("Voice: $msg") }
+            )
+        } else {
+            vm.setError("Microphone permission denied")
+        }
     }
 
-    // Auto-scroll to bottom on new message or streaming
+    // Initialise session — observe pending session from ChatNav (works even with restoreState)
+    LaunchedEffect(com.hermes.mobile.ChatNav.pendingSessionId) {
+        val pending = com.hermes.mobile.ChatNav.pendingSessionId
+        com.hermes.mobile.ChatNav.pendingSessionId = null // consume
+        vm.initSession(pending)
+    }
+
+    // Auto-scroll to bottom
     LaunchedEffect(messages.size, streamingContent) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
@@ -347,86 +373,63 @@ fun ChatScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(paddingValues)
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // ── Connection status bar ──
         ConnectionStatusBar(connectionStatus = connectionStatus)
 
-        // ── Error snackbar ──
         errorMessage?.let { err ->
             Snackbar(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                action = {
-                    TextButton(onClick = { viewModel.dismissError() }) {
-                        Text("Dismiss")
-                    }
-                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                action = { TextButton(onClick = { vm.dismissError() }) { Text("Dismiss") } },
                 containerColor = MaterialTheme.colorScheme.errorContainer,
                 contentColor = MaterialTheme.colorScheme.onErrorContainer
-            ) {
-                Text(err)
-            }
+            ) { Text(err) }
         }
 
-        // ── Tool calls during streaming ──
         if (isStreaming && toolCalls.isNotEmpty()) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                toolCalls.forEach { toolCall ->
-                    ToolCallCard(toolCall = toolCall)
-                }
+                toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
             }
         }
 
-        // ── Message list ──
-        Box(modifier = Modifier.weight(1f)) {
+        Box(modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .background(
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .border(
+                width = 2.dp,
+                color = MaterialTheme.colorScheme.outline,
+                shape = RoundedCornerShape(12.dp)
+            )
+        ) {
             if (messages.isEmpty() && !isStreaming) {
-                // Empty state
                 EmptyChatState()
             } else {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(bottom = 4.dp)
                 ) {
-                    items(
-                        items = messages,
-                        key = { it.id }
-                    ) { message ->
-                        val isStreamingThis = isStreaming && message.id == streamingMessageId
-                        val displayContent = if (isStreamingThis) {
-                            streamingContent
-                        } else {
-                            message.content
-                        }
-                        MessageBubble(
-                            message = message,
-                            displayContent = displayContent,
-                            isStreaming = isStreamingThis
-                        )
+                    items(items = messages, key = { it.id }) { message ->
+                        val isStreamingThis = isStreaming && message.isStreaming
+                        val displayContent = if (isStreamingThis) streamingContent else message.content
+                        MessageBubble(message = message, displayContent = displayContent, isStreaming = isStreamingThis)
                     }
-
-                    // Typing indicator at the bottom
                     if (isStreaming && streamingContent.isBlank()) {
-                        item(key = "typing_indicator") {
-                            TypingIndicator()
-                        }
+                        item(key = "typing_indicator") { TypingIndicator() }
                     }
                 }
             }
         }
 
-        // ── Voice recording overlay ──
         AnimatedVisibility(
             visible = isRecording,
             enter = fadeIn() + slideInVertically { it },
@@ -434,34 +437,103 @@ fun ChatScreen(
         ) {
             VoiceRecordingBar(
                 amplitude = recordingAmplitude,
-                onStop = {
-                    viewModel.stopRecording()
-                    // In production we'd transcribe and populate inputText
-                }
+                onStop = { vm.stopRecording() }
             )
         }
 
-        // ── Input bar ──
         InputBar(
             inputText = inputText,
             onInputChange = { inputText = it },
             onSend = {
                 if (inputText.isNotBlank()) {
-                    viewModel.sendMessage(inputText.trim())
+                    vm.sendMessage(inputText.trim())
                     inputText = ""
                 }
             },
             onVoice = {
-                if (isRecording) {
-                    viewModel.stopRecording()
+                // Request mic permission, then start inline voice dictation
+                if (ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED) {
+                    startVoiceDictation(
+                        context = context,
+                        onFinalText = { text ->
+                            if (text.isNotBlank()) {
+                                inputText = text
+                                vm.sendMessage(text.trim())
+                                inputText = ""
+                            }
+                        },
+                        onError = { msg -> vm.setError("Voice: $msg") }
+                    )
                 } else {
-                    viewModel.startRecording()
+                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
             },
             isRecording = isRecording,
             isStreaming = isStreaming,
             enabled = sessionIdState != null
         )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Inline voice dictation — uses SpeechRecognizer directly
+// ═══════════════════════════════════════════════════════════════
+
+private fun startVoiceDictation(
+    context: android.content.Context,
+    onFinalText: (String) -> Unit,
+    onError: (String) -> Unit
+) {
+    if (!android.speech.SpeechRecognizer.isRecognitionAvailable(context)) {
+        onError("Speech recognition not available on this device")
+        return
+    }
+    try {
+        val recognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(context)
+        if (recognizer == null) {
+            onError("Speech recognition service unavailable")
+            return
+        }
+        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+            putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
+        recognizer.setRecognitionListener(object : android.speech.RecognitionListener {
+            override fun onReadyForSpeech(params: android.os.Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onError(error: Int) {
+                val msg = when (error) {
+                    android.speech.SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected"
+                    android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech"
+                    android.speech.SpeechRecognizer.ERROR_NETWORK -> "Network error"
+                    android.speech.SpeechRecognizer.ERROR_CLIENT -> "Client error"
+                    else -> "Voice error ($error)"
+                }
+                onError(msg)
+                recognizer.destroy()
+            }
+            override fun onResults(results: android.os.Bundle?) {
+                val matches = results?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                val text = matches?.firstOrNull() ?: ""
+                if (text.isNotBlank()) onFinalText(text)
+                else onError("No speech detected")
+                recognizer.destroy()
+            }
+            override fun onPartialResults(partialResults: android.os.Bundle?) {}
+            override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
+        })
+        recognizer.startListening(intent)
+    } catch (e: Exception) {
+        onError("Voice error: ${e.message}")
     }
 }
 
@@ -479,7 +551,7 @@ fun ConnectionStatusBar(connectionStatus: ConnectionStatus) {
     }
 
     AnimatedVisibility(
-        visible = connectionStatus != ConnectionStatus.CONNECTED,
+        visible = true,
         enter = expandVertically() + fadeIn(),
         exit = shrinkVertically() + fadeOut()
     ) {
@@ -556,7 +628,12 @@ fun MessageBubble(
     isStreaming: Boolean
 ) {
     val isUser = message.role == MessageRole.USER
-    val bubbleColor = if (isUser) UserBubble else AssistantBubbleDark
+    val isDark = MaterialTheme.colorScheme.background == DarkBg
+    val bubbleColor = if (isUser) {
+        if (isDark) UserBubbleDark else UserBubbleLight
+    } else {
+        if (isDark) OtherBubbleDark else OtherBubbleLight
+    }
     val alignment = if (isUser) Arrangement.End else Arrangement.Start
     val bubbleShape = RoundedCornerShape(
         topStart = if (isUser) 16.dp else 4.dp,
@@ -564,7 +641,11 @@ fun MessageBubble(
         bottomStart = 16.dp,
         bottomEnd = 16.dp
     )
-    val textColor = if (isUser) Color.White else DarkOnSurface
+    val textColor = if (isUser) {
+        if (isDark) Color.White else Color(0xFF000000)
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -572,7 +653,7 @@ fun MessageBubble(
     ) {
         Column(
             modifier = Modifier
-                .widthIn(max = 320.dp)
+                .widthIn(max = 480.dp)
                 .animateContentSize(
                     animationSpec = tween(durationMillis = 200)
                 )
@@ -580,572 +661,105 @@ fun MessageBubble(
             Surface(
                 shape = bubbleShape,
                 color = bubbleColor,
-                shadowElevation = if (isUser) 4.dp else 0.dp
+                shadowElevation = 2.dp
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                ) {
-                    if (displayContent.isBlank() && isStreaming) {
-                        // Placeholder for initial streaming
-                        TypingIndicator()
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    if (isStreaming) {
+                        StreamingText(
+                            text = displayContent,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = textColor,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     } else {
                         MarkdownText(
                             text = displayContent,
-                            textColor = textColor,
-                            isUser = isUser
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = textColor,
+                            modifier = Modifier.fillMaxWidth()
                         )
+                    }
+                    if (isStreaming) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        StreamingIndicator(color = textColor.copy(alpha = 0.6f))
                     }
                 }
             }
-
-            // Timestamp
-            Text(
-                text = formatTimestamp(message.timestamp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(start = if (isUser) 0.dp else 4.dp, end = if (isUser) 4.dp else 0.dp, top = 2.dp),
-                textAlign = if (isUser) TextAlign.End else TextAlign.Start
-            )
         }
     }
 }
 
-private fun formatTimestamp(epochMs: Long): String {
-    val sdf = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
-    return sdf.format(java.util.Date(epochMs))
-}
-
 // ═══════════════════════════════════════════════════════════════
-// Markdown renderer
+// Streaming text
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
-fun MarkdownText(
+fun StreamingText(
     text: String,
-    textColor: Color,
-    isUser: Boolean,
+    style: TextStyle,
+    color: Color,
     modifier: Modifier = Modifier
 ) {
-    // Split into blocks: code fences vs regular markdown
-    val blocks = remember(text) { parseMarkdownBlocks(text) }
-
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        blocks.forEach { block ->
-            when (block) {
-                is MarkdownBlock.CodeBlock -> {
-                    CodeBlock(
-                        code = block.code,
-                        language = block.language
-                    )
-                }
-                is MarkdownBlock.TextBlock -> {
-                    InlineMarkdownText(
-                        text = block.text,
-                        color = textColor,
-                        isUser = isUser
-                    )
-                }
-            }
-        }
-    }
-}
-
-private sealed class MarkdownBlock {
-    data class CodeBlock(val code: String, val language: String = "") : MarkdownBlock()
-    data class TextBlock(val text: String) : MarkdownBlock()
-}
-
-private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
-    val blocks = mutableListOf<MarkdownBlock>()
-    val lines = text.split("\n")
-    val codeFenceStart = Regex("^```(\\w*)\\s*$")
-    var inCodeBlock = false
-    val codeLines = mutableListOf<String>()
-    var codeLang = ""
-    val textLines = mutableListOf<String>()
-
-    fun flushText() {
-        if (textLines.isNotEmpty()) {
-            blocks.add(MarkdownBlock.TextBlock(textLines.joinToString("\n")))
-            textLines.clear()
-        }
-    }
-
-    for (line in lines) {
-        if (!inCodeBlock) {
-            val match = codeFenceStart.find(line)
-            if (match != null) {
-                flushText()
-                inCodeBlock = true
-                codeLang = match.groupValues[1]
-                codeLines.clear()
-            } else {
-                textLines.add(line)
-            }
-        } else {
-            if (line.trimStart().startsWith("```")) {
-                inCodeBlock = false
-                blocks.add(MarkdownBlock.CodeBlock(codeLines.joinToString("\n"), codeLang))
-                codeLines.clear()
-                codeLang = ""
-            } else {
-                codeLines.add(line)
-            }
-        }
-    }
-
-    if (inCodeBlock) {
-        // Unclosed code fence – treat remaining as code
-        if (codeLines.isNotEmpty()) {
-            blocks.add(MarkdownBlock.CodeBlock(codeLines.joinToString("\n"), codeLang))
-        }
-    } else {
-        flushText()
-    }
-
-    return blocks
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Inline markdown text (bold, italic, code, lists)
-// ═══════════════════════════════════════════════════════════════
-
-@Composable
-fun InlineMarkdownText(
-    text: String,
-    color: Color,
-    isUser: Boolean
-) {
-    // Process lines separately for list detection
-    val lines = text.split("\n")
-    Column {
-        lines.forEachIndexed { index, line ->
-            val isListItem = line.trimStart().startsWith("- ") ||
-                    line.trimStart().startsWith("* ") ||
-                    line.trimStart().matches(Regex("^\\d+\\.\\s.*"))
-            val content = if (isListItem) {
-                line.trimStart().substringAfter(" ").substringAfter(".")
-            } else {
-                line
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                if (isListItem) {
-                    Text(
-                        text = if (line.trimStart().matches(Regex("^\\d+\\.\\s.*"))) {
-                            // numbered list handled via prefix
-                            ""
-                        } else {
-                            "\u2022  "
-                        },
-                        color = color,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Text(
-                    text = buildInlineAnnotatedString(content, color),
-                    color = color,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        lineHeight = 24.sp
-                    ),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            if (index < lines.size - 1) {
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun buildInlineAnnotatedString(text: String, baseColor: Color) = buildAnnotatedString {
-    // Simple inline parser: **bold**, *italic*, `code`
-    val regex = Regex("""(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)""")
-    var lastEnd = 0
-    for (match in regex.findAll(text)) {
-        // Plain text before this match
-        if (match.range.first > lastEnd) {
-            val plain = text.substring(lastEnd, match.range.first)
-            append(plain)
-        }
-
-        when {
-            match.groupValues[1].startsWith("**") -> {
-                // Bold: **text**
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                    append(match.groupValues[2])
-                }
-            }
-            match.groupValues[1].startsWith("*") && match.groupValues[1].length > 1 -> {
-                // Italic: *text*
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                    append(match.groupValues[3])
-                }
-            }
-            match.groupValues[1].startsWith("`") -> {
-                // Inline code: `code`
-                withStyle(SpanStyle(
-                    fontFamily = FontFamily.Monospace,
-                    background = if (baseColor == Color.White)
-                        Color.White.copy(alpha = 0.15f)
-                    else
-                        DarkSurfaceVariant,
-                    color = if (baseColor == Color.White) Color.White else HermesPrimaryLight
-                )) {
-                    append(match.groupValues[4])
-                }
-            }
-        }
-        lastEnd = match.range.last + 1
-    }
-    if (lastEnd < text.length) {
-        append(text.substring(lastEnd))
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Code block with syntax highlighting
-// ═══════════════════════════════════════════════════════════════
-
-@Composable
-fun CodeBlock(
-    code: String,
-    language: String
-) {
-    var isExpanded by remember { mutableStateOf(false) }
-    val displayCode = if (isExpanded) code else code.lines().take(12).joinToString("\n")
-    val isTruncated = code.lines().size > 12
-
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0D0D1A),
-        tonalElevation = 0.dp,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column {
-            // Header bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF1A1A2E))
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Code,
-                        contentDescription = null,
-                        tint = HermesPrimaryLight,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = language.ifBlank { "code" },
-                        color = HermesPrimaryLight,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    // Copy button
-                    IconButton(
-                        onClick = { /* copy to clipboard */ },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.ContentCopy,
-                            contentDescription = "Copy",
-                            tint = DarkOnSurfaceVariant,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                    if (isTruncated) {
-                        IconButton(
-                            onClick = { isExpanded = !isExpanded },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (isExpanded) Icons.Filled.UnfoldLess
-                                else Icons.Filled.UnfoldMore,
-                                contentDescription = if (isExpanded) "Collapse" else "Expand",
-                                tint = DarkOnSurfaceVariant,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Code content with syntax highlighting
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(12.dp)
-            ) {
-                SyntaxHighlightedCode(
-                    code = displayCode,
-                    language = language
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun SyntaxHighlightedCode(
-    code: String,
-    language: String
-) {
-    val keywordColor = Color(0xFF82AAFF)
-    val stringColor = Color(0xFFC3E88D)
-    val commentColor = Color(0xFF546E7A)
-    val numberColor = Color(0xFFF78C6C)
-    val functionColor = Color(0xFFC792EA)
-    val defaultColor = Color(0xFFD6DEEB)
-    val punctuationColor = Color(0xFF89DDFF)
-
+    val infiniteTransition = rememberInfiniteTransition(label = "streaming")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.7f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "streamingAlpha"
+    )
     Text(
-        text = buildAnnotatedString {
-            applySyntaxHighlighting(
-                code = code,
-                language = language,
-                keywordColor = keywordColor,
-                stringColor = stringColor,
-                commentColor = commentColor,
-                numberColor = numberColor,
-                functionColor = functionColor,
-                defaultColor = defaultColor,
-                punctuationColor = punctuationColor
-            )
-        },
-        fontFamily = FontFamily.Monospace,
-        fontSize = 13.sp,
-        lineHeight = 20.sp
+        text = text + " ▊",
+        style = style,
+        color = color.copy(alpha = alpha),
+        modifier = modifier
     )
 }
 
-private fun AnnotatedString.Builder.applySyntaxHighlighting(
-    code: String,
-    language: String,
-    keywordColor: Color,
-    stringColor: Color,
-    commentColor: Color,
-    numberColor: Color,
-    functionColor: Color,
-    defaultColor: Color,
-    punctuationColor: Color
-) {
-    // Language-specific keywords
-    val keywords = when (language.lowercase()) {
-        "kotlin", "kt" -> setOf(
-            "fun", "val", "var", "class", "object", "interface", "enum", "data",
-            "sealed", "abstract", "open", "override", "private", "public", "protected",
-            "internal", "import", "package", "if", "else", "when", "for", "while",
-            "do", "return", "suspend", "inline", "tailrec", "operator", "infix",
-            "companion", "init", "constructor", "this", "super", "null", "true",
-            "false", "is", "in", "as", "try", "catch", "finally", "throw",
-            "let", "also", "apply", "run", "with", "by", "lazy", "lateinit"
-        )
-        "python", "py" -> setOf(
-            "def", "class", "if", "elif", "else", "for", "while", "return",
-            "import", "from", "as", "try", "except", "finally", "raise",
-            "with", "yield", "lambda", "pass", "break", "continue", "and",
-            "or", "not", "in", "is", "None", "True", "False", "self", "async",
-            "await", "global", "nonlocal", "print", "len", "range", "type",
-            "super", "del", "assert"
-        )
-        "javascript", "js", "typescript", "ts" -> setOf(
-            "function", "const", "let", "var", "class", "if", "else", "for",
-            "while", "do", "return", "import", "export", "from", "as",
-            "async", "await", "try", "catch", "finally", "throw", "new",
-            "this", "super", "null", "undefined", "true", "false", "typeof",
-            "instanceof", "switch", "case", "default", "break", "continue",
-            "in", "of", "yield", "delete", "void"
-        )
-        "json" -> emptySet()
-        "xml", "html" -> setOf(
-            "!DOCTYPE", "html", "head", "body", "div", "span", "p", "a",
-            "img", "ul", "ol", "li", "table", "tr", "td", "th", "form",
-            "input", "button", "style", "script", "meta", "link", "title",
-            "h1", "h2", "h3", "h4", "h5", "h6", "section", "article",
-            "header", "footer", "nav", "main", "aside"
-        )
-        "shell", "bash", "sh" -> setOf(
-            "if", "then", "else", "elif", "fi", "for", "while", "do", "done",
-            "case", "esac", "function", "return", "exit", "export", "local",
-            "source", "echo", "cd", "ls", "rm", "mv", "cp", "mkdir", "touch",
-            "chmod", "chown", "grep", "sed", "awk", "cat", "head", "tail",
-            "find", "sort", "uniq", "wc", "curl", "wget", "pip", "npm",
-            "yarn", "docker", "git", "sudo", "apt", "yum", "brew"
-        )
-        "java" -> setOf(
-            "public", "private", "protected", "class", "interface", "enum",
-            "abstract", "final", "static", "void", "int", "long", "double",
-            "float", "boolean", "char", "String", "new", "if", "else",
-            "for", "while", "do", "switch", "case", "break", "continue",
-            "return", "throw", "try", "catch", "finally", "import", "package",
-            "extends", "implements", "super", "this", "null", "true", "false",
-            "synchronized", "volatile", "transient", "instanceof"
-        )
-        "swift" -> setOf(
-            "func", "var", "let", "class", "struct", "enum", "protocol",
-            "extension", "if", "else", "for", "while", "repeat", "return",
-            "import", "guard", "defer", "throw", "throws", "rethrows",
-            "async", "await", "actor", "nonisolated", "mutating",
-            "override", "open", "public", "internal", "fileprivate",
-            "private", "static", "class", "self", "super", "nil",
-            "true", "false", "in", "as", "is", "try", "catch"
-        )
-        else -> setOf(
-            "if", "else", "for", "while", "return", "import", "from",
-            "class", "def", "fun", "var", "val", "const", "let", "new",
-            "this", "super", "null", "true", "false", "try", "catch",
-            "throw", "async", "await", "enum", "interface", "type",
-            "extends", "implements", "abstract", "static", "void"
-        )
-    }
+// ═══════════════════════════════════════════════════════════════
+// Typing indicator
+// ═══════════════════════════════════════════════════════════════
 
-    val lines = code.split("\n")
-    for ((lineIdx, line) in lines.withIndex()) {
-        if (lineIdx > 0) append("\n")
-
-        val tokens = tokenizeLine(line)
-        for (token in tokens) {
-            val color = when {
-                token.type == TokenType.COMMENT -> commentColor
-                token.type == TokenType.STRING -> stringColor
-                token.type == TokenType.NUMBER -> numberColor
-                token.type == TokenType.KEYWORD -> keywordColor
-                token.type == TokenType.FUNCTION -> functionColor
-                token.type == TokenType.PUNCTUATION -> punctuationColor
-                else -> defaultColor
-            }
-            withStyle(SpanStyle(color = color)) {
-                append(token.text)
-            }
-        }
-    }
-}
-
-private enum class TokenType {
-    KEYWORD, STRING, COMMENT, NUMBER, FUNCTION, PUNCTUATION, PLAIN
-}
-
-private data class Token(val text: String, val type: TokenType)
-
-private fun tokenizeLine(line: String): List<Token> {
-    val tokens = mutableListOf<Token>()
-    var i = 0
-    val len = line.length
-
-    while (i < len) {
-        // Line comment (// or #)
-        if ((i + 1 < len && line[i] == '/' && line[i + 1] == '/') ||
-            line[i] == '#'
+@Composable
+fun TypingIndicator() {
+    val infiniteTransition = rememberInfiniteTransition(label = "typing")
+    val delays = listOf(0, 200, 400)
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(12.dp),
+        horizontalArrangement = Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            tonalElevation = 2.dp
         ) {
-            tokens.add(Token(line.substring(i), TokenType.COMMENT))
-            return tokens
-        }
-
-        // Block comment /* */
-        if (i + 1 < len && line[i] == '/' && line[i + 1] == '*') {
-            val end = line.indexOf("*/", i + 2)
-            if (end != -1) {
-                tokens.add(Token(line.substring(i, end + 2), TokenType.COMMENT))
-                i = end + 2
-                continue
-            } else {
-                tokens.add(Token(line.substring(i), TokenType.COMMENT))
-                return tokens
-            }
-        }
-
-        // String - double quote
-        if (line[i] == '"') {
-            val end = findStringEnd(line, i, '"')
-            tokens.add(Token(line.substring(i, end), TokenType.STRING))
-            i = end
-            continue
-        }
-
-        // String - single quote
-        if (line[i] == '\'') {
-            val end = findStringEnd(line, i, '\'')
-            tokens.add(Token(line.substring(i, end), TokenType.STRING))
-            i = end
-            continue
-        }
-
-        // String - backtick (template literals)
-        if (line[i] == '`') {
-            val end = line.indexOf('`', i + 1)
-            val actualEnd = if (end == -1) len else end + 1
-            tokens.add(Token(line.substring(i, actualEnd), TokenType.STRING))
-            i = actualEnd
-            continue
-        }
-
-        // Numbers
-        if (line[i].isDigit() && (i == 0 || !line[i - 1].isLetterOrDigit())) {
-            val start = i
-            while (i < len && (line[i].isDigit() || line[i] == '.' || line[i] == 'f' ||
-                        line[i] == 'L' || line[i] == 'x' || line[i] == 'X' ||
-                        line[i] in 'a'..'f' || line[i] in 'A'..'F')
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                i++
+                delays.forEach { delayMs ->
+                    val alpha by infiniteTransition.animateFloat(
+                        initialValue = 0.3f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(600, delayMillis = delayMs),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "dot$delayMs"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(HermesSecondary.copy(alpha = alpha))
+                    )
+                }
             }
-            tokens.add(Token(line.substring(start, i), TokenType.NUMBER))
-            continue
         }
-
-        // Punctuation / operators
-        if (line[i] in "{}()[]<>,;:.=+-*/%!&|^~?:@") {
-            tokens.add(Token(line[i].toString(), TokenType.PUNCTUATION))
-            i++
-            continue
-        }
-
-        // Word (identifier)
-        if (line[i].isLetter() || line[i] == '_') {
-            val start = i
-            while (i < len && (line[i].isLetterOrDigit() || line[i] == '_')) {
-                i++
-            }
-            val word = line.substring(start, i)
-            // Check if followed by '(' — function call
-            val trimmed = line.substring(i).trimStart()
-            val isFunction = trimmed.startsWith("(")
-            tokens.add(Token(word, if (isFunction) TokenType.FUNCTION else TokenType.PLAIN))
-            continue
-        }
-
-        // Everything else (whitespace, etc.)
-        tokens.add(Token(line[i].toString(), TokenType.PLAIN))
-        i++
     }
-
-    return tokens
-}
-
-private fun findStringEnd(line: String, start: Int, quote: Char): Int {
-    var i = start + 1
-    while (i < line.length) {
-        if (line[i] == '\\') {
-            i += 2 // skip escaped char
-            continue
-        }
-        if (line[i] == quote) return i + 1
-        i++
-    }
-    return line.length
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1154,187 +768,101 @@ private fun findStringEnd(line: String, start: Int, quote: Char): Int {
 
 @Composable
 fun ToolCallCard(toolCall: ToolCallInfo) {
-    var expanded by remember { mutableStateOf(false) }
-
-    val statusColor = when (toolCall.status) {
-        ToolCallStatus.RUNNING -> WarningAmber
-        ToolCallStatus.COMPLETED -> SuccessGreen
-        ToolCallStatus.FAILED -> ErrorRed
-        ToolCallStatus.PENDING -> DarkOnSurfaceVariant
-    }
-
-    val statusIcon = when (toolCall.status) {
-        ToolCallStatus.RUNNING -> Icons.Filled.Sync
-        ToolCallStatus.COMPLETED -> Icons.Filled.CheckCircle
-        ToolCallStatus.FAILED -> Icons.Filled.Error
-        ToolCallStatus.PENDING -> Icons.Filled.HourglassEmpty
-    }
-
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = DarkSurfaceVariant.copy(alpha = 0.6f)
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
         )
     ) {
-        Column {
-            // Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Filled.Build,
                     contentDescription = null,
-                    tint = HermesPrimaryLight,
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
                     modifier = Modifier.size(16.dp)
                 )
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "🛠  ${toolCall.name}",
-                    color = DarkOnSurface,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.weight(1f)
+                    text = toolCall.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
                 )
-                if (toolCall.status == ToolCallStatus.RUNNING) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        strokeWidth = 2.dp,
-                        color = statusColor
-                    )
-                } else {
-                    Icon(
-                        imageVector = statusIcon,
-                        contentDescription = null,
-                        tint = statusColor,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                Icon(
-                    imageVector = if (expanded) Icons.Filled.ExpandLess
-                    else Icons.Filled.ExpandMore,
-                    contentDescription = "Toggle details",
-                    tint = DarkOnSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = toolCall.status.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = when (toolCall.status) {
+                        ToolCallStatus.RUNNING -> WarningAmber
+                        ToolCallStatus.COMPLETED -> SuccessGreen
+                        ToolCallStatus.FAILED -> ErrorRed
+                        ToolCallStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
                 )
             }
-
-            // Expanded body
-            AnimatedVisibility(visible = expanded) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
-                ) {
-                    if (toolCall.arguments.isNotBlank()) {
-                        Text(
-                            text = "Arguments:",
-                            color = DarkOnSurfaceVariant,
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = DarkBackground
-                        ) {
-                            Text(
-                                text = toolCall.arguments,
-                                color = DarkOnSurface,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.padding(8.dp)
-                            )
-                        }
-                    }
-                    toolCall.result?.let { result ->
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Result:",
-                            color = DarkOnSurfaceVariant,
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = DarkBackground
-                        ) {
-                            Text(
-                                text = result,
-                                color = SuccessGreen,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.padding(8.dp)
-                            )
-                        }
-                    }
-                }
+            if (toolCall.arguments.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = toolCall.arguments,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f),
+                    maxLines = 5,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Typing indicator (animated dots)
+// Voice recording bar
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
-fun TypingIndicator() {
-    val infiniteTransition = rememberInfiniteTransition(label = "typing")
-    val dot1Alpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(600, delayMillis = 0),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "dot1"
-    )
-    val dot2Alpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(600, delayMillis = 200),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "dot2"
-    )
-    val dot3Alpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(600, delayMillis = 400),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "dot3"
-    )
-
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(4.dp)
+fun VoiceRecordingBar(
+    amplitude: Float,
+    onStop: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 8.dp
     ) {
-        Text(
-            text = "Hermes is thinking",
-            color = DarkOnSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall
-        )
-        Dot(dot1Alpha)
-        Dot(dot2Alpha)
-        Dot(dot3Alpha)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.Mic,
+                    contentDescription = null,
+                    tint = ErrorRed,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Recording…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            TextButton(onClick = onStop) {
+                Icon(
+                    imageVector = Icons.Filled.Stop,
+                    contentDescription = "Stop",
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Stop")
+            }
+        }
     }
-}
-
-@Composable
-private fun Dot(alpha: Float) {
-    Box(
-        modifier = Modifier
-            .size(6.dp)
-            .clip(CircleShape)
-            .background(HermesPrimary.copy(alpha = alpha))
-    )
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1358,13 +886,13 @@ fun InputBar(
         shadowElevation = 8.dp
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp)
-                .navigationBarsPadding(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                    .navigationBarsPadding(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
             // Voice button
             FilledIconButton(
                 onClick = onVoice,
@@ -1399,8 +927,9 @@ fun InputBar(
                 textStyle = MaterialTheme.typography.bodyMedium,
                 shape = RoundedCornerShape(24.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = HermesPrimary.copy(alpha = 0.3f),
-                    unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant,
+                    focusedBorderColor = HermesPrimary,
+                    unfocusedBorderColor = HermesPrimary.copy(alpha = 0.5f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                     cursorColor = HermesPrimary
                 ),
                 maxLines = 4,
@@ -1444,134 +973,49 @@ fun InputBar(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Voice recording bar with waveform
+// Markdown text rendering (simple)
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
-fun VoiceRecordingBar(
-    amplitude: Float,
-    onStop: () -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Recording indicator
-            Box(
-                modifier = Modifier
-                    .size(12.dp)
-                    .clip(CircleShape)
-                    .background(ErrorRed)
-            )
-
-            // Amplitude waveform
-            VoiceWaveform(
-                amplitude = amplitude,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(40.dp)
-            )
-
-            // Timer
-            val elapsed = remember { mutableLongStateOf(0L) }
-            LaunchedEffect(Unit) {
-                while (true) {
-                    delay(1000L)
-                    elapsed.value += 1000
-                }
-            }
-            Text(
-                text = formatDuration(elapsed.longValue),
-                color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace
-            )
-
-            // Stop button
-            FilledIconButton(
-                onClick = onStop,
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = ErrorRed,
-                    contentColor = Color.White
-                )
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Stop,
-                    contentDescription = "Stop recording",
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun VoiceWaveform(
-    amplitude: Float,
+fun MarkdownText(
+    text: String,
+    style: TextStyle = MaterialTheme.typography.bodyMedium,
+    color: Color = MaterialTheme.colorScheme.onSurface,
     modifier: Modifier = Modifier
 ) {
-    val barCount = 24
-    val barWidth = 4.dp
-    val barGap = 2.dp
-
-    // Animate amplitude transitions smoothly
-    val animatedAmplitude by animateFloatAsState(
-        targetValue = amplitude.coerceIn(0.1f, 1f),
-        animationSpec = spring(dampingRatio = 0.6f, stiffness = 200f),
-        label = "waveform_amplitude"
-    )
-
-    Canvas(modifier = modifier.fillMaxWidth()) {
-        val totalWidth = size.width
-        val totalHeight = size.height
-        val middle = totalHeight / 2f
-        val barWidthPx = barWidth.toPx()
-        val gapPx = barGap.toPx()
-        val step = barWidthPx + gapPx
-        val usableWidth = barCount * step - gapPx
-        val startX = (totalWidth - usableWidth) / 2f
-
-        for (i in 0 until barCount) {
-            // Center bars are taller (simulate human speech envelope)
-            val centerFactor = 1f - (kotlin.math.abs(i - barCount / 2f) / (barCount / 2f))
-            val barHeight = (4f + centerFactor * animatedAmplitude * (totalHeight / 2.5f))
-                .coerceAtMost(totalHeight / 2.2f)
-
-            val x = startX + i * step
-            val y1 = middle - barHeight / 2f
-            val y2 = middle + barHeight / 2f
-
-            drawRoundRect(
-                color = HermesPrimary.copy(alpha = 0.6f + 0.4f * centerFactor),
-                topLeft = androidx.compose.ui.geometry.Offset(x, y1),
-                size = androidx.compose.ui.geometry.Size(barWidthPx, barHeight),
-                cornerRadius = CornerRadius(barWidthPx / 2f, barWidthPx / 2f)
-            )
+    val annotated = remember(text, style, color) {
+        buildAnnotatedString {
+            append(text)
         }
     }
-}
-
-private fun formatDuration(millis: Long): String {
-    val totalSecs = millis / 1000
-    val mins = totalSecs / 60
-    val secs = totalSecs % 60
-    return "%d:%02d".format(mins, secs)
+    Text(
+        text = annotated,
+        style = style,
+        color = color,
+        modifier = modifier
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Utility extension
+// Streaming indicator (blinking cursor)
 // ═══════════════════════════════════════════════════════════════
 
-private fun ClosedFloatingPointRange<Float>.random(): Float {
-    return this.start + (this.endInclusive - this.start) * kotlin.random.Random.nextFloat()
+@Composable
+fun StreamingIndicator(color: Color) {
+    val infiniteTransition = rememberInfiniteTransition(label = "streaming_indicator")
+    val visible by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "blink"
+    )
+    Box(
+        modifier = Modifier
+            .width(6.dp)
+            .height(16.dp)
+            .background(color.copy(alpha = visible))
+    )
 }

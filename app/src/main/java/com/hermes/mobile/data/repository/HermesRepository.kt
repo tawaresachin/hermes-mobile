@@ -28,6 +28,9 @@ class HermesRepository @Inject constructor(
     }
 
     suspend fun deleteSession(sessionId: String) {
+        // Best-effort server-side delete (won't block local if offline)
+        apiService.deleteSession(sessionId)
+        // Always delete locally
         messageDao.deleteSessionMessages(sessionId)
         sessionDao.deleteSession(sessionId)
     }
@@ -88,19 +91,47 @@ class HermesRepository @Inject constructor(
         sessionDao.upsertSession(session)
     }
 
+    /** Local-only delete (no server call). Used as fallback. */
+    suspend fun deleteSessionLocal(sessionId: String) {
+        messageDao.deleteSessionMessages(sessionId)
+        sessionDao.deleteSession(sessionId)
+    }
+
     suspend fun clearSession(sessionId: String) {
         messageDao.deleteSessionMessages(sessionId)
     }
 
     // ─── Server Connection ───
 
+    fun saveConfig(config: ServerConfig) {
+        apiService.updateConfig(config)
+    }
+
+    fun getSavedConfig(): ServerConfig? = apiService.getConfig()
+
     suspend fun checkConnection(config: ServerConfig): ConnectionStatus {
         return try {
-            val result = apiService.healthCheck(config)
-            if (result) ConnectionStatus.CONNECTED
+            if (apiService.healthCheck(config)) ConnectionStatus.CONNECTED
             else ConnectionStatus.ERROR
         } catch (e: Exception) {
             ConnectionStatus.ERROR
         }
     }
+
+    suspend fun checkConnectionRaw(config: ServerConfig): Boolean {
+        return apiService.healthCheck(config)
+    }
+
+    // ─── Dark Theme ───
+
+    fun saveDarkTheme(isDark: Boolean) {
+        apiService.saveDarkTheme(isDark)
+    }
+
+    fun isDarkTheme(): Boolean = apiService.isDarkTheme()
+
+    fun hasDarkThemePreference(): Boolean = apiService.hasDarkThemePreference()
+
+    /** Expose SharedPreferences for reactive observation. */
+    fun prefs(): android.content.SharedPreferences = apiService.prefs()
 }

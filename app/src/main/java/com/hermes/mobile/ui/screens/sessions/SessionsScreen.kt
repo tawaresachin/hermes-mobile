@@ -105,14 +105,35 @@ class SessionsViewModel @Inject constructor(
      */
     fun deleteSession(session: Session) {
         viewModelScope.launch {
-            repository.deleteSession(session.id)
-            lastDeletedSession = session
-            _snackbarEvent.emit(
-                SnackbarMessage(
-                    text = "\"${session.title ?: "Untitled"}\" deleted",
-                    actionLabel = "Undo"
+            try {
+                repository.deleteSession(session.id)
+                lastDeletedSession = session
+                _snackbarEvent.emit(
+                    SnackbarMessage(
+                        text = "\"${session.title ?: "Untitled"}\" deleted",
+                        actionLabel = "Undo"
+                    )
                 )
-            )
+            } catch (e: Exception) {
+                // If delete fails, try a direct local-only delete
+                try {
+                    repository.deleteSessionLocal(session.id)
+                    lastDeletedSession = session
+                    _snackbarEvent.emit(
+                        SnackbarMessage(
+                            text = "\"${session.title ?: "Untitled"}\" deleted",
+                            actionLabel = "Undo"
+                        )
+                    )
+                } catch (e2: Exception) {
+                    _snackbarEvent.emit(
+                        SnackbarMessage(
+                            text = "Delete failed: ${e2.message ?: "unknown"}",
+                            actionLabel = null
+                        )
+                    )
+                }
+            }
         }
     }
 
@@ -152,6 +173,7 @@ fun SessionsScreen(
     paddingValues: PaddingValues,
     onSessionSelected: (String) -> Unit,
     onBack: () -> Unit,
+    onNewChat: () -> Unit,
     viewModel: SessionsViewModel = hiltViewModel()
 ) {
     val sessions by viewModel.filteredSessions.collectAsState()
@@ -174,9 +196,7 @@ fun SessionsScreen(
     }
 
     Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(paddingValues),
+        modifier = Modifier.fillMaxSize(),
         snackbarHost = {
             SnackbarHost(hostState = snackbarHostState) { data ->
                 Snackbar(
@@ -205,6 +225,7 @@ fun SessionsScreen(
             if (sessions.isEmpty()) {
                 SessionsEmptyState(
                     hasSearchFilter = searchQuery.isNotBlank(),
+                    onNewChat = onNewChat,
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -426,58 +447,36 @@ private fun SessionCard(
         }
     }
 
-    // ── Use a transparent container so the gradient "glass" shows through ──
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Box(
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                // Base dark surface layer
-                .background(
-                    brush = Brush.horizontalGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                        )
-                    ),
-                    shape = RoundedCornerShape(16.dp)
-                )
-                // Glass overlay
-                .background(
-                    brush = Brush.horizontalGradient(
-                        colors = listOf(
-                            GlassWhite,
-                            GlassWhite.copy(alpha = 0.05f)
-                        )
-                    ),
-                    shape = RoundedCornerShape(16.dp)
-                )
                 .padding(16.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
+            // ── Session icon ──
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(HermesPrimary.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
             ) {
-                // ── Session icon ──
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(HermesPrimary.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ChatBubbleOutline,
-                        contentDescription = null,
-                        tint = HermesPrimary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Default.ChatBubbleOutline,
+                    contentDescription = null,
+                    tint = HermesPrimary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
 
                 Spacer(modifier = Modifier.width(14.dp))
 
@@ -546,7 +545,6 @@ private fun SessionCard(
             }
         }
     }
-}
 
 // ═══════════════════════════════════════════════════════════════
 //  Empty state  —  shown when there are no sessions or no search
@@ -556,6 +554,7 @@ private fun SessionCard(
 @Composable
 private fun SessionsEmptyState(
     hasSearchFilter: Boolean,
+    onNewChat: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -626,7 +625,7 @@ private fun SessionsEmptyState(
             Spacer(modifier = Modifier.height(24.dp))
 
             FilledTonalButton(
-                onClick = { /* Navigation to new chat handled by parent */ },
+                onClick = onNewChat,
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.filledTonalButtonColors(
                     containerColor = HermesPrimary.copy(alpha = 0.15f),

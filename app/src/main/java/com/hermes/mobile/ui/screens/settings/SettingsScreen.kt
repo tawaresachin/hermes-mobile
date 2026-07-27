@@ -32,6 +32,7 @@ import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.ServerConfig
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.theme.*
+import com.hermes.mobile.ui.theme.LocalDarkTheme
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,10 +47,10 @@ data class SettingsUiState(
     val apiKey: String = "",
     val showApiKey: Boolean = false,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
-    val isDarkTheme: Boolean = true,
+    val errorDetail: String? = null,
+    val isDarkTheme: Boolean = false,
     val voiceEnabled: Boolean = true,
     val ttsEnabled: Boolean = false,
-    val appVersion: String = "1.0.0 (1)"
 )
 
 @HiltViewModel
@@ -59,6 +60,23 @@ class SettingsViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
+
+    init {
+        // Load saved config into UI fields so user doesn't re-type every time
+        val saved = repository.getSavedConfig()
+        if (saved != null) {
+            _uiState.value = _uiState.value.copy(
+                baseUrl = saved.baseUrl,
+                apiKey = saved.apiKey
+            )
+        }
+        // Load saved dark theme preference
+        if (repository.hasDarkThemePreference()) {
+            _uiState.value = _uiState.value.copy(
+                isDarkTheme = repository.isDarkTheme()
+            )
+        }
+    }
 
     fun updateBaseUrl(url: String) {
         _uiState.value = _uiState.value.copy(baseUrl = url)
@@ -73,7 +91,9 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun toggleTheme() {
-        _uiState.value = _uiState.value.copy(isDarkTheme = !_uiState.value.isDarkTheme)
+        val newValue = !_uiState.value.isDarkTheme
+        _uiState.value = _uiState.value.copy(isDarkTheme = newValue)
+        repository.saveDarkTheme(newValue)
     }
 
     fun toggleVoice() {
@@ -87,13 +107,35 @@ class SettingsViewModel @Inject constructor(
     fun testConnection() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(connectionStatus = ConnectionStatus.CONNECTING)
+            val rawUrl = _uiState.value.baseUrl.trimEnd('/')
+            // Auto-add https:// if no scheme specified
+            val normalizedUrl = if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
+                "https://$rawUrl"
+            } else {
+                rawUrl
+            }
             val config = ServerConfig(
-                baseUrl = _uiState.value.baseUrl.trimEnd('/'),
+                baseUrl = normalizedUrl,
                 apiKey = _uiState.value.apiKey
             )
-            repository.checkConnection(config)
-            val status = repository.checkConnection(config)
-            _uiState.value = _uiState.value.copy(connectionStatus = status)
+            // Save immediately so chat screen uses it
+            repository.saveConfig(config)
+            try {
+                val connected = repository.checkConnectionRaw(config)
+                if (connected) {
+                    _uiState.value = _uiState.value.copy(connectionStatus = ConnectionStatus.CONNECTED, errorDetail = null)
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        connectionStatus = ConnectionStatus.ERROR,
+                        errorDetail = "Server returned error status"
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    connectionStatus = ConnectionStatus.ERROR,
+                    errorDetail = e.message ?: "Unknown error"
+                )
+            }
         }
     }
 }
@@ -110,14 +152,14 @@ fun SettingsScreen(
     val scrollState = rememberScrollState()
     val context = LocalContext.current
 
-    Column(
+    CompositionLocalProvider(LocalDarkTheme provides uiState.isDarkTheme) {
+        Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(paddingValues)
             .verticalScroll(scrollState)
             .padding(horizontal = 20.dp)
     ) {
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Header
         Text(
@@ -126,7 +168,7 @@ fun SettingsScreen(
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
         )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         // ─── Connection Section ───
         SettingsSection("Server Connection") {
@@ -154,6 +196,15 @@ fun SettingsScreen(
                     color = statusColor
                 )
             }
+            // Show detailed error message if available
+            uiState.errorDetail?.let { detail ->
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ErrorRed.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
 
             OutlinedTextField(
                 value = uiState.baseUrl,
@@ -166,7 +217,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             )
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             OutlinedTextField(
                 value = uiState.apiKey,
@@ -188,7 +239,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             )
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             Button(
                 onClick = { viewModel.testConnection() },
@@ -211,7 +262,7 @@ fun SettingsScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // ─── Appearance Section ───
         SettingsSection("Appearance") {
@@ -224,7 +275,7 @@ fun SettingsScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // ─── Voice Section ───
         SettingsSection("Voice & Audio") {
@@ -245,11 +296,15 @@ fun SettingsScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         // ─── About Section ───
         SettingsSection("About") {
-            SettingsInfoRow("Version", uiState.appVersion)
+            SettingsInfoRow("Version", LocalContext.current.let { ctx ->
+                try {
+                    ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?"
+                } catch (e: Exception) { "?" }
+            })
             SettingsInfoRow("Device", "${Build.MANUFACTURER} ${Build.MODEL}")
             SettingsInfoRow("Android", Build.VERSION.RELEASE)
             Spacer(modifier = Modifier.height(12.dp))
@@ -266,7 +321,8 @@ fun SettingsScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+    }
     }
 }
 
@@ -283,20 +339,20 @@ fun SettingsSection(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             color = HermesPrimary,
-            modifier = Modifier.padding(bottom = 12.dp, start = 4.dp)
+            modifier = Modifier.padding(bottom = 10.dp)
         )
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
             ),
             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(horizontal = 16.dp, vertical = 20.dp),
                 content = content
             )
         }
