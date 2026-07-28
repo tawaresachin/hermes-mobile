@@ -63,7 +63,6 @@ data class SessionSummary(
 
 data class ServerConfig(
     val baseUrl: String = "http://localhost:8080",
-    val apiKey: String = "",
     val isConnected: Boolean = false
 )
 
