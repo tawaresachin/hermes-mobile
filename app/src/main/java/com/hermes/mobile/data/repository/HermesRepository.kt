@@ -45,6 +45,7 @@ class HermesRepository @Inject constructor(
         onChunk: (String) -> Unit,
         onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
         onToolResult: (String, String) -> Unit = { _, _ -> },
+        attempt: Int = 1,
     ): String {
         // Save user message
         val userMsg = Message(
@@ -77,6 +78,14 @@ class HermesRepository @Inject constructor(
                 onToolResult = onToolResult,
             )
         } catch (e: Exception) {
+            val errorMsg = e.message ?: ""
+            // Transparent retry on 401 — don't save error, don't show in UI
+            if (errorMsg.contains("401") && attempt < 2) {
+                // Delete the placeholder message we just created
+                messageDao.deleteMessage(msgId)
+                // Retry silently
+                return sendMessage(sessionId, query, onChunk, onToolCall, onToolResult, attempt + 1)
+            }
             fullResponse.append("⚠️ Connection error: ${e.message}")
         }
 

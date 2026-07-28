@@ -199,11 +199,6 @@ class ChatViewModel @Inject constructor(
         _toolCalls.value = emptyList()
         _errorMessage.value = null
 
-        // Attempt sending with 401 auto-retry
-        launchSendMessage(sid, query)
-    }
-
-    private fun launchSendMessage(sid: String, query: String, attempt: Int = 1) {
         viewModelScope.launch {
             try {
                 repository.sendMessage(
@@ -231,7 +226,6 @@ class ChatViewModel @Inject constructor(
                         }
                     }
                 )
-                // streaming finished – mark as done
                 _isStreaming.value = false
                 _streamingContent.value = ""
                 viewModelScope.launch {
@@ -239,14 +233,8 @@ class ChatViewModel @Inject constructor(
                     _toolCalls.value = emptyList()
                 }
             } catch (e: Exception) {
-                val msg = e.message ?: ""
-                // Auto-retry on 401 with refreshed token
-                if (msg.contains("401") && attempt < 2) {
-                    launchSendMessage(sid, query, attempt + 1)
-                    return@launch
-                }
                 _isStreaming.value = false
-                _errorMessage.value = "Send failed: ${e.message}"
+                _errorMessage.value = e.message
             }
         }
     }
