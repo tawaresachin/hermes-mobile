@@ -2,13 +2,10 @@ package com.hermes.mobile.network
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.hermes.mobile.auth.AuthManager
 import com.hermes.mobile.data.model.ServerConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -27,32 +24,30 @@ import kotlin.coroutines.resumeWithException
 
 @Singleton
 class HermesApiService @Inject constructor(
-    @ApplicationContext private val context: Context,
-    private val authManager: AuthManager,
-    private val authInterceptor: AuthInterceptor
+    @ApplicationContext private val context: Context
 ) {
 
     companion object {
         private const val PREFS_NAME = "hermes_config"
         private const val KEY_BASE_URL = "base_url"
+        private const val KEY_API_KEY = "api_key"
         private const val KEY_DARK_THEME = "dark_theme"
     }
 
-    // ── Theme persistence (unchanged) ──
     fun saveDarkTheme(isDark: Boolean) {
         prefs.edit().putBoolean(KEY_DARK_THEME, isDark).apply()
     }
 
     fun isDarkTheme(): Boolean {
-        if (!prefs.contains(KEY_DARK_THEME)) return false
+        if (!prefs.contains(KEY_DARK_THEME)) return false // default: use system
         return prefs.getBoolean(KEY_DARK_THEME, false)
     }
 
+    /** Returns true if the user has explicitly set a dark theme preference. */
     fun hasDarkThemePreference(): Boolean = prefs.contains(KEY_DARK_THEME)
 
+    /** Expose the SharedPreferences instance for reactive observation. */
     fun prefs(): SharedPreferences = prefs
-
-    // ── HTTP Client with AuthInterceptor ──
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val client by lazy {
@@ -60,56 +55,51 @@ class HermesApiService @Inject constructor(
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
-            .addInterceptor(authInterceptor)
+            .addInterceptor { chain ->
+                val request = chain.request()
+                val authHeader = config?.let { cfg ->
+                    if (cfg.apiKey.isNotBlank()) "Bearer ${cfg.apiKey}" else null
+                }
+                val newRequest = if (authHeader != null) {
+                    request.newBuilder()
+                        .header("Authorization", authHeader)
+                        .header("Content-Type", "application/json")
+                        .build()
+                } else {
+                    request.newBuilder()
+                        .header("Content-Type", "application/json")
+                        .build()
+                }
+                chain.proceed(newRequest)
+            }
             .build()
     }
 
     private val prefs: SharedPreferences
         get() = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    // ── Server URL persistence ──
-
     private var config: ServerConfig? = null
 
     fun updateConfig(cfg: ServerConfig) {
         config = cfg
+        // Persist to disk so it survives crash / process death
         prefs.edit()
             .putString(KEY_BASE_URL, cfg.baseUrl)
+            .putString(KEY_API_KEY, cfg.apiKey)
             .apply()
     }
 
     fun getConfig(): ServerConfig? {
         if (config != null) return config
+        // Restore from disk if we have it
         val url = prefs.getString(KEY_BASE_URL, null) ?: return null
-        val restored = ServerConfig(baseUrl = url)
+        val key = prefs.getString(KEY_API_KEY, "") ?: ""
+        val restored = ServerConfig(baseUrl = url, apiKey = key)
         config = restored
         return restored
     }
 
     fun getBaseUrl(): String = config?.baseUrl ?: "http://localhost:8080"
-
-    // ── Token refresh guard (one at a time) ──
-    private val refreshLock = Mutex()
-
-    /**
-     * Execute a block and retry once on 401 after refreshing the token.
-     */
-    suspend fun <T> withAuthRetry(block: suspend () -> T): T {
-        try {
-            return block()
-        } catch (e: IOException) {
-            if (e.message?.contains("401") == true || e.message?.contains("Unauthorized") == true) {
-                val baseUrl = getBaseUrl()
-                refreshLock.withLock {
-                    val refreshed = authManager.refreshToken(baseUrl)
-                    if (refreshed) {
-                        return@withLock block()
-                    }
-                }
-            }
-            throw e
-        }
-    }
 
     // ─── Health Check ───
 
@@ -124,13 +114,13 @@ class HermesApiService @Inject constructor(
                     .build()
                 val response = client.newCall(request).execute()
                 response.isSuccessful
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 false
             }
         }
     }
 
-    // ─── Streaming Chat via SSE ───
+    // ─── Streaming Chat via SSE (suspend version) ───
 
     suspend fun streamChat(
         query: String,
@@ -160,7 +150,7 @@ class HermesApiService @Inject constructor(
                     type: String?,
                     data: String
                 ) {
-                    if (completed.get()) return
+                    if (completed.get()) return  // already done
 
                     if (data == "[DONE]") {
                         if (completed.compareAndSet(false, true)) {
@@ -178,7 +168,7 @@ class HermesApiService @Inject constructor(
                                 continuation.resume(Unit)
                             }
                         }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
                         onChunk(data)
                     }
                 }
@@ -249,6 +239,10 @@ class HermesApiService @Inject constructor(
 
     // ─── Delete Session (server-side) ───
 
+    /**
+     * Delete a session from the backend server.
+     * This is best-effort — a failure does not throw.
+     */
     suspend fun deleteSession(sessionId: String): Boolean {
         val baseUrl = config?.baseUrl ?: return false
         return withContext(Dispatchers.IO) {
@@ -266,7 +260,7 @@ class HermesApiService @Inject constructor(
     }
 }
 
-internal fun org.json.JSONObject.toMap(): Map<String, Any> {
+private fun org.json.JSONObject.toMap(): Map<String, Any> {
     val map = mutableMapOf<String, Any>()
     keys().forEach { key ->
         val value = get(key)

@@ -3,8 +3,10 @@ package com.hermes.mobile.ui.screens.settings
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
-import androidx.compose.foundation.*
+import androidx.compose.animation.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,16 +28,15 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.hermes.mobile.auth.AuthManager
 import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.ServerConfig
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.theme.*
+import com.hermes.mobile.ui.theme.LocalDarkTheme
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -43,124 +44,87 @@ import javax.inject.Inject
 
 data class SettingsUiState(
     val baseUrl: String = "http://localhost:8080",
+    val apiKey: String = "",
+    val showApiKey: Boolean = false,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val errorDetail: String? = null,
     val isDarkTheme: Boolean = false,
-    // Auth fields
-    val email: String = "",
-    val password: String = "",
-    val showPassword: Boolean = false,
-    val isAuthLoading: Boolean = false,
-    val authError: String? = null,
-    val isLoggedIn: Boolean = false,
-    val loggedInEmail: String = "",
 )
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val repository: HermesRepository,
-    val authManager: AuthManager
+    private val repository: HermesRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
     init {
-        // Load saved config
+        // Load saved config into UI fields so user doesn't re-type every time
         val saved = repository.getSavedConfig()
         if (saved != null) {
-            _uiState.update { it.copy(baseUrl = saved.baseUrl) }
+            _uiState.value = _uiState.value.copy(
+                baseUrl = saved.baseUrl,
+                apiKey = saved.apiKey
+            )
         }
-        // Load dark theme
+        // Load saved dark theme preference
         if (repository.hasDarkThemePreference()) {
-            _uiState.update { it.copy(isDarkTheme = repository.isDarkTheme()) }
-        }
-        // Observe auth state
-        viewModelScope.launch {
-            authManager.isLoggedIn.collect { loggedIn ->
-                _uiState.update {
-                    it.copy(
-                        isLoggedIn = loggedIn,
-                        loggedInEmail = if (loggedIn) authManager.getEmail() else ""
-                    )
-                }
-            }
+            _uiState.value = _uiState.value.copy(
+                isDarkTheme = repository.isDarkTheme()
+            )
         }
     }
 
-    fun updateBaseUrl(url: String) { _uiState.update { it.copy(baseUrl = url) } }
-    fun updateEmail(email: String) { _uiState.update { it.copy(email = email) } }
-    fun updatePassword(pw: String) { _uiState.update { it.copy(password = pw) } }
-    fun togglePasswordVisibility() { _uiState.update { it.copy(showPassword = !it.showPassword) } }
-    fun clearAuthError() { _uiState.update { it.copy(authError = null) } }
-
-    fun register() {
-        val state = _uiState.value
-        if (state.email.isBlank() || state.password.isBlank()) {
-            _uiState.update { it.copy(authError = "Email and password are required") }
-            return
-        }
-        if (state.password.length < 8) {
-            _uiState.update { it.copy(authError = "Password must be at least 8 characters") }
-            return
-        }
-        viewModelScope.launch {
-            _uiState.update { it.copy(isAuthLoading = true, authError = null) }
-            val result = authManager.register(state.baseUrl.trimEnd('/'), state.email, state.password)
-            result.onFailure { e: Throwable ->
-                _uiState.update { it.copy(authError = e.message ?: "Registration failed") }
-            }
-            _uiState.update { it.copy(isAuthLoading = false, password = "") }
-        }
+    fun updateBaseUrl(url: String) {
+        _uiState.value = _uiState.value.copy(baseUrl = url)
     }
 
-    fun login() {
-        val state = _uiState.value
-        if (state.email.isBlank() || state.password.isBlank()) {
-            _uiState.update { it.copy(authError = "Email and password are required") }
-            return
-        }
-        viewModelScope.launch {
-            _uiState.update { it.copy(isAuthLoading = true, authError = null) }
-            val result = authManager.login(state.baseUrl.trimEnd('/'), state.email, state.password)
-            result.onFailure { e: Throwable ->
-                _uiState.update { it.copy(authError = e.message ?: "Login failed") }
-            }
-            _uiState.update { it.copy(isAuthLoading = false, password = "") }
-        }
+    fun updateApiKey(key: String) {
+        _uiState.value = _uiState.value.copy(apiKey = key)
     }
 
-    fun logout() {
-        authManager.logout()
+    fun toggleApiKeyVisibility() {
+        _uiState.value = _uiState.value.copy(showApiKey = !_uiState.value.showApiKey)
     }
 
     fun toggleTheme() {
         val newValue = !_uiState.value.isDarkTheme
-        _uiState.update { it.copy(isDarkTheme = newValue) }
+        _uiState.value = _uiState.value.copy(isDarkTheme = newValue)
         repository.saveDarkTheme(newValue)
     }
 
     fun testConnection() {
         viewModelScope.launch {
-            _uiState.update { it.copy(connectionStatus = ConnectionStatus.CONNECTING) }
+            _uiState.value = _uiState.value.copy(connectionStatus = ConnectionStatus.CONNECTING)
             val rawUrl = _uiState.value.baseUrl.trimEnd('/')
+            // Auto-add https:// if no scheme specified
             val normalizedUrl = if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
                 "https://$rawUrl"
             } else {
                 rawUrl
             }
-            val config = ServerConfig(baseUrl = normalizedUrl)
+            val config = ServerConfig(
+                baseUrl = normalizedUrl,
+                apiKey = _uiState.value.apiKey
+            )
+            // Save immediately so chat screen uses it
             repository.saveConfig(config)
             try {
                 val connected = repository.checkConnectionRaw(config)
-                _uiState.update {
-                    if (connected) it.copy(connectionStatus = ConnectionStatus.CONNECTED, errorDetail = null)
-                    else it.copy(connectionStatus = ConnectionStatus.ERROR, errorDetail = "Server returned error status")
+                if (connected) {
+                    _uiState.value = _uiState.value.copy(connectionStatus = ConnectionStatus.CONNECTED, errorDetail = null)
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        connectionStatus = ConnectionStatus.ERROR,
+                        errorDetail = "Server returned error status"
+                    )
                 }
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(connectionStatus = ConnectionStatus.ERROR, errorDetail = e.message ?: "Unknown error")
-                }
+                _uiState.value = _uiState.value.copy(
+                    connectionStatus = ConnectionStatus.ERROR,
+                    errorDetail = e.message ?: "Unknown error"
+                )
             }
         }
     }
@@ -180,235 +144,154 @@ fun SettingsScreen(
 
     CompositionLocalProvider(LocalDarkTheme provides uiState.isDarkTheme) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(horizontal = 20.dp)
-        ) {
-            Spacer(modifier = Modifier.height(12.dp))
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(horizontal = 20.dp)
+    ) {
+        Spacer(modifier = Modifier.height(12.dp))
 
-            Text(
-                text = "Settings",
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Spacer(modifier = Modifier.height(16.dp))
+        // Header
+        Text(
+            text = "Settings",
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Spacer(modifier = Modifier.height(16.dp))
 
-            // ─── Authentication Section ───
-            SettingsSection("Authentication") {
-                if (uiState.isLoggedIn) {
-                    // Logged in state
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    ) {
-                        Icon(
-                            Icons.Filled.CheckCircle,
-                            contentDescription = null,
-                            tint = SuccessGreen,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                "Logged in",
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                uiState.loggedInEmail,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    Button(
-                        onClick = { viewModel.logout() },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
-                        )
-                    ) { Text("Log Out") }
-                } else {
-                    // Login / Register form
-                    OutlinedTextField(
-                        value = uiState.email,
-                        onValueChange = { viewModel.updateEmail(it) },
-                        label = { Text("Email") },
-                        placeholder = { Text("you@example.com") },
-                        leadingIcon = { Icon(Icons.Filled.Email, contentDescription = null) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = uiState.password,
-                        onValueChange = { viewModel.updatePassword(it) },
-                        label = { Text("Password") },
-                        placeholder = { Text("Min 8 characters") },
-                        leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null) },
-                        trailingIcon = {
-                            IconButton(onClick = { viewModel.togglePasswordVisibility() }) {
-                                Icon(
-                                    if (uiState.showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                    contentDescription = null
-                                )
-                            }
-                        },
-                        singleLine = true,
-                        visualTransformation = if (uiState.showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Auth error
-                    uiState.authError?.let { err ->
-                        Text(
-                            text = err,
-                            color = ErrorRed.copy(alpha = 0.8f),
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(bottom = 4.dp)
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = { viewModel.login() },
-                            enabled = !uiState.isAuthLoading && uiState.email.isNotBlank() && uiState.password.isNotBlank(),
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = HermesPrimary)
-                        ) {
-                            if (uiState.isAuthLoading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                            }
-                            Text("Log In")
-                        }
-                        OutlinedButton(
-                            onClick = { viewModel.register() },
-                            enabled = !uiState.isAuthLoading,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp)
-                        ) { Text("Register") }
-                    }
+        // ─── Connection Section ───
+        SettingsSection("Server Connection") {
+            // Connection Status Badge
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 16.dp)
+            ) {
+                val (statusColor, statusText) = when (uiState.connectionStatus) {
+                    ConnectionStatus.CONNECTED -> SuccessGreen to "Connected"
+                    ConnectionStatus.CONNECTING -> WarningAmber to "Testing..."
+                    ConnectionStatus.ERROR -> ErrorRed to "Connection Failed"
+                    ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant to "Not Connected"
                 }
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(statusColor)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = statusColor
+                )
+            }
+            // Show detailed error message if available
+            uiState.errorDetail?.let { detail ->
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ErrorRed.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
             }
 
+            OutlinedTextField(
+                value = uiState.baseUrl,
+                onValueChange = { viewModel.updateBaseUrl(it) },
+                label = { Text("Server URL") },
+                placeholder = { Text("http://localhost:8080") },
+                leadingIcon = { Icon(Icons.Filled.Dns, contentDescription = null) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            OutlinedTextField(
+                value = uiState.apiKey,
+                onValueChange = { viewModel.updateApiKey(it) },
+                label = { Text("API Key") },
+                placeholder = { Text("Optional") },
+                leadingIcon = { Icon(Icons.Filled.Key, contentDescription = null) },
+                trailingIcon = {
+                    IconButton(onClick = { viewModel.toggleApiKeyVisibility() }) {
+                        Icon(
+                            if (uiState.showApiKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                            contentDescription = null
+                        )
+                    }
+                },
+                singleLine = true,
+                visualTransformation = if (uiState.showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            )
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ─── Connection Section ───
-            SettingsSection("Server Connection") {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                ) {
-                    val (statusColor, statusText) = when (uiState.connectionStatus) {
-                        ConnectionStatus.CONNECTED -> SuccessGreen to "Connected"
-                        ConnectionStatus.CONNECTING -> WarningAmber to "Testing..."
-                        ConnectionStatus.ERROR -> ErrorRed to "Connection Failed"
-                        ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant to "Not Connected"
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(statusColor)
+            Button(
+                onClick = { viewModel.testConnection() },
+                enabled = uiState.connectionStatus != ConnectionStatus.CONNECTING,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = HermesPrimary
+                )
+            ) {
+                if (uiState.connectionStatus == ConnectionStatus.CONNECTING) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(statusText, style = MaterialTheme.typography.bodyMedium, color = statusColor)
                 }
-                uiState.errorDetail?.let { detail ->
-                    Text(
-                        detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ErrorRed.copy(alpha = 0.8f),
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                }
-                OutlinedTextField(
-                    value = uiState.baseUrl,
-                    onValueChange = { viewModel.updateBaseUrl(it) },
-                    label = { Text("Server URL") },
-                    placeholder = { Text("http://localhost:9119") },
-                    leadingIcon = { Icon(Icons.Filled.Dns, contentDescription = null) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = { viewModel.testConnection() },
-                    enabled = uiState.connectionStatus != ConnectionStatus.CONNECTING,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = HermesPrimary)
-                ) {
-                    if (uiState.connectionStatus == ConnectionStatus.CONNECTING) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text("Test Connection")
-                }
+                Text("Test Connection")
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // ─── Appearance Section ───
-            SettingsSection("Appearance") {
-                SettingsToggle(
-                    icon = Icons.Filled.DarkMode,
-                    title = "Dark Theme",
-                    subtitle = if (uiState.isDarkTheme) "Dark mode active" else "Light mode active",
-                    checked = uiState.isDarkTheme,
-                    onCheckedChange = { viewModel.toggleTheme() }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // ─── About Section ───
-            SettingsSection("About") {
-                SettingsInfoRow("Version", LocalContext.current.let { ctx ->
-                    try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?" }
-                    catch (_: Exception) { "?" }
-                })
-                SettingsInfoRow("Device", "${Build.MANUFACTURER} ${Build.MODEL}")
-                SettingsInfoRow("Android", Build.VERSION.RELEASE)
-                Spacer(modifier = Modifier.height(12.dp))
-                TextButton(
-                    onClick = {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://hermes-agent.nousresearch.com")))
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Visit Hermes Website")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
         }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // ─── Appearance Section ───
+        SettingsSection("Appearance") {
+            SettingsToggle(
+                icon = Icons.Filled.DarkMode,
+                title = "Dark Theme",
+                subtitle = if (uiState.isDarkTheme) "Dark mode active" else "Light mode active",
+                checked = uiState.isDarkTheme,
+                onCheckedChange = { viewModel.toggleTheme() }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ─── About Section ───
+        SettingsSection("About") {
+            SettingsInfoRow("Version", LocalContext.current.let { ctx ->
+                try {
+                    ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?"
+                } catch (e: Exception) { "?" }
+            })
+            SettingsInfoRow("Device", "${Build.MANUFACTURER} ${Build.MODEL}")
+            SettingsInfoRow("Android", Build.VERSION.RELEASE)
+            Spacer(modifier = Modifier.height(12.dp))
+            TextButton(
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://hermes-agent.nousresearch.com"))
+                    context.startActivity(intent)
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Visit Hermes Website")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+    }
     }
 }
 
@@ -430,7 +313,9 @@ fun SettingsSection(
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            ),
             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
             Column(
@@ -465,8 +350,17 @@ fun SettingsToggle(
         )
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         Switch(
             checked = checked,
@@ -480,14 +374,26 @@ fun SettingsToggle(
 }
 
 @Composable
-fun SettingsInfoRow(label: String, value: String) {
+fun SettingsInfoRow(
+    label: String,
+    value: String
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }
