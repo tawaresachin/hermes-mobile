@@ -2,8 +2,6 @@ package com.hermes.mobile.auth
 
 import android.content.Context
 import android.content.SharedPreferences
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,7 +19,7 @@ import javax.inject.Singleton
 /**
  * Manages authentication state: JWT access tokens, refresh tokens, login/register/refresh.
  *
- * Uses EncryptedSharedPreferences (AES-256-GCM via Android Keystore) for secure token storage.
+ * Uses plain SharedPreferences (MODE_PRIVATE) for token storage.
  * Provides reactive [isLoggedIn] state for the UI layer.
  */
 @Singleton
@@ -37,32 +35,25 @@ class AuthManager @Inject constructor(
     }
 
     private val prefs: SharedPreferences by lazy {
-        try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            EncryptedSharedPreferences.create(
-                context,
-                PREFS_NAME,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-        } catch (t: Throwable) {
-            android.util.Log.e("AuthManager", "EncryptedPrefs init failed, using plain", t)
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
 
     // ── Observable state ──
-    private val _isLoggedIn = MutableStateFlow(hasStoredTokens())
+    private val _isLoggedIn = MutableStateFlow(false)
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
 
-    private val _email = MutableStateFlow(prefs.getString(KEY_EMAIL, "") ?: "")
+    private val _email = MutableStateFlow("")
     val email: StateFlow<String> = _email.asStateFlow()
 
-    private val _userId = MutableStateFlow(prefs.getString(KEY_USER_ID, "") ?: "")
+    private val _userId = MutableStateFlow("")
     val userId: StateFlow<String> = _userId.asStateFlow()
+
+    init {
+        // Read stored tokens AFTER lazy fields are initialized
+        _isLoggedIn.value = hasStoredTokens()
+        _email.value = prefs.getString(KEY_EMAIL, "") ?: ""
+        _userId.value = prefs.getString(KEY_USER_ID, "") ?: ""
+    }
 
     // Guard against concurrent refresh
     private val refreshMutex = Mutex()
@@ -78,10 +69,6 @@ class AuthManager @Inject constructor(
 
     // ── Auth API calls ──
 
-    /**
-     * Register a new user. Returns true on success.
-     * @param serverUrl base URL of the bridge server (e.g. "http://192.168.1.5:9119")
-     */
     suspend fun register(serverUrl: String, email: String, password: String): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
@@ -107,9 +94,6 @@ class AuthManager @Inject constructor(
         }
     }
 
-    /**
-     * Log in with existing credentials.
-     */
     suspend fun login(serverUrl: String, email: String, password: String): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
@@ -135,10 +119,6 @@ class AuthManager @Inject constructor(
         }
     }
 
-    /**
-     * Refresh the access token using the stored refresh token.
-     * Returns true if successful, false if refresh is invalid (user must re-login).
-     */
     suspend fun refreshToken(serverUrl: String): Boolean {
         val refreshTok = getRefreshToken() ?: return false
         return refreshMutex.withLock {
@@ -199,9 +179,6 @@ class AuthManager @Inject constructor(
         return !jwt.isNullOrBlank()
     }
 
-    /**
-     * Simple HTTP POST using java.net.HttpURLConnection (no OkHttp dependency for auth flow).
-     */
     private fun httpPost(urlString: String, jsonBody: String): Pair<Int, String> {
         val url = URL(urlString)
         val conn = url.openConnection() as java.net.HttpURLConnection
