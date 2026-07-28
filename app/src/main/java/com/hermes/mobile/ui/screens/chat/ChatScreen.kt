@@ -336,20 +336,36 @@ class ChatViewModel @Inject constructor(
         val sid = _sessionId.value ?: return null
         showEmojiPicker.value = false
         return try {
-            // Copy content:// URI to temp file for upload
-            val fileName = "IMG_${System.currentTimeMillis()}.jpg"
+            val cr = context.contentResolver
+            // Detect MIME type
+            val mimeType = cr.getType(uri) ?: "application/octet-stream"
+            // Determine attachment type category
+            val attachType = when {
+                mimeType.startsWith("image/") -> "image"
+                mimeType.startsWith("video/") -> "video"
+                mimeType.startsWith("audio/") -> "audio"
+                else -> "file"
+            }
+            // Derive a sensible filename from the URI
+            val displayName = android.provider.OpenableColumns.DISPLAY_NAME
+            val fileName = cr.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(displayName)
+                    if (idx >= 0) cursor.getString(idx) else null
+                } else null
+            } ?: "${attachType}_${System.currentTimeMillis()}"
+            // Copy content to temp file
             val tempFile = java.io.File(context.cacheDir, fileName)
-            context.contentResolver.openInputStream(uri)?.use { input ->
+            cr.openInputStream(uri)?.use { input ->
                 tempFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
             // Upload to server
-            val result = repository.uploadFile(sid, tempFile, fileName, "image/jpeg")
+            val result = repository.uploadFile(sid, tempFile, fileName, mimeType)
             tempFile.delete()
             if (result != null) {
-                // Send as a message with attachment
-                sendMessageWithAttachment(sid, text, result, "image")
+                sendMessageWithAttachment(sid, text, result, attachType)
             }
             result
         } catch (e: Exception) {
@@ -392,9 +408,9 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    // ── Image picker ──
-    val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+    // ── File picker (images + documents + PDFs) ──
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
             scope.launch {
@@ -600,7 +616,7 @@ fun ChatScreen(
                 inputText += emoji
                 vm.showEmojiPicker.value = false
             },
-            onAttach = { imagePickerLauncher.launch("image/*") },
+            onAttach = { filePickerLauncher.launch(arrayOf("*/*")) },
             isRecording = isRecording,
             isStreaming = isStreaming,
             showEmojiPicker = showEmojiPicker,
