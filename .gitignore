@@ -20,3 +20,4 @@ local.properties
 *.swo
 build*.log
 .kotlin/
+hermes-bridge-registry/

@@ -130,7 +130,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Discover bridge URL from the gist registry using email. */
+    /** Discover bridge URL from the GitHub registry using email. */
     fun discoverBridge() {
         val state = _uiState.value
         if (state.email.isBlank()) {
@@ -140,20 +140,29 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isAuthLoading = true, authError = null) }
             try {
-                // Try GitHub Gist registry first
-                val registryUrl = "https://gist.githubusercontent.com/tawaresachin/9fffa608826543fa723d0e865ff4150c/raw/hermes-bridge-url.json"
+                val registryUrl = "https://raw.githubusercontent.com/tawaresachin/hermes-bridge-registry/main/bridges.json"
                 val json = fetchJson(registryUrl)
-                val bridgeUrl = json.optString("url", "")
-                if (bridgeUrl.isNotBlank()) {
-                    _uiState.update { it.copy(baseUrl = bridgeUrl, connectionStatus = ConnectionStatus.CONNECTED) }
-                    val config = ServerConfig(baseUrl = bridgeUrl)
-                    repository.saveConfig(config)
-                } else {
-                    _uiState.update { it.copy(authError = "Bridge is online but no URL registered yet") }
+                val entries = json.optJSONArray("entries") ?: org.json.JSONArray()
+                val enteredEmail = state.email.trim().lowercase()
+                var found = false
+                for (i in 0 until entries.length()) {
+                    val entry = entries.getJSONObject(i)
+                    if (entry.optString("email", "").trim().lowercase() == enteredEmail) {
+                        val bridgeUrl = entry.optString("url", "")
+                        if (bridgeUrl.isNotBlank()) {
+                            _uiState.update { it.copy(baseUrl = bridgeUrl) }
+                            val config = ServerConfig(baseUrl = bridgeUrl)
+                            repository.saveConfig(config)
+                            found = true
+                        }
+                        break
+                    }
                 }
-            } catch (_: Exception) {
-                // Gist failed — try the tunnel URL from env or last known
-                _uiState.update { it.copy(authError = "Could not auto-discover. Enter your server URL manually.") }
+                if (!found) {
+                    _uiState.update { it.copy(authError = "No bridge found for this email. Enter URL manually or run 'hermes-bridge init' on your server.") }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(authError = "Registry: ${e.message}") }
             }
             _uiState.update { it.copy(isAuthLoading = false) }
         }
