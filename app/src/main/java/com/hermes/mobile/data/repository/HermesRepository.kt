@@ -42,7 +42,9 @@ class HermesRepository @Inject constructor(
     suspend fun sendMessage(
         sessionId: String,
         query: String,
-        onChunk: (String) -> Unit
+        onChunk: (String) -> Unit,
+        onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
+        onToolResult: (String, String) -> Unit = { _, _ -> },
     ): String {
         // Save user message
         val userMsg = Message(
@@ -70,7 +72,9 @@ class HermesRepository @Inject constructor(
                 onChunk = { chunk ->
                     fullResponse.append(chunk)
                     onChunk(chunk)
-                }
+                },
+                onToolCall = onToolCall,
+                onToolResult = onToolResult,
             )
         } catch (e: Exception) {
             fullResponse.append("⚠️ Connection error: ${e.message}")

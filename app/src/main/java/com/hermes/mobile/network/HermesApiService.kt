@@ -135,7 +135,9 @@ class HermesApiService @Inject constructor(
     suspend fun streamChat(
         query: String,
         sessionId: String,
-        onChunk: (String) -> Unit
+        onChunk: (String) -> Unit,
+        onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
+        onToolResult: (String, String) -> Unit = { _, _ -> },
     ): Unit = withContext(Dispatchers.IO) {
         suspendCancellableCoroutine { continuation ->
             val baseUrl = config?.baseUrl ?: "http://localhost:8080"
@@ -170,15 +172,31 @@ class HermesApiService @Inject constructor(
                     }
                     try {
                         val json = JSONObject(data)
-                        if (json.has("content")) {
-                            onChunk(json.getString("content"))
-                        }
-                        if (json.optBoolean("done", false)) {
-                            if (completed.compareAndSet(false, true)) {
-                                continuation.resume(Unit)
+                        val eventType = json.optString("type", "text")
+                        when (eventType) {
+                            "text" -> {
+                                val content = json.optString("content", "")
+                                if (content.isNotEmpty()) onChunk(content)
+                            }
+                            "tool_call" -> {
+                                val tcId = json.optString("id", "")
+                                val name = json.optString("name", "")
+                                val args = json.optString("arguments", "")
+                                if (tcId.isNotEmpty()) onToolCall(tcId, name, args)
+                            }
+                            "tool_result" -> {
+                                val tcId = json.optString("id", "")
+                                val output = json.optString("output", "")
+                                val error = json.optString("error", "")
+                                onToolResult(tcId, output.ifEmpty { error })
+                            }
+                            "error" -> {
+                                val msg = json.optString("content", "Unknown error")
+                                onChunk("⚠️ $msg")
                             }
                         }
                     } catch (_: Exception) {
+                        // Fallback: treat as plain text
                         onChunk(data)
                     }
                 }

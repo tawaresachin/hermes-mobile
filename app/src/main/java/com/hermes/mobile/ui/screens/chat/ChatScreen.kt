@@ -207,14 +207,33 @@ class ChatViewModel @Inject constructor(
                     onChunk = { chunk ->
                         val newContent = _streamingContent.value + chunk
                         _streamingContent.value = newContent
-                        // Detect tool calls in the chunk stream
-                        detectToolCalls(newContent)
+                    },
+                    onToolCall = { id, name, args ->
+                        val tc = ToolCallInfo(
+                            id = id,
+                            name = name,
+                            arguments = args,
+                            status = ToolCallStatus.RUNNING
+                        )
+                        _toolCalls.value = _toolCalls.value + tc
+                    },
+                    onToolResult = { id, output ->
+                        _toolCalls.value = _toolCalls.value.map {
+                            if (it.id == id) it.copy(
+                                result = output,
+                                status = ToolCallStatus.COMPLETED
+                            ) else it
+                        }
                     }
                 )
                 // streaming finished – mark as done
                 _isStreaming.value = false
                 _streamingContent.value = ""
-                _toolCalls.value = emptyList()
+                // Keep tool calls visible briefly
+                viewModelScope.launch {
+                    delay(3000)
+                    _toolCalls.value = emptyList()
+                }
             } catch (e: Exception) {
                 _isStreaming.value = false
                 _errorMessage.value = "Send failed: ${e.message}"
