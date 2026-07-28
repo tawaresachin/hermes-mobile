@@ -130,6 +130,49 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** Discover bridge URL from the registry using email. */
+    fun discoverBridge() {
+        val state = _uiState.value
+        if (state.email.isBlank()) {
+            _uiState.update { it.copy(authError = "Enter your email first") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAuthLoading = true, authError = null) }
+            try {
+                // Default registry URL — user can configure via env
+                val registryUrl = "https://hermes-bridge-registry.nousresearch.workers.dev"
+                val discoveryUrl = "$registryUrl/api/v1/discover/${state.email.trim().lowercase()}"
+                val url = java.net.URL(discoveryUrl)
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 10000
+                conn.readTimeout = 10000
+                val responseCode = conn.responseCode
+                if (responseCode == 200) {
+                    val body = conn.inputStream.bufferedReader().readText()
+                    val json = org.json.JSONObject(body)
+                    val bridgeUrl = json.optString("url", "")
+                    if (bridgeUrl.isNotBlank()) {
+                        _uiState.update { it.copy(baseUrl = bridgeUrl, connectionStatus = ConnectionStatus.CONNECTED) }
+                        val config = ServerConfig(baseUrl = bridgeUrl)
+                        repository.saveConfig(config)
+                    } else {
+                        _uiState.update { it.copy(authError = "Bridge is online but no URL registered yet") }
+                    }
+                } else if (responseCode == 404) {
+                    _uiState.update { it.copy(authError = "No bridge found for this email. Make sure to run 'hermes-bridge init' first.") }
+                } else {
+                    val body = conn.errorStream?.bufferedReader()?.readText() ?: "{}"
+                    val detail = org.json.JSONObject(body).optString("error", "Discovery failed")
+                    _uiState.update { it.copy(authError = detail) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(authError = "Registry unreachable: ${e.message}") }
+            }
+            _uiState.update { it.copy(isAuthLoading = false) }
+        }
+    }
+
     fun logout() {
         authManager.logout()
     }
@@ -282,6 +325,19 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        Button(
+                            onClick = { viewModel.discoverBridge() },
+                            enabled = !uiState.isAuthLoading && uiState.email.isNotBlank(),
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = HermesPrimary.copy(alpha = 0.8f)
+                            )
+                        ) {
+                            Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Find")
+                        }
                         Button(
                             onClick = { viewModel.login() },
                             enabled = !uiState.isAuthLoading && uiState.email.isNotBlank() && uiState.password.isNotBlank(),
