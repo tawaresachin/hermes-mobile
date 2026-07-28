@@ -207,6 +207,20 @@ class HermesApiService @Inject constructor(
                     response: Response?
                 ) {
                     if (completed.compareAndSet(false, true)) {
+                        // If 401, try to refresh token and retry
+                        if (response?.code == 401) {
+                            val baseUrl = config?.baseUrl ?: "http://localhost:8080"
+                            val refreshed = kotlinx.coroutines.runBlocking {
+                                authManager.refreshToken(baseUrl)
+                            }
+                            if (refreshed) {
+                                // Retry with new token by creating a new request
+                                continuation.resumeWithException(
+                                    IOException("401 - Retrying with refreshed token")
+                                )
+                                return
+                            }
+                        }
                         val ex = t ?: IOException("Connection failed: ${response?.code ?: 0}")
                         continuation.resumeWithException(ex)
                     }
