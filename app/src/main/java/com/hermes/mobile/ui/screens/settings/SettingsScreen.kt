@@ -130,7 +130,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Discover bridge URL from the registry using email. */
+    /** Discover bridge URL from the gist registry using email. */
     fun discoverBridge() {
         val state = _uiState.value
         if (state.email.isBlank()) {
@@ -140,10 +140,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isAuthLoading = true, authError = null) }
             try {
-                // Default registry URL — user can configure via env
-                val registryUrl = "https://hermes-bridge-registry.nousresearch.workers.dev"
-                val discoveryUrl = "$registryUrl/api/v1/discover/${state.email.trim().lowercase()}"
-                val url = java.net.URL(discoveryUrl)
+                // GitHub Gist registry — public raw URL
+                // The gist ID maps to an email. For now, use the known gist.
+                // TODO: In production, map email → gist ID via a small lookup table
+                val registryUrl = "https://gist.githubusercontent.com/tawaresachin/9fffa608826543fa723d0e865ff4150c/raw/hermes-bridge-url.json"
+                val url = java.net.URL(registryUrl)
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.connectTimeout = 10000
                 conn.readTimeout = 10000
@@ -152,19 +153,20 @@ class SettingsViewModel @Inject constructor(
                     val body = conn.inputStream.bufferedReader().readText()
                     val json = org.json.JSONObject(body)
                     val bridgeUrl = json.optString("url", "")
+                    val registeredEmail = json.optString("email", "")
                     if (bridgeUrl.isNotBlank()) {
                         _uiState.update { it.copy(baseUrl = bridgeUrl, connectionStatus = ConnectionStatus.CONNECTED) }
                         val config = ServerConfig(baseUrl = bridgeUrl)
                         repository.saveConfig(config)
+                        // Also auto-fill email from gist if empty
+                        if (state.email.isBlank() && registeredEmail.isNotBlank()) {
+                            _uiState.update { it.copy(email = registeredEmail) }
+                        }
                     } else {
                         _uiState.update { it.copy(authError = "Bridge is online but no URL registered yet") }
                     }
-                } else if (responseCode == 404) {
-                    _uiState.update { it.copy(authError = "No bridge found for this email. Make sure to run 'hermes-bridge init' first.") }
                 } else {
-                    val body = conn.errorStream?.bufferedReader()?.readText() ?: "{}"
-                    val detail = org.json.JSONObject(body).optString("error", "Discovery failed")
-                    _uiState.update { it.copy(authError = detail) }
+                    _uiState.update { it.copy(authError = "Registry returned status $responseCode") }
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(authError = "Registry unreachable: ${e.message}") }
@@ -325,18 +327,19 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(
+                        TextButton(
                             onClick = { viewModel.discoverBridge() },
                             enabled = !uiState.isAuthLoading && uiState.email.isNotBlank(),
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = HermesPrimary.copy(alpha = 0.8f)
-                            )
                         ) {
-                            Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(
+                                Icons.Filled.Search,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Find")
+                            Text("Find", maxLines = 1)
                         }
                         Button(
                             onClick = { viewModel.login() },
@@ -347,21 +350,21 @@ fun SettingsScreen(
                         ) {
                             if (uiState.isAuthLoading) {
                                 CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
+                                    modifier = Modifier.size(16.dp),
                                     color = MaterialTheme.colorScheme.onPrimary,
                                     strokeWidth = 2.dp
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
                             }
-                            Text("Log In")
+                            Text("Log In", maxLines = 1)
                         }
-                        OutlinedButton(
-                            onClick = { viewModel.register() },
-                            enabled = !uiState.isAuthLoading,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp)
-                        ) { Text("Register") }
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.register() },
+                        enabled = !uiState.isAuthLoading,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Register", maxLines = 1) }
                 }
             }
 
