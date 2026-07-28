@@ -95,6 +95,7 @@ class ChatViewModel @Inject constructor(
 
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
+    private var streamingJob: kotlinx.coroutines.Job? = null
 
     // ── Tool calls detected during streaming ──
     private val _toolCalls = MutableStateFlow<List<ToolCallInfo>>(emptyList())
@@ -194,12 +195,21 @@ class ChatViewModel @Inject constructor(
     fun sendMessage(query: String) {
         val sid = _sessionId.value ?: return
         if (query.isBlank()) return
-        _isStreaming.value = true
-        _streamingContent.value = ""
-        _toolCalls.value = emptyList()
-        _errorMessage.value = null
 
-        viewModelScope.launch {
+        // Cancel previous stream and save pending content
+        streamingJob?.cancel()
+        val pendingContent = _streamingContent.value
+        streamingJob = viewModelScope.launch {
+            // Save any remaining pending content as a completed message
+            if (pendingContent.isNotBlank()) {
+                repository.finalizePendingMessage(sid, pendingContent)
+            }
+
+            _isStreaming.value = true
+            _streamingContent.value = ""
+            _toolCalls.value = emptyList()
+            _errorMessage.value = null
+
             try {
                 repository.sendMessage(
                     sessionId = sid,
@@ -1021,7 +1031,7 @@ fun InputBar(
                     cursorColor = HermesPrimary
                 ),
                 maxLines = 4,
-                enabled = enabled && !isStreaming,
+                enabled = enabled,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Text,
                     imeAction = ImeAction.Send
@@ -1072,9 +1082,7 @@ fun MarkdownText(
     modifier: Modifier = Modifier
 ) {
     val annotated = remember(text, style, color) {
-        buildAnnotatedString {
-            append(text)
-        }
+        parseMarkdown(text, style, color)
     }
     Text(
         text = annotated,
@@ -1082,6 +1090,54 @@ fun MarkdownText(
         color = color,
         modifier = modifier
     )
+}
+
+/**
+ * Parse basic markdown into AnnotatedString.
+ * Supports: **bold**, *italic*
+ */
+private fun parseMarkdown(
+    text: String,
+    style: TextStyle,
+    baseColor: Color
+): AnnotatedString {
+    return buildAnnotatedString {
+        var i = 0
+        while (i < text.length) {
+            // Check for **bold** (prefer bold over italic)
+            if (i + 1 < text.length && text[i] == '*' && text[i + 1] == '*') {
+                val end = text.indexOf("**", i + 2)
+                if (end != -1 && end > i + 2) {
+                    val start = length
+                    append(text.substring(i + 2, end))
+                    addStyle(
+                        SpanStyle(fontWeight = FontWeight.Bold),
+                        start, length
+                    )
+                    i = end + 2
+                    continue
+                }
+            }
+            // Check for *italic*
+            if (text[i] == '*') {
+                val end = text.indexOf('*', i + 1)
+                if (end != -1 && end > i + 1 &&
+                    !(i + 1 < text.length && text[i + 1] == '*')
+                ) {
+                    val start = length
+                    append(text.substring(i + 1, end))
+                    addStyle(
+                        SpanStyle(fontStyle = FontStyle.Italic),
+                        start, length
+                    )
+                    i = end + 1
+                    continue
+                }
+            }
+            append(text[i])
+            i++
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════

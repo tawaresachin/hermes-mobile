@@ -50,6 +50,16 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteMessage(messageId: Long)
 
+    @Query("""
+        UPDATE messages SET content = :content, isStreaming = 0 
+        WHERE id = (
+            SELECT id FROM messages 
+            WHERE sessionId = :sessionId AND role = 'ASSISTANT' AND isStreaming = 1 
+            ORDER BY timestamp DESC LIMIT 1
+        )
+    """)
+    suspend fun updateLastStreamingMessage(sessionId: String, content: String)
+
     @Query("SELECT * FROM messages WHERE id = :messageId")
     suspend fun getMessage(messageId: Long): Message?
 }

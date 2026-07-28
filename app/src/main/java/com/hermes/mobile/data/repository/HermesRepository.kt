@@ -114,6 +114,11 @@ class HermesRepository @Inject constructor(
         messageDao.deleteSessionMessages(sessionId)
     }
 
+    suspend fun finalizePendingMessage(sessionId: String, content: String) {
+        // Update the last streaming assistant message with final content
+        messageDao.updateLastStreamingMessage(sessionId, content)
+    }
+
     // ─── Server Connection ───
 
     fun saveConfig(config: ServerConfig) {
