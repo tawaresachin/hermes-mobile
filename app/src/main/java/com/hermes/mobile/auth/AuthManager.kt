@@ -48,9 +48,8 @@ class AuthManager @Inject constructor(
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
-        } catch (e: Exception) {
-            // Fallback to plain SharedPreferences if encryption fails
-            android.util.Log.w("AuthManager", "EncryptedPrefs failed, using plain: ${e.message}")
+        } catch (t: Throwable) {
+            android.util.Log.e("AuthManager", "EncryptedPrefs init failed, using plain", t)
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         }
     }
