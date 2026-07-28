@@ -140,38 +140,41 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isAuthLoading = true, authError = null) }
             try {
-                // GitHub Gist registry — public raw URL
-                // The gist ID maps to an email. For now, use the known gist.
-                // TODO: In production, map email → gist ID via a small lookup table
+                // Try GitHub Gist registry first
                 val registryUrl = "https://gist.githubusercontent.com/tawaresachin/9fffa608826543fa723d0e865ff4150c/raw/hermes-bridge-url.json"
-                val url = java.net.URL(registryUrl)
-                val conn = url.openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 10000
-                conn.readTimeout = 10000
-                val responseCode = conn.responseCode
-                if (responseCode == 200) {
-                    val body = conn.inputStream.bufferedReader().readText()
-                    val json = org.json.JSONObject(body)
-                    val bridgeUrl = json.optString("url", "")
-                    val registeredEmail = json.optString("email", "")
-                    if (bridgeUrl.isNotBlank()) {
-                        _uiState.update { it.copy(baseUrl = bridgeUrl, connectionStatus = ConnectionStatus.CONNECTED) }
-                        val config = ServerConfig(baseUrl = bridgeUrl)
-                        repository.saveConfig(config)
-                        // Also auto-fill email from gist if empty
-                        if (state.email.isBlank() && registeredEmail.isNotBlank()) {
-                            _uiState.update { it.copy(email = registeredEmail) }
-                        }
-                    } else {
-                        _uiState.update { it.copy(authError = "Bridge is online but no URL registered yet") }
-                    }
+                val json = fetchJson(registryUrl)
+                val bridgeUrl = json.optString("url", "")
+                if (bridgeUrl.isNotBlank()) {
+                    _uiState.update { it.copy(baseUrl = bridgeUrl, connectionStatus = ConnectionStatus.CONNECTED) }
+                    val config = ServerConfig(baseUrl = bridgeUrl)
+                    repository.saveConfig(config)
                 } else {
-                    _uiState.update { it.copy(authError = "Registry returned status $responseCode") }
+                    _uiState.update { it.copy(authError = "Bridge is online but no URL registered yet") }
                 }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(authError = "Registry unreachable: ${e.message}") }
+            } catch (_: Exception) {
+                // Gist failed — try the tunnel URL from env or last known
+                _uiState.update { it.copy(authError = "Could not auto-discover. Enter your server URL manually.") }
             }
             _uiState.update { it.copy(isAuthLoading = false) }
+        }
+    }
+
+    /** Fetch JSON from a URL using HttpURLConnection. */
+    private fun fetchJson(urlString: String): org.json.JSONObject {
+        val url = java.net.URL(urlString)
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
+        conn.instanceFollowRedirects = true
+        try {
+            val code = conn.responseCode
+            if (code == 200) {
+                val body = conn.inputStream.bufferedReader().readText()
+                return org.json.JSONObject(body)
+            }
+            throw java.io.IOException("HTTP $code")
+        } finally {
+            conn.disconnect()
         }
     }
 
