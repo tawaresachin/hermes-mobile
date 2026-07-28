@@ -447,6 +447,62 @@ fun ChatScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
+        // ── Telegram-style top bar ──
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                    .statusBarsPadding(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Spacer(modifier = Modifier.width(4.dp))
+                // App icon + name
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = null,
+                    tint = HermesPrimary,
+                    modifier = Modifier.size(28.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(
+                        text = "Hermes",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "AI Assistant",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                // Search
+                IconButton(onClick = { }) {
+                    Icon(
+                        imageVector = Icons.Filled.Search,
+                        contentDescription = "Search",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                // New chat
+                IconButton(onClick = { vm.clearSession() }) {
+                    Icon(
+                        imageVector = Icons.Filled.Edit,
+                        contentDescription = "New chat",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
         ConnectionStatusBar(connectionStatus = connectionStatus)
 
         errorMessage?.let { err ->
@@ -467,28 +523,25 @@ fun ChatScreen(
             }
         }
 
-        Box(modifier = Modifier
-            .weight(1f)
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .background(
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(12.dp)
-            )
-            .border(
-                width = 2.dp,
-                color = MaterialTheme.colorScheme.outline,
-                shape = RoundedCornerShape(12.dp)
-            )
+        // ── Telegram-style chat area (full width, no border) ──
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
         ) {
             if (messages.isEmpty() && !isStreaming) {
                 EmptyChatState()
             } else {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(bottom = 4.dp)
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    contentPadding = PaddingValues(
+                        start = 8.dp,
+                        end = 8.dp,
+                        top = 4.dp,
+                        bottom = 4.dp
+                    )
                 ) {
                     items(items = messages, key = { it.id }) { message ->
                         val isStreamingThis = isStreaming && message.isStreaming
@@ -672,23 +725,90 @@ fun EmptyChatState() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Icon(
-            imageVector = Icons.Filled.Chat,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
-            modifier = Modifier.size(72.dp)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+        // ── Telegram-style bird illustration ──
+        Canvas(
+            modifier = Modifier.size(160.dp)
+        ) {
+            val cx = size.width / 2
+            val cy = size.height / 2
+            val birdColor = Color(0xFF6AB5E8)
+            val beakTop = Color(0xFFFF8A80)
+            val beakBottom = Color(0xFFFF5252)
+            val wingColor = Color(0xFFFFAB40)
+            val bodyColor = Color(0xFF89CFF0)
+            val headColor = Color(0xFFB388FF)
+
+            // Body (ellipse)
+            drawOval(
+                color = bodyColor,
+                topLeft = androidx.compose.ui.geometry.Offset(cx - 35f, cy - 10f),
+                size = androidx.compose.ui.geometry.Size(70f, 50f)
+            )
+            // Head (circle)
+            drawCircle(
+                color = headColor,
+                radius = 28f,
+                center = androidx.compose.ui.geometry.Offset(cx - 15f, cy - 35f)
+            )
+            // Eye (white)
+            drawCircle(
+                color = Color.White,
+                radius = 10f,
+                center = androidx.compose.ui.geometry.Offset(cx - 10f, cy - 40f)
+            )
+            // Pupil
+            drawCircle(
+                color = Color.Black,
+                radius = 5f,
+                center = androidx.compose.ui.geometry.Offset(cx - 8f, cy - 40f)
+            )
+            // Beak (top)
+            drawPath(
+                path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(cx + 5f, cy - 35f)
+                    cubicTo(cx + 30f, cy - 30f, cx + 35f, cy - 20f, cx + 10f, cy - 25f)
+                    close()
+                },
+                color = beakTop
+            )
+            // Beak (bottom)
+            drawPath(
+                path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(cx + 5f, cy - 25f)
+                    cubicTo(cx + 30f, cy - 20f, cx + 32f, cy - 12f, cx + 8f, cy - 20f)
+                    close()
+                },
+                color = beakBottom
+            )
+            // Wing
+            drawOval(
+                color = wingColor,
+                topLeft = androidx.compose.ui.geometry.Offset(cx - 30f, cy - 5f),
+                size = androidx.compose.ui.geometry.Size(45f, 30f)
+            )
+            // Tail
+            drawPath(
+                path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(cx + 30f, cy + 10f)
+                    cubicTo(cx + 55f, cy + 15f, cx + 60f, cy - 5f, cx + 45f, cy + 0f)
+                    close()
+                },
+                color = bodyColor
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         Text(
-            text = "Start a conversation",
+            text = "No messages here yet...",
             style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "Type a message below or use voice input",
+            text = "Send a message or tap the greeting below.",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
         )
     }
 }
@@ -1096,11 +1216,11 @@ fun InputBar(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 4.dp,
-        shadowElevation = 8.dp
+        tonalElevation = 0.dp,
+        shadowElevation = 2.dp
     ) {
         Column {
-            // Emoji picker popup
+            // Emoji picker popup (above the bar, like Telegram)
             if (showEmojiPicker) {
                 EmojiPickerGrid(onEmojiSelected = onEmoji)
             }
@@ -1108,127 +1228,94 @@ fun InputBar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                    .padding(start = 4.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
                     .navigationBarsPadding(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Voice button
-                FilledIconButton(
-                    onClick = onVoice,
-                    modifier = Modifier.size(40.dp),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = if (isRecording) ErrorRed.copy(alpha = 0.2f)
-                        else MaterialTheme.colorScheme.surfaceVariant,
-                        contentColor = if (isRecording) ErrorRed
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    ),
-                    enabled = enabled
-                ) {
-                    Icon(
-                        imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
-                        contentDescription = if (isRecording) "Stop recording" else "Voice input",
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                // Emoji button
-                FilledIconButton(
+                // ── 1. Emoji button (leftmost, like Telegram) ──
+                IconButton(
                     onClick = onToggleEmojiPicker,
                     modifier = Modifier.size(40.dp),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = if (showEmojiPicker) HermesPrimary.copy(alpha = 0.2f)
-                        else MaterialTheme.colorScheme.surfaceVariant,
-                        contentColor = if (showEmojiPicker) HermesPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    ),
                     enabled = enabled
                 ) {
                     Text(
-                        text = "😀",
-                        fontSize = 18.sp
+                        text = if (showEmojiPicker) "⌨️" else "😀",
+                        fontSize = 20.sp
                     )
                 }
 
-                // Attach button
-                FilledIconButton(
+                // ── 2. Text field ──
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = onInputChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 36.dp, max = 120.dp),
+                    placeholder = {
+                        Text(
+                            text = "Message",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                    },
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedBorderColor = HermesPrimary.copy(alpha = 0.5f),
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                        cursorColor = HermesPrimary
+                    ),
+                    shape = RoundedCornerShape(24.dp),
+                    singleLine = false,
+                    maxLines = 4,
+                    enabled = enabled
+                )
+
+                // ── 3. Attach button ──
+                IconButton(
                     onClick = onAttach,
                     modifier = Modifier.size(40.dp),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    ),
                     enabled = enabled
                 ) {
                     Icon(
                         imageVector = Icons.Filled.AttachFile,
-                        contentDescription = "Attach file",
-                        modifier = Modifier.size(20.dp)
+                        contentDescription = "Attach",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
-                // Text field
-                OutlinedTextField(
-                value = inputText,
-                onValueChange = onInputChange,
-                modifier = Modifier.weight(1f),
-                placeholder = {
-                    Text(
-                        text = if (isStreaming) "Waiting for response…" else "Type a message…",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                },
-                textStyle = MaterialTheme.typography.bodyMedium,
-                shape = RoundedCornerShape(24.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = HermesPrimary,
-                    unfocusedBorderColor = HermesPrimary.copy(alpha = 0.5f),
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                    cursorColor = HermesPrimary
-                ),
-                maxLines = 4,
-                enabled = enabled,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Text,
-                    imeAction = ImeAction.Send
-                ),
-                keyboardActions = KeyboardActions(
-                    onSend = {
+                // ── 4. Mic / Send button (rightmost, blue circle like Telegram) ──
+                FilledIconButton(
+                    onClick = {
                         if (inputText.isNotBlank()) {
                             onSend()
+                        } else {
+                            onVoice()
                         }
-                    }
-                )
-            )
-
-            // Send button
-            FilledIconButton(
-                onClick = onSend,
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = if (inputText.isBlank() || !enabled)
-                        MaterialTheme.colorScheme.surfaceVariant
-                    else HermesPrimary,
-                    contentColor = if (inputText.isBlank() || !enabled)
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    else Color.White
-                ),
-                enabled = enabled && inputText.isNotBlank() && !isStreaming
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send",
-                    modifier = Modifier.size(20.dp)
-                )
-            }   // close FilledIconButton
-        }   // close Row
-        }   // close Column
-    }   // close Surface
-}   // close InputBar
+                    },
+                    modifier = Modifier.size(40.dp),
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = HermesPrimary,
+                        contentColor = Color.White
+                    ),
+                    enabled = enabled && (!isRecording)
+                ) {
+                    Icon(
+                        imageVector = if (inputText.isNotBlank()) Icons.AutoMirrored.Filled.Send
+                        else Icons.Filled.Mic,
+                        contentDescription = if (inputText.isNotBlank()) "Send" else "Voice input",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Markdown text rendering (simple)
