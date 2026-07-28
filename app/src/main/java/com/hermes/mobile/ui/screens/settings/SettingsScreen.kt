@@ -162,7 +162,14 @@ class SettingsViewModel @Inject constructor(
                     _uiState.update { it.copy(authError = "No bridge found for this email. Enter URL manually or run 'hermes-bridge init' on your server.") }
                 }
             } catch (e: Exception) {
-                _uiState.update { it.copy(authError = "Registry: ${e.message}") }
+                val msg = when {
+                    e is java.net.UnknownHostException -> "Can't reach registry — enter URL manually"
+                    e is java.net.SocketTimeoutException -> "Registry timed out — enter URL manually"
+                    e is org.json.JSONException -> "Registry data error: ${e.message}"
+                    e.message != null -> "Registry: ${e.message}"
+                    else -> "Discovery failed — enter URL manually"
+                }
+                _uiState.update { it.copy(authError = msg) }
             }
             _uiState.update { it.copy(isAuthLoading = false) }
         }
