@@ -386,6 +386,7 @@ fun ChatScreen(
     val toolCalls by vm.toolCalls.collectAsState()
     val errorMessage by vm.errorMessage.collectAsState()
     val sessionIdState by vm.sessionId.collectAsState()
+    val showEmojiPicker by vm.showEmojiPicker.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -595,11 +596,14 @@ fun ChatScreen(
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
             },
-            onEmoji = { emoji -> inputText += emoji },
+            onEmoji = { emoji ->
+                inputText += emoji
+                vm.showEmojiPicker.value = false
+            },
             onAttach = { imagePickerLauncher.launch("image/*") },
             isRecording = isRecording,
             isStreaming = isStreaming,
-            showEmojiPicker = vm.showEmojiPicker.value,
+            showEmojiPicker = showEmojiPicker,
             onToggleEmojiPicker = { vm.showEmojiPicker.value = !vm.showEmojiPicker.value },
             enabled = sessionIdState != null
         )
