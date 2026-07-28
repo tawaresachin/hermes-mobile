@@ -12,7 +12,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
@@ -293,6 +295,37 @@ class HermesApiService @Inject constructor(
                 response.isSuccessful
             } catch (_: Exception) {
                 false
+            }
+        }
+    }
+
+    // ─── File Upload ───
+
+    suspend fun uploadFile(file: java.io.File, fileName: String, mimeType: String): String? {
+        val baseUrl = config?.baseUrl ?: return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val token = authManager.getToken()
+                val body = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", fileName, file.asRequestBody(mimeType.toMediaTypeOrNull()))
+                    .build()
+                val request = Request.Builder()
+                    .url("$baseUrl/api/upload")
+                    .post(body)
+                    .apply {
+                        if (token != null) addHeader("Authorization", "Bearer $token")
+                    }
+                    .build()
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val json = JSONObject(response.body?.string() ?: "{}")
+                    json.optString("url")?.takeIf { it.isNotEmpty() }
+                } else {
+                    null
+                }
+            } catch (_: Exception) {
+                null
             }
         }
     }

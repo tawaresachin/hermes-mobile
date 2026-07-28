@@ -10,7 +10,10 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -29,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -48,6 +52,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import coil.compose.AsyncImage
+import com.hermes.mobile.data.local.AppDatabase
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.theme.*
@@ -111,6 +117,9 @@ class ChatViewModel @Inject constructor(
 
     private val _recordingAmplitude = MutableStateFlow(0f)
     val recordingAmplitude: StateFlow<Float> = _recordingAmplitude.asStateFlow()
+
+    // ── Emoji picker ──
+    val showEmojiPicker = MutableStateFlow(false)
 
     // ── Error state ──
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -321,6 +330,39 @@ class ChatViewModel @Inject constructor(
     fun setError(msg: String) {
         _errorMessage.value = msg
     }
+
+    // ── Upload and send image ──
+    suspend fun uploadAndSend(context: android.content.Context, uri: android.net.Uri, text: String): String? {
+        val sid = _sessionId.value ?: return null
+        showEmojiPicker.value = false
+        return try {
+            // Copy content:// URI to temp file for upload
+            val fileName = "IMG_${System.currentTimeMillis()}.jpg"
+            val tempFile = java.io.File(context.cacheDir, fileName)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                tempFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            // Upload to server
+            val result = repository.uploadFile(sid, tempFile, fileName, "image/jpeg")
+            tempFile.delete()
+            if (result != null) {
+                // Send as a message with attachment
+                sendMessageWithAttachment(sid, text, result, "image")
+            }
+            result
+        } catch (e: Exception) {
+            _errorMessage.value = "Upload failed: ${e.message}"
+            null
+        }
+    }
+
+    private fun sendMessageWithAttachment(sessionId: String, text: String, url: String, type: String) {
+        viewModelScope.launch {
+            repository.sendMessageWithAttachment(sessionId, text, url, type)
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -348,6 +390,21 @@ fun ChatScreen(
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // ── Image picker ──
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                vm.showEmojiPicker.value = false
+                val url = vm.uploadAndSend(context, uri, inputText.trim())
+                if (url != null) {
+                    inputText = ""
+                }
+            }
+        }
+    }
 
     // Permission launcher for microphone voice dictation
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -485,8 +542,12 @@ fun ChatScreen(
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
             },
+            onEmoji = { emoji -> inputText += emoji },
+            onAttach = { imagePickerLauncher.launch("image/*") },
             isRecording = isRecording,
             isStreaming = isStreaming,
+            showEmojiPicker = vm.showEmojiPicker.value,
+            onToggleEmojiPicker = { vm.showEmojiPicker.value = !vm.showEmojiPicker.value },
             enabled = sessionIdState != null
         )
     }
@@ -679,20 +740,42 @@ fun MessageBubble(
                 shadowElevation = 2.dp
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    if (isStreaming) {
-                        StreamingText(
-                            text = displayContent,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = textColor,
-                            modifier = Modifier.fillMaxWidth()
+                    // ── Image attachment ──
+                    if (message.attachmentUrl != null && message.attachmentType == "image") {
+                        AsyncImage(
+                            model = message.attachmentUrl,
+                            contentDescription = message.attachmentName ?: "Image",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.FillWidth
                         )
-                    } else {
-                        MarkdownText(
-                            text = displayContent,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = textColor,
-                            modifier = Modifier.fillMaxWidth()
+                    }
+                    // ── File attachment (non-image) ──
+                    if (message.attachmentUrl != null && message.attachmentType != null && message.attachmentType != "image") {
+                        FileAttachmentRow(
+                            name = message.attachmentName ?: message.attachmentUrl ?: "File",
+                            modifier = Modifier.padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp)
                         )
+                    }
+                    // ── Text content ──
+                    if (displayContent.isNotBlank()) {
+                        if (isStreaming) {
+                            StreamingText(
+                                text = displayContent,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = textColor,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        } else {
+                            MarkdownText(
+                                text = displayContent,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = textColor,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                     if (isStreaming) {
                         Spacer(modifier = Modifier.height(4.dp))
@@ -701,6 +784,35 @@ fun MessageBubble(
                 }
             }
         }
+    }
+}
+
+// ── File attachment row ──
+@Composable
+fun FileAttachmentRow(name: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Filled.AttachFile,
+            contentDescription = "File",
+            modifier = Modifier.size(24.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = name,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 
@@ -973,8 +1085,12 @@ fun InputBar(
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onVoice: () -> Unit,
+    onEmoji: (String) -> Unit,
+    onAttach: () -> Unit,
     isRecording: Boolean,
     isStreaming: Boolean,
+    showEmojiPicker: Boolean,
+    onToggleEmojiPicker: () -> Unit,
     enabled: Boolean
 ) {
     Surface(
@@ -983,7 +1099,13 @@ fun InputBar(
         tonalElevation = 4.dp,
         shadowElevation = 8.dp
     ) {
-        Row(
+        Column {
+            // Emoji picker popup
+            if (showEmojiPicker) {
+                EmojiPickerGrid(onEmojiSelected = onEmoji)
+            }
+
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp, vertical = 8.dp)
@@ -991,28 +1113,65 @@ fun InputBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-            // Voice button
-            FilledIconButton(
-                onClick = onVoice,
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = if (isRecording) ErrorRed.copy(alpha = 0.2f)
-                    else MaterialTheme.colorScheme.surfaceVariant,
-                    contentColor = if (isRecording) ErrorRed
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                ),
-                enabled = enabled
-            ) {
-                Icon(
-                    imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
-                    contentDescription = if (isRecording) "Stop recording" else "Voice input",
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+                // Voice button
+                FilledIconButton(
+                    onClick = onVoice,
+                    modifier = Modifier.size(40.dp),
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = if (isRecording) ErrorRed.copy(alpha = 0.2f)
+                        else MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = if (isRecording) ErrorRed
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    enabled = enabled
+                ) {
+                    Icon(
+                        imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
+                        contentDescription = if (isRecording) "Stop recording" else "Voice input",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
 
-            // Text field
-            OutlinedTextField(
+                // Emoji button
+                FilledIconButton(
+                    onClick = onToggleEmojiPicker,
+                    modifier = Modifier.size(40.dp),
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = if (showEmojiPicker) HermesPrimary.copy(alpha = 0.2f)
+                        else MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = if (showEmojiPicker) HermesPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    enabled = enabled
+                ) {
+                    Text(
+                        text = "😀",
+                        fontSize = 18.sp
+                    )
+                }
+
+                // Attach button
+                FilledIconButton(
+                    onClick = onAttach,
+                    modifier = Modifier.size(40.dp),
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    enabled = enabled
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.AttachFile,
+                        contentDescription = "Attach file",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                // Text field
+                OutlinedTextField(
                 value = inputText,
                 onValueChange = onInputChange,
                 modifier = Modifier.weight(1f),
@@ -1065,10 +1224,11 @@ fun InputBar(
                     contentDescription = "Send",
                     modifier = Modifier.size(20.dp)
                 )
-            }
-        }
-    }
-}
+            }   // close FilledIconButton
+        }   // close Row
+        }   // close Column
+    }   // close Surface
+}   // close InputBar
 
 // ═══════════════════════════════════════════════════════════════
 // Markdown text rendering (simple)
@@ -1162,4 +1322,51 @@ fun StreamingIndicator(color: Color) {
             .height(16.dp)
             .background(color.copy(alpha = visible))
     )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Emoji picker grid
+// ═══════════════════════════════════════════════════════════════
+
+private val EMOJIS = listOf(
+    "😀", "😂", "❤️", "🔥", "👍", "🎉", "✨", "💪",
+    "😊", "🤣", "😍", "😭", "🥺", "🙏", "💀", "🤝",
+    "👋", "🙌", "🚀", "⭐", "💡", "✅", "❌", "📌",
+    "🎯", "💯", "🤔", "😎", "👀", "💜", "🎶", "🏆",
+    "📱", "💻", "🔗", "📎", "📄", "📂", "🗂️", "📁"
+)
+
+@Composable
+fun EmojiPickerGrid(
+    onEmojiSelected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(160.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        tonalElevation = 2.dp,
+        shadowElevation = 4.dp
+    ) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(8),
+            modifier = Modifier.padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            items(EMOJIS.size) { index ->
+                Text(
+                    text = EMOJIS[index],
+                    fontSize = 24.sp,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .clickable { onEmojiSelected(EMOJIS[index]) }
+                        .then(Modifier.padding(2.dp)),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
 }

@@ -119,6 +119,25 @@ class HermesRepository @Inject constructor(
         messageDao.updateLastStreamingMessage(sessionId, content)
     }
 
+    // ─── File Upload ───
+
+    suspend fun uploadFile(sessionId: String, file: java.io.File, fileName: String, mimeType: String): String? {
+        return apiService.uploadFile(file, fileName, mimeType)
+    }
+
+    suspend fun sendMessageWithAttachment(sessionId: String, text: String, url: String, type: String) {
+        val msg = Message(
+            sessionId = sessionId,
+            role = MessageRole.USER,
+            content = text,
+            attachmentUrl = url,
+            attachmentType = type,
+            attachmentName = url.substringAfterLast("/")
+        )
+        messageDao.insertMessage(msg)
+        sessionDao.incrementMessageCount(sessionId)
+    }
+
     // ─── Server Connection ───
 
     fun saveConfig(config: ServerConfig) {

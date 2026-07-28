@@ -111,6 +111,9 @@ dependencies {
     // DataStore Preferences
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
+    // Image loading
+    implementation("io.coil-kt:coil-compose:2.7.0")
+
     // Audio
     implementation("androidx.media:media:1.7.0")
 

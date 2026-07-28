@@ -35,7 +35,10 @@ data class Message(
     val role: MessageRole,
     val content: String,
     val timestamp: Long = System.currentTimeMillis(),
-    val isStreaming: Boolean = false
+    val isStreaming: Boolean = false,
+    val attachmentUrl: String? = null,
+    val attachmentType: String? = null,
+    val attachmentName: String? = null
 )
 
 // ─── Session Models ───
