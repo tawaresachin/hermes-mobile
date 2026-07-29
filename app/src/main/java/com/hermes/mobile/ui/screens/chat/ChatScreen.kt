@@ -350,6 +350,39 @@ class ChatViewModel @Inject constructor(
                 null
             }
         }
+
+        // ── Send with attachment (ViewModel scope — survives recomposition cancellation) ──
+        fun sendWithAttachment(
+            text: String,
+            attachment: PendingAttachment?,
+            context: android.content.Context,
+            onAttachComplete: () -> Unit
+        ) {
+            val sid = _sessionId.value ?: return
+            viewModelScope.launch {
+                var attachUrl: String? = null
+                var attachType: String? = null
+                if (attachment != null) {
+                    try {
+                        val tempFile = java.io.File(context.cacheDir, attachment.fileName)
+                        context.contentResolver.openInputStream(attachment.uri)?.use { input ->
+                            tempFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        attachUrl = repository.uploadFile(sid, tempFile, attachment.fileName, attachment.mimeType)
+                        tempFile.delete()
+                        attachType = attachment.attachType
+                    } catch (e: Exception) {
+                        _errorMessage.value = "Upload failed: ${e.message}"
+                    }
+                }
+                if (text.isNotBlank() || attachUrl != null) {
+                    sendMessage(text, attachUrl, attachType)
+                }
+                onAttachComplete()
+            }
+        }
     }
 // ═══════════════════════════════════════════════════════════════
 // Screen composable
@@ -582,22 +615,11 @@ fun ChatScreen(
             inputText = inputText,
             onInputChange = { inputText = it },
             onSend = {
-                // Upload pending attachment (if any) then send text
-                scope.launch {
-                    var attachUrl: String? = null
-                    var attachType: String? = null
-                    if (pendingAttachment != null) {
-                        val pa = pendingAttachment!!
-                        attachUrl = vm.uploadFile(context, pa.uri, pa.fileName, pa.mimeType, pa.attachType)
-                        attachType = pa.attachType
-                        pendingAttachment = null
-                    }
-                    val text = inputText.trim()
+                // Use ViewModel scope so cancellation doesn't lose messages
+                vm.sendWithAttachment(inputText.trim(), pendingAttachment, context, onAttachComplete = {
+                    pendingAttachment = null
                     inputText = ""
-                    if (text.isNotBlank() || attachUrl != null) {
-                        vm.sendMessage(text, attachUrl, attachType)
-                    }
-                }
+                })
             },
             onVoice = {
                 // Request mic permission, then start inline voice dictation
@@ -1298,6 +1320,101 @@ fun AttachmentPreview(
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Slash commands — matched from the server's /help output
+// ═══════════════════════════════════════════════════════════════
+
+data class SlashCommand(
+    val command: String,
+    val description: String
+)
+
+private val SLASH_COMMANDS = listOf(
+    SlashCommand("/help", "Show available commands and tips"),
+    SlashCommand("/reset", "Start a fresh conversation (clears history)"),
+    SlashCommand("/new", "Same as /reset"),
+    SlashCommand("/retry", "Regenerate the last response"),
+    SlashCommand("/model", "Show the current AI model"),
+    SlashCommand("/clear", "Clear the current session"),
+    SlashCommand("/skills", "List available Hermes skills"),
+    SlashCommand("/version", "Show version info"),
+    SlashCommand("/info", "Show session info"),
+)
+
+@Composable
+fun SlashCommandList(
+    query: String,
+    onCommandSelected: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    // Only show when text starts with "/"
+    if (!query.startsWith("/") || query.length > 30) {
+        onDismiss()
+        return
+    }
+
+    val filter = query.substring(1).lowercase()
+    val matched = SLASH_COMMANDS.filter {
+        it.command.removePrefix("/").contains(filter)
+    }
+
+    if (matched.isEmpty()) {
+        onDismiss()
+        return
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 220.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+        shadowElevation = 4.dp,
+        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+    ) {
+        LazyColumn(
+            modifier = Modifier.padding(vertical = 4.dp)
+        ) {
+            itemsIndexed(matched) { _, cmd ->
+                Surface(
+                    onClick = {
+                        onCommandSelected(cmd.command + " ")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = cmd.command,
+                            fontWeight = FontWeight.SemiBold,
+                            color = HermesPrimary,
+                            modifier = Modifier.padding(end = 12.dp)
+                        )
+                        Text(
+                            text = cmd.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                )
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Input bar
 // ═══════════════════════════════════════════════════════════════
 
@@ -1317,6 +1434,13 @@ fun InputBar(
     onToggleEmojiPicker: () -> Unit,
     enabled: Boolean
 ) {
+    // ── Slash command state ──
+    val showSlashCommands = inputText.startsWith("/") && inputText.length <= 30
+
+    val onCommandSelected: (String) -> Unit = { cmd ->
+        onInputChange(cmd)
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
@@ -1324,6 +1448,15 @@ fun InputBar(
         shadowElevation = 2.dp
     ) {
         Column {
+            // Slash command list (above the input, like Telegram)
+            if (showSlashCommands) {
+                SlashCommandList(
+                    query = inputText,
+                    onCommandSelected = onCommandSelected,
+                    onDismiss = {}
+                )
+            }
+
             // Attachment preview (like Telegram: thumbnail + name above text field)
             if (pendingAttachment != null) {
                 AttachmentPreview(
@@ -1344,101 +1477,101 @@ fun InputBar(
                     .navigationBarsPadding(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // ── 1. Emoji button (leftmost, like Telegram) ──
-                IconButton(
-                    onClick = onToggleEmojiPicker,
-                    modifier = Modifier.size(40.dp),
-                    enabled = enabled
-                ) {
-                    Text(
-                        text = if (showEmojiPicker) "⌨️" else "😀",
-                        fontSize = 20.sp
-                    )
-                }
-
-                // ── 2. Text field (no keyboard send — only explicit send button) ──
-                OutlinedTextField(
-                    value = inputText,
-                    onValueChange = onInputChange,
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 36.dp, max = 120.dp),
-                    placeholder = {
+                    // ── 1. Emoji button (leftmost, like Telegram) ──
+                    IconButton(
+                        onClick = onToggleEmojiPicker,
+                        modifier = Modifier.size(40.dp),
+                        enabled = enabled
+                    ) {
                         Text(
-                            text = "Message",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            text = if (showEmojiPicker) "⌨️" else "😀",
+                            fontSize = 20.sp
                         )
-                    },
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(
-                        color = MaterialTheme.colorScheme.onSurface
-                    ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        focusedBorderColor = HermesPrimary.copy(alpha = 0.5f),
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-                        cursorColor = HermesPrimary
-                    ),
-                    shape = RoundedCornerShape(24.dp),
-                    singleLine = false,
-                    maxLines = 4,
-                    enabled = enabled
-                )
+                    }
 
-                // ── 3. Attach button ──
-                IconButton(
-                    onClick = onAttach,
-                    modifier = Modifier.size(40.dp),
-                    enabled = enabled
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.AttachFile,
-                        contentDescription = "Attach",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(24.dp)
+                    // ── 2. Text field (no keyboard send — only explicit send button) ──
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = onInputChange,
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 36.dp, max = 120.dp),
+                        placeholder = {
+                            Text(
+                                text = "Message",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        },
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedBorderColor = HermesPrimary.copy(alpha = 0.5f),
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                            cursorColor = HermesPrimary
+                        ),
+                        shape = RoundedCornerShape(24.dp),
+                        singleLine = false,
+                        maxLines = 4,
+                        enabled = enabled
                     )
-                }
 
-                // ── 4. Mic button (always visible, blue circle — like Telegram) ──
-                FilledIconButton(
-                    onClick = onVoice,
-                    modifier = Modifier.size(40.dp),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = HermesPrimary,
-                        contentColor = Color.White
-                    ),
-                    enabled = enabled && !isRecording
-                ) {
-                    Icon(
-                        imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
-                        contentDescription = "Voice input",
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                    // ── 3. Attach button ──
+                    IconButton(
+                        onClick = onAttach,
+                        modifier = Modifier.size(40.dp),
+                        enabled = enabled
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.AttachFile,
+                            contentDescription = "Attach",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
 
-                // ── 5. Send button (appears when text or attachment present — like Telegram) ──
-                val hasContent = inputText.isNotBlank() || pendingAttachment != null
-                if (hasContent) {
-                    Spacer(modifier = Modifier.width(4.dp))
+                    // ── 4. Mic button (always visible, blue circle — like Telegram) ──
                     FilledIconButton(
-                        onClick = onSend,
+                        onClick = onVoice,
                         modifier = Modifier.size(40.dp),
                         shape = CircleShape,
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = HermesPrimary,
                             contentColor = Color.White
                         ),
-                        enabled = enabled
+                        enabled = enabled && !isRecording
                     ) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
+                            imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
+                            contentDescription = "Voice input",
                             modifier = Modifier.size(20.dp)
                         )
                     }
-                }
+
+                    // ── 5. Send button (appears when text or attachment present — like Telegram) ──
+                    val hasContent = inputText.isNotBlank() || pendingAttachment != null
+                    if (hasContent) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        FilledIconButton(
+                            onClick = onSend,
+                            modifier = Modifier.size(40.dp),
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = HermesPrimary,
+                                contentColor = Color.White
+                            ),
+                            enabled = enabled
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
             }
         }
     }
@@ -1446,7 +1579,6 @@ fun InputBar(
 
 // ═══════════════════════════════════════════════════════════════
 // Markdown text rendering (simple)
-// ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun MarkdownText(
