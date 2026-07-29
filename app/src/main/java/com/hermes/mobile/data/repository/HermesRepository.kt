@@ -80,6 +80,8 @@ class HermesRepository @Inject constructor(
                 },
                 onToolCall = onToolCall,
                 onToolResult = onToolResult,
+                attachmentUrl = attachmentUrl,
+                attachType = attachType,
             )
         } catch (e: Exception) {
             val errorMsg = e.message ?: ""
