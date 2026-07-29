@@ -201,9 +201,8 @@ class ChatViewModel @Inject constructor(
     }
 
     // ── Send message ──
-    fun sendMessage(query: String) {
+    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null) {
         val sid = _sessionId.value ?: return
-        if (query.isBlank()) return
 
         // Cancel previous stream and save pending content
         streamingJob?.cancel()
@@ -223,6 +222,8 @@ class ChatViewModel @Inject constructor(
                 repository.sendMessage(
                     sessionId = sid,
                     query = query,
+                    attachmentUrl = attachmentUrl ?: "",
+                    attachType = attachType ?: "",
                     onChunk = { chunk ->
                         val newContent = _streamingContent.value + chunk
                         _streamingContent.value = newContent
@@ -331,59 +332,35 @@ class ChatViewModel @Inject constructor(
         _errorMessage.value = msg
     }
 
-    // ── Upload and send image ──
-    suspend fun uploadAndSend(context: android.content.Context, uri: android.net.Uri, text: String): String? {
-        val sid = _sessionId.value ?: return null
-        showEmojiPicker.value = false
-        return try {
-            val cr = context.contentResolver
-            // Detect MIME type
-            val mimeType = cr.getType(uri) ?: "application/octet-stream"
-            // Determine attachment type category
-            val attachType = when {
-                mimeType.startsWith("image/") -> "image"
-                mimeType.startsWith("video/") -> "video"
-                mimeType.startsWith("audio/") -> "audio"
-                else -> "file"
-            }
-            // Derive a sensible filename from the URI
-            val displayName = android.provider.OpenableColumns.DISPLAY_NAME
-            val fileName = cr.query(uri, null, null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val idx = cursor.getColumnIndex(displayName)
-                    if (idx >= 0) cursor.getString(idx) else null
-                } else null
-            } ?: "${attachType}_${System.currentTimeMillis()}"
-            // Copy content to temp file
-            val tempFile = java.io.File(context.cacheDir, fileName)
-            cr.openInputStream(uri)?.use { input ->
-                tempFile.outputStream().use { output ->
-                    input.copyTo(output)
+    // ── Upload file (called on send click) ──
+        suspend fun uploadFile(context: android.content.Context, uri: android.net.Uri, fileName: String, mimeType: String, attachType: String): String? {
+            val sid = _sessionId.value ?: return null
+            return try {
+                val tempFile = java.io.File(context.cacheDir, fileName)
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    tempFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
                 }
+                val result = repository.uploadFile(sid, tempFile, fileName, mimeType)
+                tempFile.delete()
+                result
+            } catch (e: Exception) {
+                _errorMessage.value = "Upload failed: ${e.message}"
+                null
             }
-            // Upload to server
-            val result = repository.uploadFile(sid, tempFile, fileName, mimeType)
-            tempFile.delete()
-            if (result != null) {
-                sendMessageWithAttachment(sid, text, result, attachType)
-            }
-            result
-        } catch (e: Exception) {
-            _errorMessage.value = "Upload failed: ${e.message}"
-            null
         }
     }
-
-    private fun sendMessageWithAttachment(sessionId: String, text: String, url: String, type: String) {
-        viewModelScope.launch {
-            repository.sendMessageWithAttachment(sessionId, text, url, type)
-        }
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════
 // Screen composable
 // ═══════════════════════════════════════════════════════════════
+
+data class PendingAttachment(
+    val uri: android.net.Uri,
+    val fileName: String,
+    val mimeType: String,
+    val attachType: String  // "image", "video", "audio", "file"
+)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
 @Composable
@@ -405,20 +382,38 @@ fun ChatScreen(
     val showEmojiPicker by vm.showEmojiPicker.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
+    var pendingAttachment by remember { mutableStateOf<PendingAttachment?>(null) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    // ── File picker (images + documents + PDFs) ──
+    // ── File picker (stores selection, doesn't upload until send clicked) ──
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            scope.launch {
-                vm.showEmojiPicker.value = false
-                val url = vm.uploadAndSend(context, uri, inputText.trim())
-                if (url != null) {
-                    inputText = ""
+            vm.showEmojiPicker.value = false
+            scope.launch(Dispatchers.IO) {
+                val cr = context.contentResolver
+                val mimeType = cr.getType(uri) ?: "application/octet-stream"
+                val attachType = when {
+                    mimeType.startsWith("image/") -> "image"
+                    mimeType.startsWith("video/") -> "video"
+                    mimeType.startsWith("audio/") -> "audio"
+                    else -> "file"
                 }
+                val displayName = android.provider.OpenableColumns.DISPLAY_NAME
+                val fileName = cr.query(uri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val idx = cursor.getColumnIndex(displayName)
+                        if (idx >= 0) cursor.getString(idx) else null
+                    } else null
+                } ?: "${attachType}_${System.currentTimeMillis()}"
+                pendingAttachment = PendingAttachment(
+                    uri = uri,
+                    fileName = fileName,
+                    mimeType = mimeType,
+                    attachType = attachType
+                )
             }
         }
     }
@@ -587,9 +582,21 @@ fun ChatScreen(
             inputText = inputText,
             onInputChange = { inputText = it },
             onSend = {
-                if (inputText.isNotBlank()) {
-                    vm.sendMessage(inputText.trim())
+                // Upload pending attachment (if any) then send text
+                scope.launch {
+                    var attachUrl: String? = null
+                    var attachType: String? = null
+                    if (pendingAttachment != null) {
+                        val pa = pendingAttachment!!
+                        attachUrl = vm.uploadFile(context, pa.uri, pa.fileName, pa.mimeType, pa.attachType)
+                        attachType = pa.attachType
+                        pendingAttachment = null
+                    }
+                    val text = inputText.trim()
                     inputText = ""
+                    if (text.isNotBlank() || attachUrl != null) {
+                        vm.sendMessage(text, attachUrl, attachType)
+                    }
                 }
             },
             onVoice = {
@@ -617,6 +624,8 @@ fun ChatScreen(
                 vm.showEmojiPicker.value = false
             },
             onAttach = { filePickerLauncher.launch(arrayOf("*/*")) },
+            pendingAttachment = pendingAttachment,
+            onRemoveAttachment = { pendingAttachment = null },
             isRecording = isRecording,
             isStreaming = isStreaming,
             showEmojiPicker = showEmojiPicker,
@@ -1216,6 +1225,79 @@ fun VoiceRecordingBar(
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Attachment preview (shown above text field before send)
+// ═══════════════════════════════════════════════════════════════
+
+@Composable
+fun AttachmentPreview(
+    attachment: PendingAttachment,
+    onRemove: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Thumbnail for images, icon for files
+            if (attachment.attachType == "image") {
+                AsyncImage(
+                    model = attachment.uri,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(HermesPrimary.copy(alpha = 0.1f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.InsertDriveFile,
+                        contentDescription = null,
+                        tint = HermesPrimary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = attachment.fileName,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = attachment.mimeType,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+            IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "Remove",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Input bar
 // ═══════════════════════════════════════════════════════════════
 
@@ -1227,6 +1309,8 @@ fun InputBar(
     onVoice: () -> Unit,
     onEmoji: (String) -> Unit,
     onAttach: () -> Unit,
+    pendingAttachment: PendingAttachment?,
+    onRemoveAttachment: () -> Unit,
     isRecording: Boolean,
     isStreaming: Boolean,
     showEmojiPicker: Boolean,
@@ -1240,6 +1324,14 @@ fun InputBar(
         shadowElevation = 2.dp
     ) {
         Column {
+            // Attachment preview (like Telegram: thumbnail + name above text field)
+            if (pendingAttachment != null) {
+                AttachmentPreview(
+                    attachment = pendingAttachment,
+                    onRemove = onRemoveAttachment
+                )
+            }
+
             // Emoji picker popup (above the bar, like Telegram)
             if (showEmojiPicker) {
                 EmojiPickerGrid(onEmojiSelected = onEmoji)
@@ -1264,7 +1356,7 @@ fun InputBar(
                     )
                 }
 
-                // ── 2. Text field ──
+                // ── 2. Text field (no keyboard send — only explicit send button) ──
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = onInputChange,
@@ -1308,29 +1400,44 @@ fun InputBar(
                     )
                 }
 
-                // ── 4. Mic / Send button (rightmost, blue circle like Telegram) ──
+                // ── 4. Mic button (always visible, blue circle — like Telegram) ──
                 FilledIconButton(
-                    onClick = {
-                        if (inputText.isNotBlank()) {
-                            onSend()
-                        } else {
-                            onVoice()
-                        }
-                    },
+                    onClick = onVoice,
                     modifier = Modifier.size(40.dp),
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = HermesPrimary,
                         contentColor = Color.White
                     ),
-                    enabled = enabled && (!isRecording)
+                    enabled = enabled && !isRecording
                 ) {
                     Icon(
-                        imageVector = if (inputText.isNotBlank()) Icons.AutoMirrored.Filled.Send
-                        else Icons.Filled.Mic,
-                        contentDescription = if (inputText.isNotBlank()) "Send" else "Voice input",
+                        imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
+                        contentDescription = "Voice input",
                         modifier = Modifier.size(20.dp)
                     )
+                }
+
+                // ── 5. Send button (appears when text or attachment present — like Telegram) ──
+                val hasContent = inputText.isNotBlank() || pendingAttachment != null
+                if (hasContent) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    FilledIconButton(
+                        onClick = onSend,
+                        modifier = Modifier.size(40.dp),
+                        shape = CircleShape,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = HermesPrimary,
+                            contentColor = Color.White
+                        ),
+                        enabled = enabled
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
         }

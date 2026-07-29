@@ -46,12 +46,16 @@ class HermesRepository @Inject constructor(
         onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
         onToolResult: (String, String) -> Unit = { _, _ -> },
         attempt: Int = 1,
+        attachmentUrl: String = "",
+        attachType: String = "",
     ): String {
         // Save user message
         val userMsg = Message(
             sessionId = sessionId,
             role = MessageRole.USER,
-            content = query
+            content = query,
+            attachmentUrl = attachmentUrl.ifBlank { null },
+            attachmentType = attachType.ifBlank { null }
         )
         messageDao.insertMessage(userMsg)
         sessionDao.incrementMessageCount(sessionId)
