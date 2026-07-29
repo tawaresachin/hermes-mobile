@@ -152,6 +152,8 @@ class HermesRepository @Inject constructor(
 
     fun getSavedConfig(): ServerConfig? = apiService.getConfig()
 
+    fun getBaseUrl(): String = apiService.getBaseUrl()
+
     suspend fun checkConnection(config: ServerConfig): ConnectionStatus {
         return try {
             if (apiService.healthCheck(config)) ConnectionStatus.CONNECTED

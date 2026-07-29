@@ -288,6 +288,8 @@ class ChatViewModel @Inject constructor(
         sendMessage(lastUserMsg.content)
     }
 
+    fun getBaseUrl(): String = repository.getBaseUrl()
+
     // ── Voice dictation ──
     fun startRecording() {
         // Voice recording handled by startVoiceDictation() in ChatScreen directly
@@ -502,7 +504,7 @@ fun ChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
                     .statusBarsPadding(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -580,18 +582,23 @@ fun ChatScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                     contentPadding = PaddingValues(
                         start = 8.dp,
                         end = 8.dp,
-                        top = 4.dp,
-                        bottom = 4.dp
+                        top = 2.dp,
+                        bottom = 2.dp
                     )
                 ) {
                     items(items = messages, key = { it.id }) { message ->
                         val isStreamingThis = isStreaming && message.isStreaming
                         val displayContent = if (isStreamingThis) streamingContent else message.content
-                        MessageBubble(message = message, displayContent = displayContent, isStreaming = isStreamingThis)
+                        MessageBubble(
+                            message = message,
+                            displayContent = displayContent,
+                            isStreaming = isStreamingThis,
+                            baseUrl = vm.getBaseUrl()
+                        )
                     }
                     if (isStreaming && streamingContent.isBlank()) {
                         item(key = "typing_indicator") { TypingIndicator() }
@@ -872,7 +879,8 @@ fun EmptyChatState() {
 fun MessageBubble(
     message: Message,
     displayContent: String,
-    isStreaming: Boolean
+    isStreaming: Boolean,
+    baseUrl: String = ""
 ) {
     val isUser = message.role == MessageRole.USER
     val isDark = MaterialTheme.colorScheme.background == DarkBg
@@ -894,6 +902,13 @@ fun MessageBubble(
         MaterialTheme.colorScheme.onSurface
     }
 
+    // Build absolute URL for images served from the bridge server
+    val absoluteImageUrl = remember(message.attachmentUrl, baseUrl) {
+        val rel = message.attachmentUrl ?: return@remember null
+        if (rel.startsWith("http")) rel
+        else baseUrl.trimEnd('/') + rel
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = alignment
@@ -912,9 +927,9 @@ fun MessageBubble(
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                     // ── Image attachment ──
-                    if (message.attachmentUrl != null && message.attachmentType == "image") {
+                    if (absoluteImageUrl != null && message.attachmentType?.startsWith("image") == true) {
                         AsyncImage(
-                            model = message.attachmentUrl,
+                            model = absoluteImageUrl,
                             contentDescription = message.attachmentName ?: "Image",
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -924,7 +939,7 @@ fun MessageBubble(
                         )
                     }
                     // ── File attachment (non-image) ──
-                    if (message.attachmentUrl != null && message.attachmentType != null && message.attachmentType != "image") {
+                    if (message.attachmentUrl != null && (message.attachmentType == null || !message.attachmentType!!.startsWith("image"))) {
                         FileAttachmentRow(
                             name = message.attachmentName ?: message.attachmentUrl ?: "File",
                             modifier = Modifier.padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp)
