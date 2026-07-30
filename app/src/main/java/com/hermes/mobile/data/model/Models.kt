@@ -62,6 +62,24 @@ data class SessionSummary(
     val message_count: Int = 0
 )
 
+// ─── Model Info ───
+
+data class ModelInfo(
+    val id: String,
+    val name: String,
+    val isVision: Boolean = false,
+    val isFree: Boolean = false,
+    val provider: String = "",
+    val baseUrl: String = ""
+)
+
+data class ModelListResponse(
+    val models: List<ModelInfo>,
+    val current: String,
+    val default: String,
+    val provider: String
+)
+
 // ─── Server Config ───
 
 data class ServerConfig(

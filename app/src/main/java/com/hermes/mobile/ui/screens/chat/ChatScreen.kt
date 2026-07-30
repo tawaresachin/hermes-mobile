@@ -118,6 +118,16 @@ class ChatViewModel @Inject constructor(
     private val _recordingAmplitude = MutableStateFlow(0f)
     val recordingAmplitude: StateFlow<Float> = _recordingAmplitude.asStateFlow()
 
+    // ── Model selection ──
+    private val _currentModel = MutableStateFlow("")
+    val currentModel: StateFlow<String> = _currentModel.asStateFlow()
+
+    private val _availableModels = MutableStateFlow<List<ModelInfo>>(emptyList())
+    val availableModels: StateFlow<List<ModelInfo>> = _availableModels.asStateFlow()
+
+    private val _modelsLoading = MutableStateFlow(false)
+    val modelsLoading: StateFlow<Boolean> = _modelsLoading.asStateFlow()
+
     // ── Emoji picker ──
     val showEmojiPicker = MutableStateFlow(false)
 
@@ -325,6 +335,37 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    // ── Model Management ──
+
+    fun loadModels() {
+        val sid = _sessionId.value ?: return
+        viewModelScope.launch {
+            _modelsLoading.value = true
+            try {
+                val response = repository.listModels(sid)
+                if (response != null) {
+                    _availableModels.value = response.models
+                    _currentModel.value = response.current
+                }
+            } catch (_: Exception) { }
+            _modelsLoading.value = false
+        }
+    }
+
+    fun switchModel(modelId: String, global: Boolean = false) {
+        val sid = _sessionId.value ?: return
+        viewModelScope.launch {
+            val success = repository.switchModel(sid, modelId, global)
+            if (success) {
+                _currentModel.value = modelId
+                if (global) {
+                    // Reload to show the new global default
+                    loadModels()
+                }
+            }
+        }
+    }
+
     // ── Dismiss error ──
     fun dismissError() {
         _errorMessage.value = null
@@ -415,11 +456,18 @@ fun ChatScreen(
     val errorMessage by vm.errorMessage.collectAsState()
     val sessionIdState by vm.sessionId.collectAsState()
     val showEmojiPicker by vm.showEmojiPicker.collectAsState()
+    val currentModel by vm.currentModel.collectAsState()
+    val availableModels by vm.availableModels.collectAsState()
+    val modelsLoading by vm.modelsLoading.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     var pendingAttachment by remember { mutableStateOf<PendingAttachment?>(null) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // ── Model picker state ──
+    var showModelPicker by remember { mutableStateOf(false) }
+    var modelSearchQuery by remember { mutableStateOf("") }
+    var modelPickerGlobal by remember { mutableStateOf(false) }
 
     // ── File picker (stores selection, doesn't upload until send clicked) ──
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -489,6 +537,13 @@ fun ChatScreen(
         }
     }
 
+    // Load models when session ID is available
+    LaunchedEffect(sessionIdState) {
+        if (sessionIdState != null) {
+            vm.loadModels()
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -509,7 +564,7 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(modifier = Modifier.width(4.dp))
-                // App icon + name
+                // App icon
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Send,
                     contentDescription = null,
@@ -517,17 +572,41 @@ fun ChatScreen(
                     modifier = Modifier.size(28.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Column {
-                    Text(
-                        text = "Hermes",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "AI Assistant",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                // Model chip (tappable — opens model picker)
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            vm.loadModels()
+                            modelSearchQuery = ""
+                            showModelPicker = true
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Hermes",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (currentModel.isNotBlank())
+                                currentModel.substringAfterLast("/").take(20)
+                            else "AI Assistant",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = HermesPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Filled.ArrowDropDown,
+                        contentDescription = "Select model",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
@@ -661,6 +740,164 @@ fun ChatScreen(
             onToggleEmojiPicker = { vm.showEmojiPicker.value = !vm.showEmojiPicker.value },
             enabled = sessionIdState != null
         )
+
+        // ── Model Picker Bottom Sheet ──
+        if (showModelPicker) {
+            ModalBottomSheet(
+                onDismissRequest = { showModelPicker = false },
+                modifier = Modifier.fillMaxHeight(0.85f)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                    // Title + global toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Select Model",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(
+                            text = "Global",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Switch(
+                            checked = modelPickerGlobal,
+                            onCheckedChange = { modelPickerGlobal = it },
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // Search bar
+                    OutlinedTextField(
+                        value = modelSearchQuery,
+                        onValueChange = { modelSearchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Search models…") },
+                        leadingIcon = {
+                            Icon(Icons.Filled.Search, contentDescription = null)
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            focusedBorderColor = HermesPrimary.copy(alpha = 0.5f),
+                            unfocusedBorderColor = Color.Transparent,
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // Loading state
+                    if (modelsLoading) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                        }
+                    } else {
+                        // Filter models by search query
+                        val filtered = remember(availableModels, modelSearchQuery) {
+                            val list = if (modelSearchQuery.isBlank()) availableModels
+                            else availableModels.filter { m ->
+                                m.id.contains(modelSearchQuery, ignoreCase = true) ||
+                                m.name.contains(modelSearchQuery, ignoreCase = true)
+                            }
+                            // Group by provider, preserve order
+                            list.groupBy { m -> m.provider.ifBlank { "other" } }
+                                .toSortedMap()
+                        }
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(1.dp)
+                        ) {
+                            filtered.forEach { (provider, models) ->
+                                // Provider section header
+                                item(key = "provider_$provider") {
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                        color = Color.Transparent
+                                    ) {
+                                        Text(
+                                            text = provider.uppercase(),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = HermesPrimary,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                                // Models in this provider group
+                                items(models, key = { it.id }) { model ->
+                                    val isCurrent = model.id == currentModel
+                                    Surface(
+                                        onClick = {
+                                            vm.switchModel(model.id, global = modelPickerGlobal)
+                                            showModelPicker = false
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isCurrent)
+                                            HermesPrimary.copy(alpha = 0.1f)
+                                        else Color.Transparent
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            // Icon
+                                            if (model.isVision) {
+                                                Icon(
+                                                    Icons.Filled.Visibility,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            } else if (model.isFree) {
+                                                Icon(
+                                                    Icons.Filled.LockOpen,
+                                                    contentDescription = "Free",
+                                                    tint = SuccessGreen,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            } else {
+                                                Box(modifier = Modifier.size(18.dp))
+                                            }
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = model.name,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            if (isCurrent) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Icon(
+                                                    Icons.Filled.CheckCircle,
+                                                    contentDescription = "Current",
+                                                    tint = HermesPrimary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
+        }
     }
 }
 

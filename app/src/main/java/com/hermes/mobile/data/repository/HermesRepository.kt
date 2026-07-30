@@ -167,6 +167,16 @@ class HermesRepository @Inject constructor(
         return apiService.healthCheck(config)
     }
 
+    // ─── Model Management ───
+
+    suspend fun listModels(sessionId: String): ModelListResponse? {
+        return apiService.listModels(sessionId)
+    }
+
+    suspend fun switchModel(sessionId: String, modelName: String, global: Boolean = false): Boolean {
+        return apiService.switchModel(sessionId, modelName, global)
+    }
+
     // ─── Dark Theme ───
 
     fun saveDarkTheme(isDark: Boolean) {

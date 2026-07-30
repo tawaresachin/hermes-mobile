@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.hermes.mobile.auth.AuthManager
 import com.hermes.mobile.data.model.ServerConfig
+import com.hermes.mobile.data.model.ModelInfo
+import com.hermes.mobile.data.model.ModelListResponse
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -261,6 +263,51 @@ class HermesApiService @Inject constructor(
                 arr.getJSONObject(i).toMap()
             }
         }
+    }
+
+    // ─── List Models ───
+
+    suspend fun listModels(sessionId: String = ""): ModelListResponse? {
+        val baseUrl = config?.baseUrl ?: return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = "$baseUrl/api/models" + if (sessionId.isNotBlank()) "?session_id=$sessionId" else ""
+                val request = Request.Builder().url(url).get().build()
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: return@withContext null
+                    val json = JSONObject(body)
+                    val modelsArr = json.optJSONArray("models") ?: return@withContext null
+                    val models = (0 until modelsArr.length()).map { i ->
+                        val m = modelsArr.getJSONObject(i)
+                        ModelInfo(
+                            id = m.optString("id", ""),
+                            name = m.optString("name", ""),
+                            isVision = m.optBoolean("isVision", false),
+                            isFree = m.optBoolean("isFree", false),
+                            provider = m.optString("provider", ""),
+                            baseUrl = m.optString("baseUrl", "")
+                        )
+                    }
+                    ModelListResponse(
+                        models = models,
+                        current = json.optString("current", ""),
+                        default = json.optString("default", ""),
+                        provider = json.optString("provider", "")
+                    )
+                } else null
+            } catch (_: Exception) { null }
+        }
+    }
+
+    // ─── Switch Model (via chat command) ───
+
+    suspend fun switchModel(sessionId: String, modelName: String, global: Boolean = false): Boolean {
+        val query = "/model $modelName${if (global) " --global" else ""}"
+        return try {
+            val response = sendChat(query, sessionId)
+            response.contains("✅") || response.contains("switched")
+        } catch (_: Exception) { false }
     }
 
     // ─── Simple Chat (non-streaming) ───
