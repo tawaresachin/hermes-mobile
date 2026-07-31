@@ -25,6 +25,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -670,6 +671,16 @@ fun ChatScreen(
                 .weight(1f)
                 .fillMaxWidth()
         ) {
+            // Faded Hermes watermark — visible on both light & dark themes
+            Image(
+                painter = painterResource(R.drawable.hermes_watermark),
+                contentDescription = null,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(240.dp)
+                    .alpha(0.10f),
+                contentScale = ContentScale.Fit
+            )
             if (messages.isEmpty() && !isStreaming) {
                 EmptyChatState()
             } else {
