@@ -662,13 +662,21 @@ private fun formatTimestamp(millis: Long): String {
     if (millis <= 0L) return "Unknown"
 
     val now = System.currentTimeMillis()
-    val todayStart = now - (now % 86_400_000L) // UTC day boundary
+    val tz = java.util.TimeZone.getDefault()
+    val todayStart = java.util.Calendar.getInstance().apply {
+        timeInMillis = now
+        set(java.util.Calendar.HOUR_OF_DAY, 0)
+        set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val tzOffset = tz.getOffset(now)
 
     return when {
         millis >= todayStart -> {
             SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(millis))
         }
-        millis >= todayStart - 6 * 86_400_000L -> {
+        millis >= todayStart - 6 * 86_400_000L + tzOffset -> {
             SimpleDateFormat("EEE h:mm a", Locale.getDefault()).format(Date(millis))
         }
         else -> {

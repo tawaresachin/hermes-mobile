@@ -102,6 +102,7 @@ class ChatViewModel @Inject constructor(
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
     private var streamingJob: kotlinx.coroutines.Job? = null
+    private var toolClearJob: kotlinx.coroutines.Job? = null
 
     // ── Tool calls detected during streaming ──
     private val _toolCalls = MutableStateFlow<List<ToolCallInfo>>(emptyList())
@@ -258,7 +259,9 @@ class ChatViewModel @Inject constructor(
                 )
                 _isStreaming.value = false
                 _streamingContent.value = ""
-                viewModelScope.launch {
+                // Cancel any prior delayed clear so it can't wipe the NEXT message's tool calls
+                toolClearJob?.cancel()
+                toolClearJob = viewModelScope.launch {
                     delay(3000)
                     _toolCalls.value = emptyList()
                 }
@@ -530,10 +533,14 @@ fun ChatScreen(
         vm.initSession(pending)
     }
 
-    // Auto-scroll to bottom
+    // Auto-scroll to bottom — only when already near the bottom (don't yank users reading history)
     LaunchedEffect(messages.size, streamingContent) {
         if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val nearBottom = lastVisible >= messages.size - 3
+            if (nearBottom || streamingContent.isNotBlank()) {
+                listState.scrollToItem(messages.size - 1)
+            }
         }
     }
 

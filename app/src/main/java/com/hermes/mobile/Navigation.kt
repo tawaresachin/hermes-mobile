@@ -81,16 +81,7 @@ fun MainNavigation(
         ) {
             composable(Screen.Home.route) {
                 HomeScreen(
-                    onNavigateToChat = { sessionId ->
-                        ChatNav.pendingSessionId = sessionId
-                        navController.navigate(Screen.Chat.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
-                            }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
+                    onNavigateToChat = { sessionId -> openChat(navController, sessionId) },
                     onNavigateToSessions = {
                         navController.navigate(Screen.Sessions.route)
                     }
@@ -104,25 +95,12 @@ fun MainNavigation(
             composable(Screen.Sessions.route) {
                 SessionsScreen(
                     paddingValues = scaffoldPadding,
-                    onSessionSelected = { sessionId ->
-                        ChatNav.pendingSessionId = sessionId
-                        navController.navigate(Screen.Chat.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
-                            }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
+                    onSessionSelected = { sessionId -> openChat(navController, sessionId) },
                     onBack = {
                         navController.popBackStack()
                     },
                     onNewChat = {
-                        ChatNav.pendingSessionId = null
-                        navController.navigate(Screen.Chat.route) {
-                            popUpTo(navController.graph.findStartDestination().id)
-                            launchSingleTop = true
-                        }
+                        openChat(navController, null)
                     }
                 )
             }
@@ -174,5 +152,17 @@ fun HermesBottomNavigationBar(
                 )
             )
         }
+    }
+}
+
+/** Navigate to the chat screen, optionally opening a session (null = new chat). */
+private fun openChat(navController: NavHostController, sessionId: String?) {
+    ChatNav.pendingSessionId = sessionId
+    navController.navigate(Screen.Chat.route) {
+        popUpTo(navController.graph.findStartDestination().id) {
+            saveState = true
+        }
+        launchSingleTop = true
+        restoreState = true
     }
 }

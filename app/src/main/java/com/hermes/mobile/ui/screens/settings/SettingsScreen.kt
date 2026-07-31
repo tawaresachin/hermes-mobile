@@ -3,6 +3,8 @@ package com.hermes.mobile.ui.screens.settings
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -16,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -31,7 +34,10 @@ import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.ServerConfig
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.theme.*
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,6 +60,8 @@ data class SettingsUiState(
     val authError: String? = null,
     val isLoggedIn: Boolean = false,
     val loggedInEmail: String = "",
+    // QR setup token (from hermes://connect payload)
+    val setupToken: String = "",
 )
 
 @HiltViewModel
@@ -93,6 +101,8 @@ class SettingsViewModel @Inject constructor(
     fun updatePassword(pw: String) { _uiState.update { it.copy(password = pw) } }
     fun togglePasswordVisibility() { _uiState.update { it.copy(showPassword = !it.showPassword) } }
     fun clearAuthError() { _uiState.update { it.copy(authError = null) } }
+    fun setError(msg: String) { _uiState.update { it.copy(authError = msg) } }
+    fun setSetupToken(token: String) { _uiState.update { it.copy(setupToken = token) } }
 
     fun register() {
         val state = _uiState.value
@@ -228,6 +238,50 @@ class SettingsViewModel @Inject constructor(
             }
         }
     }
+
+    /** Re-fetch the bridge's preferred URL (Tailscale-first) from /setup/connect. */
+    fun refreshFromBridge() {
+        val current = _uiState.value.baseUrl.trimEnd('/')
+        if (current.isBlank() || current == "http://localhost:8080") {
+            _uiState.update { it.copy(authError = "Enter your current server URL first, then refresh") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAuthLoading = true, authError = null) }
+            try {
+                val setupUrl = "$current/setup/connect" +
+                    if (_uiState.value.setupToken.isNotBlank()) "?token=${_uiState.value.setupToken}" else ""
+                val conn = java.net.URL(setupUrl).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                val code = conn.responseCode
+                if (code == 200) {
+                    val body = conn.inputStream.bufferedReader().readText()
+                    val json = org.json.JSONObject(body)
+                    val preferredUrl = json.optString("url", "").trimEnd('/')
+                    if (preferredUrl.isNotBlank()) {
+                        _uiState.update { it.copy(baseUrl = preferredUrl) }
+                        repository.saveConfig(ServerConfig(baseUrl = preferredUrl))
+                        _uiState.update { it.copy(authError = "Connected via ${preferredUrl.removePrefix("http://").removePrefix("https://")}") }
+                        testConnection()
+                    } else {
+                        _uiState.update { it.copy(authError = "Bridge did not return a URL") }
+                    }
+                } else {
+                    _uiState.update { it.copy(authError = "Bridge returned HTTP $code") }
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                val msg = when {
+                    e is java.net.UnknownHostException -> "Can't reach bridge — the saved URL is stale. Scan the QR code again for the current URL."
+                    e is java.net.SocketTimeoutException -> "Bridge timed out — the saved URL may be stale. Scan the QR code again."
+                    else -> "Refresh failed: ${e.message}. Scan the QR code again for the current URL."
+                }
+                _uiState.update { it.copy(authError = msg) }
+            }
+            _uiState.update { it.copy(isAuthLoading = false) }
+        }
+    }
 }
 
 // ─── Screen ───
@@ -241,6 +295,74 @@ fun SettingsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
     val context = LocalContext.current
+
+    // QR result handler
+    fun handleQrResult(scanned: String, vm: SettingsViewModel) {
+        val uri = Uri.parse(scanned)
+        val url = when {
+            scanned.startsWith("hermes://connect") -> {
+                val directUrl = uri.getQueryParameter("url")
+                if (!directUrl.isNullOrBlank()) {
+                    directUrl.trimEnd('/')
+                } else {
+                    val host = uri.getQueryParameter("host") ?: ""
+                    val port = uri.getQueryParameter("port") ?: "9119"
+                    "http://$host:$port"
+                }
+            }
+            scanned.startsWith("http://") || scanned.startsWith("https://") -> {
+                scanned.trimEnd('/')
+            }
+            else -> scanned
+        }
+        // Capture the one-time setup token for /setup/connect refresh
+        val setup = uri.getQueryParameter("setup")
+        if (!setup.isNullOrBlank()) {
+            vm.setSetupToken(setup)
+        }
+        vm.updateBaseUrl(url)
+        vm.viewModelScope.launch {
+            kotlinx.coroutines.delay(500)
+            vm.testConnection()
+        }
+    }
+
+    // QR scanner launcher (camera)
+    val qrLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        if (result.contents != null) {
+            handleQrResult(result.contents, viewModel)
+        }
+    }
+    // QR image picker (gallery upload)
+    val qrImagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.viewModelScope.launch {
+                try {
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                    val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
+                    inputStream?.close()
+                    if (bitmap != null) {
+                        val w = bitmap.width
+                        val h = bitmap.height
+                        val pixels = IntArray(w * h)
+                        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+                        val source = com.google.zxing.RGBLuminanceSource(w, h, pixels)
+                        val binaryBitmap = com.google.zxing.BinaryBitmap(com.google.zxing.common.HybridBinarizer(source))
+                        val result = com.google.zxing.MultiFormatReader().decode(binaryBitmap)
+                        if (result?.text != null) {
+                            handleQrResult(result.text, viewModel)
+                        }
+                    }
+                } catch (e: Exception) {
+                    viewModel.setError("Failed to decode QR: ${e.message}")
+                }
+            }
+        }
+    }
+    // QR mode selector dialog
+    var showQrDialog by remember { mutableStateOf(false) }
 
     CompositionLocalProvider(LocalDarkTheme provides uiState.isDarkTheme) {
         Column(
@@ -446,6 +568,200 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                     }
                     Text("Test Connection")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { showQrDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Scan QR Code")
+                }
+            }
+
+            // QR mode picker bottom sheet
+            if (showQrDialog) {
+                ModalBottomSheet(
+                    onDismissRequest = { showQrDialog = false },
+                    shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 32.dp)
+                    ) {
+                        Text(
+                            text = "Connect with QR",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
+                        )
+                        HorizontalDivider()
+
+                        // Scan with camera
+                        Surface(
+                            onClick = {
+                                showQrDialog = false
+                                val options = ScanOptions().apply {
+                                    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                    setPrompt("Scan Hermes Bridge QR code")
+                                    setBeepEnabled(false)
+                                    setOrientationLocked(false)
+                                    addExtra("SCAN_ORIENTATION", "portrait")
+                                }
+                                qrLauncher.launch(options)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color.Transparent
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.QrCodeScanner, contentDescription = null, tint = HermesPrimary)
+                                Spacer(Modifier.width(16.dp))
+                                Column {
+                                    Text("Scan with Camera", style = MaterialTheme.typography.bodyLarge)
+                                    Text("Point camera at the QR code", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                        HorizontalDivider()
+
+                        // Choose from gallery
+                        Surface(
+                            onClick = {
+                                showQrDialog = false
+                                qrImagePicker.launch("image/*")
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color.Transparent
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.Upload, contentDescription = null, tint = HermesPrimary)
+                                Spacer(Modifier.width(16.dp))
+                                Column {
+                                    Text("Choose from Gallery", style = MaterialTheme.typography.bodyLarge)
+                                    Text("Pick a screenshot of the QR code", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                        HorizontalDivider()
+
+                        // Cancel
+                        Surface(
+                            onClick = { showQrDialog = false },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color.Transparent
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ─── Tailscale Section ───
+            SettingsSection("Secure Connection (Tailscale)") {
+                val tailscaleInstalled = remember {
+                    try {
+                        context.packageManager.getPackageInfo("com.tailscale.ipn", 0)
+                        true
+                    } catch (_: Exception) { false }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Filled.Shield,
+                        contentDescription = null,
+                        tint = if (tailscaleInstalled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = if (tailscaleInstalled) "Tailscale installed" else "Tailscale not installed",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "Direct secure connection to your Hermes bridge",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        if (!tailscaleInstalled) {
+                            // Open Play Store install page
+                            try {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.tailscale.ipn"))
+                                )
+                            } catch (_: Exception) {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.tailscale.ipn"))
+                                )
+                            }
+                        } else {
+                            // Open Tailscale app for sign-in
+                            try {
+                                context.startActivity(
+                                    context.packageManager.getLaunchIntentForPackage("com.tailscale.ipn")
+                                )
+                            } catch (_: Exception) {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://login.tailscale.com/start"))
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = HermesPrimary)
+                ) {
+                    Icon(
+                        if (tailscaleInstalled) Icons.Filled.CheckCircle else Icons.Filled.Download,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (tailscaleInstalled) "Sign in to Tailscale" else "Install Tailscale")
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "After signing in, tap \"Refresh\" below — the app re-fetches your Tailscale IP from the bridge.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedButton(
+                    onClick = {
+                        viewModel.refreshFromBridge()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Refresh from Bridge")
                 }
             }
 
