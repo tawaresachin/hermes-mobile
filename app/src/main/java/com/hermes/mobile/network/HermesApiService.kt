@@ -39,6 +39,8 @@ class HermesApiService @Inject constructor(
     companion object {
         private const val PREFS_NAME = "hermes_config"
         private const val KEY_BASE_URL = "base_url"
+        private const val KEY_API_KEY = "api_key"
+        private const val KEY_SETUP_TOKEN = "setup_token"
         private const val KEY_DARK_THEME = "dark_theme"
     }
 
@@ -79,13 +81,19 @@ class HermesApiService @Inject constructor(
         config = cfg
         prefs.edit()
             .putString(KEY_BASE_URL, cfg.baseUrl)
+            .putString(KEY_API_KEY, cfg.apiKey.orEmpty())
+            .putString(KEY_SETUP_TOKEN, cfg.setupToken.orEmpty())
             .apply()
     }
 
     fun getConfig(): ServerConfig? {
         if (config != null) return config
         val url = prefs.getString(KEY_BASE_URL, null) ?: return null
-        val restored = ServerConfig(baseUrl = url)
+        val restored = ServerConfig(
+            baseUrl = url,
+            apiKey = prefs.getString(KEY_API_KEY, "") ?: "",
+            setupToken = prefs.getString(KEY_SETUP_TOKEN, "") ?: "",
+        )
         config = restored
         return restored
     }

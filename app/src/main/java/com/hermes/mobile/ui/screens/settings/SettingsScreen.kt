@@ -62,6 +62,8 @@ data class SettingsUiState(
     val loggedInEmail: String = "",
     // QR setup token (from hermes://connect payload)
     val setupToken: String = "",
+    // Bridge API key (from hermes://connect payload) — persisted for refresh
+    val apiKey: String = "",
 )
 
 @HiltViewModel
@@ -77,7 +79,13 @@ class SettingsViewModel @Inject constructor(
         // Load saved config
         val saved = repository.getSavedConfig()
         if (saved != null) {
-            _uiState.update { it.copy(baseUrl = saved.baseUrl) }
+            _uiState.update {
+                it.copy(
+                    baseUrl = saved.baseUrl,
+                    setupToken = saved.setupToken,
+                    apiKey = saved.apiKey,
+                )
+            }
         }
         // Load dark theme
         if (repository.hasDarkThemePreference()) {
@@ -103,6 +111,7 @@ class SettingsViewModel @Inject constructor(
     fun clearAuthError() { _uiState.update { it.copy(authError = null) } }
     fun setError(msg: String) { _uiState.update { it.copy(authError = msg) } }
     fun setSetupToken(token: String) { _uiState.update { it.copy(setupToken = token) } }
+    fun setApiKey(key: String) { _uiState.update { it.copy(apiKey = key) } }
 
     fun register() {
         val state = _uiState.value
@@ -232,7 +241,13 @@ class SettingsViewModel @Inject constructor(
                 }
                 // Only persist the URL once the connection actually works
                 if (connected) {
-                    repository.saveConfig(config)
+                    repository.saveConfig(
+                        ServerConfig(
+                            baseUrl = normalizedUrl,
+                            apiKey = _uiState.value.apiKey,
+                            setupToken = _uiState.value.setupToken,
+                        )
+                    )
                 }
             } catch (e: Exception) {
                 _uiState.update {
@@ -252,11 +267,16 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isAuthLoading = true, authError = null) }
             try {
+                // Go through the authenticated OkHttp client (JWT auto-attached),
+                // so /setup/connect accepts us even after an app restart.
                 val setupUrl = "$current/setup/connect" +
                     if (_uiState.value.setupToken.isNotBlank()) "?token=${_uiState.value.setupToken}" else ""
                 val conn = java.net.URL(setupUrl).openConnection() as java.net.HttpURLConnection
                 conn.connectTimeout = 8000
                 conn.readTimeout = 8000
+                // Auth via bridge API key (from QR) or JWT — persists across restarts
+                val bearer = _uiState.value.apiKey.ifBlank { authManager.getToken().orEmpty() }
+                conn.setRequestProperty("Authorization", "Bearer $bearer")
                 val code = conn.responseCode
                 if (code == 200) {
                     val body = conn.inputStream.bufferedReader().readText()
@@ -264,7 +284,13 @@ class SettingsViewModel @Inject constructor(
                     val preferredUrl = json.optString("url", "").trimEnd('/')
                     if (preferredUrl.isNotBlank()) {
                         _uiState.update { it.copy(baseUrl = preferredUrl) }
-                        repository.saveConfig(ServerConfig(baseUrl = preferredUrl))
+                        repository.saveConfig(
+                            ServerConfig(
+                                baseUrl = preferredUrl,
+                                apiKey = _uiState.value.apiKey,
+                                setupToken = _uiState.value.setupToken,
+                            )
+                        )
                         _uiState.update { it.copy(authError = "Connected via ${preferredUrl.removePrefix("http://").removePrefix("https://")}") }
                         testConnection()
                     } else {
@@ -322,6 +348,11 @@ fun SettingsScreen(
         val setup = uri.getQueryParameter("setup")
         if (!setup.isNullOrBlank()) {
             vm.setSetupToken(setup)
+        }
+        // Capture the bridge API key so refresh works after app restarts
+        val apiKey = uri.getQueryParameter("key")
+        if (!apiKey.isNullOrBlank()) {
+            vm.setApiKey(apiKey)
         }
         vm.updateBaseUrl(url)
         vm.viewModelScope.launch {
