@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -56,6 +57,7 @@ import coil.compose.AsyncImage
 import com.hermes.mobile.data.local.AppDatabase
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.R
 import com.hermes.mobile.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
@@ -561,6 +563,7 @@ fun ChatScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()  // Whole chat lifts above the keyboard (Telegram-style)
             .background(MaterialTheme.colorScheme.background)
     ) {
         // ── Telegram-style top bar ──
@@ -573,17 +576,15 @@ fun ChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .statusBarsPadding(),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(modifier = Modifier.width(4.dp))
-                // App icon
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = null,
-                    tint = HermesPrimary,
-                    modifier = Modifier.size(28.dp)
+                // Hermes logo (launcher icon — purple circle + H), not a paper plane
+                Image(
+                    painter = painterResource(R.drawable.ic_launcher_foreground),
+                    contentDescription = "Hermes",
+                    modifier = Modifier.size(30.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 // Model chip (tappable — opens model picker)
@@ -1708,9 +1709,7 @@ fun InputBar(
     }
 
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .imePadding(),  // Push bar above keyboard when it opens
+        modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,
         shadowElevation = 2.dp

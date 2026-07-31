@@ -53,6 +53,7 @@ val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Sessions, Screen.
 // Main Navigation — NavHost + bottom bar
 // ═══════════════════════════════════════════════════════════
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MainNavigation(
     navController: NavHostController = rememberNavController()
@@ -60,18 +61,24 @@ fun MainNavigation(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
+    // Hide the bottom bar while the keyboard is open (Telegram behavior) —
+    // otherwise it leaves a dead white band between the input bar and the IME.
+    val isImeVisible = WindowInsets.isImeVisible
+
     Scaffold(
         bottomBar = {
-            HermesBottomNavigationBar(
-                screens = bottomNavScreens,
-                currentDestination = currentDestination,
-                onNavigate = { screen ->
-                    navController.navigate(screen.route) {
-                        popUpTo(navController.graph.findStartDestination().id)
-                        launchSingleTop = true
+            if (!isImeVisible) {
+                HermesBottomNavigationBar(
+                    screens = bottomNavScreens,
+                    currentDestination = currentDestination,
+                    onNavigate = { screen ->
+                        navController.navigate(screen.route) {
+                            popUpTo(navController.graph.findStartDestination().id)
+                            launchSingleTop = true
+                        }
                     }
-                }
-            )
+                )
+            }
         }
     ) { scaffoldPadding ->
         NavHost(
