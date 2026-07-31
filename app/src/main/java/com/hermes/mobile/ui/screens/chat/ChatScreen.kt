@@ -1041,84 +1041,13 @@ fun ConnectionStatusBar(connectionStatus: ConnectionStatus) {
 fun EmptyChatState() {
     Column(
         modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
+            .fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // ── Telegram-style bird illustration ──
-        Canvas(
-            modifier = Modifier.size(160.dp)
-        ) {
-            val cx = size.width / 2
-            val cy = size.height / 2
-            val birdColor = Color(0xFF6AB5E8)
-            val beakTop = Color(0xFFFF8A80)
-            val beakBottom = Color(0xFFFF5252)
-            val wingColor = Color(0xFFFFAB40)
-            val bodyColor = Color(0xFF89CFF0)
-            val headColor = Color(0xFFB388FF)
-
-            // Body (ellipse)
-            drawOval(
-                color = bodyColor,
-                topLeft = androidx.compose.ui.geometry.Offset(cx - 35f, cy - 10f),
-                size = androidx.compose.ui.geometry.Size(70f, 50f)
-            )
-            // Head (circle)
-            drawCircle(
-                color = headColor,
-                radius = 28f,
-                center = androidx.compose.ui.geometry.Offset(cx - 15f, cy - 35f)
-            )
-            // Eye (white)
-            drawCircle(
-                color = Color.White,
-                radius = 10f,
-                center = androidx.compose.ui.geometry.Offset(cx - 10f, cy - 40f)
-            )
-            // Pupil
-            drawCircle(
-                color = Color.Black,
-                radius = 5f,
-                center = androidx.compose.ui.geometry.Offset(cx - 8f, cy - 40f)
-            )
-            // Beak (top)
-            drawPath(
-                path = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(cx + 5f, cy - 35f)
-                    cubicTo(cx + 30f, cy - 30f, cx + 35f, cy - 20f, cx + 10f, cy - 25f)
-                    close()
-                },
-                color = beakTop
-            )
-            // Beak (bottom)
-            drawPath(
-                path = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(cx + 5f, cy - 25f)
-                    cubicTo(cx + 30f, cy - 20f, cx + 32f, cy - 12f, cx + 8f, cy - 20f)
-                    close()
-                },
-                color = beakBottom
-            )
-            // Wing
-            drawOval(
-                color = wingColor,
-                topLeft = androidx.compose.ui.geometry.Offset(cx - 30f, cy - 5f),
-                size = androidx.compose.ui.geometry.Size(45f, 30f)
-            )
-            // Tail
-            drawPath(
-                path = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(cx + 30f, cy + 10f)
-                    cubicTo(cx + 55f, cy + 15f, cx + 60f, cy - 5f, cx + 45f, cy + 0f)
-                    close()
-                },
-                color = bodyColor
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
+        // Push the text below the centered Hermes watermark (240dp tall,
+        // so its bottom edge sits ~124dp below screen center).
+        Spacer(modifier = Modifier.height(132.dp))
 
         Text(
             text = "No messages here yet...",
