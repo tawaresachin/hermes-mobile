@@ -1740,8 +1740,7 @@ fun InputBar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 4.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
-                    .navigationBarsPadding(),
+                    .padding(start = 4.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                     // ── 1. Emoji button (leftmost, like Telegram) ──
