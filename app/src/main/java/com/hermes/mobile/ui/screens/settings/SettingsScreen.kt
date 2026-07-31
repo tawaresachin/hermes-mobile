@@ -25,7 +25,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -37,7 +36,6 @@ import com.hermes.mobile.ui.theme.*
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -146,70 +144,6 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(authError = e.message ?: "Login failed") }
             }
             _uiState.update { it.copy(isAuthLoading = false, password = "") }
-        }
-    }
-
-    /** Discover bridge URL from the GitHub registry using email. */
-    fun discoverBridge() {
-        val state = _uiState.value
-        if (state.email.isBlank()) {
-            _uiState.update { it.copy(authError = "Enter your email first") }
-            return
-        }
-        viewModelScope.launch {
-            _uiState.update { it.copy(isAuthLoading = true, authError = null) }
-            try {
-                val registryUrl = "https://raw.githubusercontent.com/tawaresachin/hermes-bridge-registry/main/bridges.json"
-                val json = fetchJson(registryUrl)
-                val entries = json.optJSONArray("entries") ?: org.json.JSONArray()
-                val enteredEmail = state.email.trim().lowercase()
-                var found = false
-                for (i in 0 until entries.length()) {
-                    val entry = entries.getJSONObject(i)
-                    if (entry.optString("email", "").trim().lowercase() == enteredEmail) {
-                        val bridgeUrl = entry.optString("url", "")
-                        if (bridgeUrl.isNotBlank()) {
-                            _uiState.update { it.copy(baseUrl = bridgeUrl) }
-                            val config = ServerConfig(baseUrl = bridgeUrl)
-                            repository.saveConfig(config)
-                            found = true
-                        }
-                        break
-                    }
-                }
-                if (!found) {
-                    _uiState.update { it.copy(authError = "No bridge found for this email. Enter URL manually or run 'hermes-bridge init' on your server.") }
-                }
-            } catch (e: Exception) {
-                val msg = when {
-                    e is java.net.UnknownHostException -> "Can't reach registry — enter URL manually"
-                    e is java.net.SocketTimeoutException -> "Registry timed out — enter URL manually"
-                    e is org.json.JSONException -> "Registry data error: ${e.message}"
-                    e.message != null -> "Registry: ${e.message}"
-                    else -> "Discovery failed — enter URL manually"
-                }
-                _uiState.update { it.copy(authError = msg) }
-            }
-            _uiState.update { it.copy(isAuthLoading = false) }
-        }
-    }
-
-    /** Fetch JSON from a URL using HttpURLConnection. */
-    private fun fetchJson(urlString: String): org.json.JSONObject {
-        val url = java.net.URL(urlString)
-        val conn = url.openConnection() as java.net.HttpURLConnection
-        conn.connectTimeout = 8000
-        conn.readTimeout = 8000
-        conn.instanceFollowRedirects = true
-        try {
-            val code = conn.responseCode
-            if (code == 200) {
-                val body = conn.inputStream.bufferedReader().readText()
-                return org.json.JSONObject(body)
-            }
-            throw java.io.IOException("HTTP $code")
-        } finally {
-            conn.disconnect()
         }
     }
 
@@ -355,10 +289,7 @@ fun SettingsScreen(
             vm.setApiKey(apiKey)
         }
         vm.updateBaseUrl(url)
-        vm.viewModelScope.launch {
-            kotlinx.coroutines.delay(500)
-            vm.testConnection()
-        }
+        vm.testConnection()
     }
 
     // QR scanner launcher (camera)
@@ -415,27 +346,190 @@ fun SettingsScreen(
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            // ─── Authentication Section ───
-            SettingsSection("Authentication") {
+            // ─── 1. CONNECTION (primary section — QR-first setup) ───
+            SettingsSection("Connection") {
+                ConnectionStatusHeader(
+                    status = uiState.connectionStatus,
+                    baseUrl = uiState.baseUrl,
+                    errorDetail = uiState.errorDetail
+                )
+
+                // Primary action: scan QR to auto-configure
+                Button(
+                    onClick = { showQrDialog = true },
+                    enabled = uiState.connectionStatus != ConnectionStatus.CONNECTING,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = HermesPrimary)
+                ) {
+                    Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Scan QR Code")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Secondary: manual URL entry + test
+                OutlinedTextField(
+                    value = uiState.baseUrl,
+                    onValueChange = { viewModel.updateBaseUrl(it) },
+                    label = { Text("Server URL") },
+                    placeholder = { Text("http://localhost:9119") },
+                    leadingIcon = { Icon(Icons.Filled.Dns, contentDescription = null) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { viewModel.testConnection() },
+                    enabled = uiState.connectionStatus != ConnectionStatus.CONNECTING,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (uiState.connectionStatus == ConnectionStatus.CONNECTING) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text("Test Connection")
+                }
+
+                // Refresh from bridge (re-fetches preferred URL — Tailscale-first)
+                Spacer(modifier = Modifier.height(4.dp))
+                TextButton(
+                    onClick = { viewModel.refreshFromBridge() },
+                    enabled = uiState.connectionStatus != ConnectionStatus.CONNECTING,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Refresh URL from Bridge")
+                }
+                uiState.authError?.let { err ->
+                    Text(
+                        text = err,
+                        color = ErrorRed.copy(alpha = 0.8f),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ─── 2. SECURE CONNECTION (Tailscale) ───
+            SettingsSection("Secure Connection") {
+                val tailscaleInstalled = remember {
+                    try {
+                        context.packageManager.getPackageInfo("com.tailscale.ipn", 0)
+                        true
+                    } catch (_: Exception) { false }
+                }
+                // Real signal: are we connected THROUGH Tailscale right now?
+                val onTailscale = remember(uiState.baseUrl, uiState.connectionStatus) {
+                    uiState.baseUrl.startsWith("http://100.") &&
+                        uiState.connectionStatus == ConnectionStatus.CONNECTED
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Filled.Shield,
+                        contentDescription = null,
+                        tint = if (onTailscale) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = when {
+                                onTailscale -> "Connected via Tailscale"
+                                tailscaleInstalled -> "Tailscale installed"
+                                else -> "Tailscale not installed"
+                            },
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = when {
+                                onTailscale -> "Direct P2P connection to your bridge"
+                                tailscaleInstalled -> "Sign in with the same account as the bridge device"
+                                else -> "Install the app to get a direct P2P connection"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(
+                    onClick = {
+                        if (!tailscaleInstalled) {
+                            // Open Play Store install page
+                            try {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.tailscale.ipn"))
+                                )
+                            } catch (_: Exception) {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.tailscale.ipn"))
+                                )
+                            }
+                        } else {
+                            // Open Tailscale app (it shows the actual sign-in state)
+                            try {
+                                context.startActivity(
+                                    context.packageManager.getLaunchIntentForPackage("com.tailscale.ipn")
+                                )
+                            } catch (_: Exception) {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://login.tailscale.com/start"))
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = HermesPrimary)
+                ) {
+                    Icon(
+                        if (onTailscale) Icons.Filled.CheckCircle else Icons.Filled.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        when {
+                            onTailscale -> "Tailscale Active"
+                            tailscaleInstalled -> "Open Tailscale"
+                            else -> "Install Tailscale"
+                        }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ─── 3. ACCOUNT ───
+            SettingsSection("Account") {
                 if (uiState.isLoggedIn) {
-                    // Logged in state
+                    // Logged-in state — compact
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(bottom = 8.dp)
+                        modifier = Modifier.padding(bottom = 12.dp)
                     ) {
                         Icon(
                             Icons.Filled.CheckCircle,
                             contentDescription = null,
                             tint = SuccessGreen,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                "Logged in",
+                                "Signed in",
                                 style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
+                                fontWeight = FontWeight.Medium
                             )
                             Text(
                                 uiState.loggedInEmail,
@@ -444,16 +538,26 @@ fun SettingsScreen(
                             )
                         }
                     }
-                    Button(
+                    OutlinedButton(
                         onClick = { viewModel.logout() },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
                         )
-                    ) { Text("Log Out") }
+                    ) {
+                        Icon(Icons.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Log Out")
+                    }
                 } else {
                     // Login / Register form
+                    Text(
+                        "Sign in to sync sessions across devices",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 10.dp)
+                    )
                     OutlinedTextField(
                         value = uiState.email,
                         onValueChange = { viewModel.updateEmail(it) },
@@ -486,7 +590,6 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
 
                     // Auth error
                     uiState.authError?.let { err ->
@@ -494,28 +597,15 @@ fun SettingsScreen(
                             text = err,
                             color = ErrorRed.copy(alpha = 0.8f),
                             style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(bottom = 4.dp)
+                            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                         )
                     }
 
+                    Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        TextButton(
-                            onClick = { viewModel.discoverBridge() },
-                            enabled = !uiState.isAuthLoading && uiState.email.isNotBlank(),
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                        ) {
-                            Icon(
-                                Icons.Filled.Search,
-                                contentDescription = null,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Find", maxLines = 1)
-                        }
                         Button(
                             onClick = { viewModel.login() },
                             enabled = !uiState.isAuthLoading && uiState.email.isNotBlank() && uiState.password.isNotBlank(),
@@ -530,293 +620,21 @@ fun SettingsScreen(
                                     strokeWidth = 2.dp
                                 )
                             }
-                            Text("Log In", maxLines = 1)
+                            Text("Log In")
                         }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.register() },
-                        enabled = !uiState.isAuthLoading,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) { Text("Register", maxLines = 1) }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // ─── Connection Section ───
-            SettingsSection("Server Connection") {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                ) {
-                    val (statusColor, statusText) = when (uiState.connectionStatus) {
-                        ConnectionStatus.CONNECTED -> SuccessGreen to "Connected"
-                        ConnectionStatus.CONNECTING -> WarningAmber to "Testing..."
-                        ConnectionStatus.ERROR -> ErrorRed to "Connection Failed"
-                        ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant to "Not Connected"
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(statusColor)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(statusText, style = MaterialTheme.typography.bodyMedium, color = statusColor)
-                }
-                uiState.errorDetail?.let { detail ->
-                    Text(
-                        detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ErrorRed.copy(alpha = 0.8f),
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                }
-                OutlinedTextField(
-                    value = uiState.baseUrl,
-                    onValueChange = { viewModel.updateBaseUrl(it) },
-                    label = { Text("Server URL") },
-                    placeholder = { Text("http://localhost:9119") },
-                    leadingIcon = { Icon(Icons.Filled.Dns, contentDescription = null) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = { viewModel.testConnection() },
-                    enabled = uiState.connectionStatus != ConnectionStatus.CONNECTING,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = HermesPrimary)
-                ) {
-                    if (uiState.connectionStatus == ConnectionStatus.CONNECTING) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text("Test Connection")
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = { showQrDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Scan QR Code")
-                }
-            }
-
-            // QR mode picker bottom sheet
-            if (showQrDialog) {
-                ModalBottomSheet(
-                    onDismissRequest = { showQrDialog = false },
-                    shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 32.dp)
-                    ) {
-                        Text(
-                            text = "Connect with QR",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
-                        )
-                        HorizontalDivider()
-
-                        // Scan with camera
-                        Surface(
-                            onClick = {
-                                showQrDialog = false
-                                val options = ScanOptions().apply {
-                                    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                                    setPrompt("Scan Hermes Bridge QR code")
-                                    setBeepEnabled(false)
-                                    setOrientationLocked(false)
-                                    addExtra("SCAN_ORIENTATION", "portrait")
-                                }
-                                qrLauncher.launch(options)
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            color = Color.Transparent
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 24.dp, vertical = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Filled.QrCodeScanner, contentDescription = null, tint = HermesPrimary)
-                                Spacer(Modifier.width(16.dp))
-                                Column {
-                                    Text("Scan with Camera", style = MaterialTheme.typography.bodyLarge)
-                                    Text("Point camera at the QR code", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-                        HorizontalDivider()
-
-                        // Choose from gallery
-                        Surface(
-                            onClick = {
-                                showQrDialog = false
-                                qrImagePicker.launch("image/*")
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            color = Color.Transparent
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 24.dp, vertical = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Filled.Upload, contentDescription = null, tint = HermesPrimary)
-                                Spacer(Modifier.width(16.dp))
-                                Column {
-                                    Text("Choose from Gallery", style = MaterialTheme.typography.bodyLarge)
-                                    Text("Pick a screenshot of the QR code", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-                        HorizontalDivider()
-
-                        // Cancel
-                        Surface(
-                            onClick = { showQrDialog = false },
-                            modifier = Modifier.fillMaxWidth(),
-                            color = Color.Transparent
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 24.dp, vertical = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
+                        OutlinedButton(
+                            onClick = { viewModel.register() },
+                            enabled = !uiState.isAuthLoading,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) { Text("Register") }
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ─── Tailscale Section ───
-            SettingsSection("Secure Connection (Tailscale)") {
-                val tailscaleInstalled = remember {
-                    try {
-                        context.packageManager.getPackageInfo("com.tailscale.ipn", 0)
-                        true
-                    } catch (_: Exception) { false }
-                }
-                // Real signal: are we connected THROUGH Tailscale right now?
-                val onTailscale = remember(uiState.baseUrl, uiState.connectionStatus) {
-                    uiState.baseUrl.startsWith("http://100.") &&
-                        uiState.connectionStatus == ConnectionStatus.CONNECTED
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Filled.Shield,
-                        contentDescription = null,
-                        tint = if (onTailscale) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = when {
-                                onTailscale -> "Connected via Tailscale"
-                                tailscaleInstalled -> "Tailscale installed — not connected"
-                                else -> "Tailscale not installed"
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            text = "Direct secure connection to your Hermes bridge",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        if (!tailscaleInstalled) {
-                            // Open Play Store install page
-                            try {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.tailscale.ipn"))
-                                )
-                            } catch (_: Exception) {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.tailscale.ipn"))
-                                )
-                            }
-                        } else {
-                            // Open Tailscale app for sign-in
-                            try {
-                                context.startActivity(
-                                    context.packageManager.getLaunchIntentForPackage("com.tailscale.ipn")
-                                )
-                            } catch (_: Exception) {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://login.tailscale.com/start"))
-                                )
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = HermesPrimary)
-                ) {
-                    Icon(
-                        if (onTailscale) Icons.Filled.CheckCircle else Icons.Filled.Download,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        when {
-                            onTailscale -> "Connected via Tailscale"
-                            tailscaleInstalled -> "Open Tailscale"
-                            else -> "Install Tailscale"
-                        }
-                    )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "After signing in, tap \"Refresh\" below — the app re-fetches your Tailscale IP from the bridge.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                OutlinedButton(
-                    onClick = {
-                        viewModel.refreshFromBridge()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Refresh from Bridge")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // ─── Appearance Section ───
+            // ─── 4. APPEARANCE ───
             SettingsSection("Appearance") {
                 SettingsToggle(
                     icon = Icons.Filled.DarkMode,
@@ -827,9 +645,9 @@ fun SettingsScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // ─── About Section ───
+            // ─── 5. ABOUT ───
             SettingsSection("About") {
                 SettingsInfoRow("Version", LocalContext.current.let { ctx ->
                     try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?" }
@@ -853,9 +671,161 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
+
+    // QR mode picker bottom sheet (Camera / Gallery)
+    if (showQrDialog) {
+        ModalBottomSheet(
+            onDismissRequest = { showQrDialog = false },
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 32.dp)
+            ) {
+                Text(
+                    text = "Connect with QR",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
+                )
+                HorizontalDivider()
+
+                // Scan with camera
+                Surface(
+                    onClick = {
+                        showQrDialog = false
+                        val options = ScanOptions().apply {
+                            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                            setPrompt("Scan Hermes Bridge QR code")
+                            setBeepEnabled(false)
+                            setOrientationLocked(false)
+                            addExtra("SCAN_ORIENTATION", "portrait")
+                        }
+                        qrLauncher.launch(options)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Filled.QrCodeScanner, contentDescription = null, tint = HermesPrimary)
+                        Spacer(Modifier.width(16.dp))
+                        Column {
+                            Text("Scan with Camera", style = MaterialTheme.typography.bodyLarge)
+                            Text("Point camera at the QR code", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                HorizontalDivider()
+
+                // Choose from gallery
+                Surface(
+                    onClick = {
+                        showQrDialog = false
+                        qrImagePicker.launch("image/*")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Filled.Upload, contentDescription = null, tint = HermesPrimary)
+                        Spacer(Modifier.width(16.dp))
+                        Column {
+                            Text("Choose from Gallery", style = MaterialTheme.typography.bodyLarge)
+                            Text("Pick a screenshot of the QR code", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                HorizontalDivider()
+
+                // Cancel
+                Surface(
+                    onClick = { showQrDialog = false },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ─── Reusable Components ───
+
+/** Prominent status header for the Connection section. */
+@Composable
+private fun ConnectionStatusHeader(
+    status: ConnectionStatus,
+    baseUrl: String,
+    errorDetail: String?
+) {
+    val (statusColor, statusText) = when (status) {
+        ConnectionStatus.CONNECTED -> SuccessGreen to "Connected"
+        ConnectionStatus.CONNECTING -> WarningAmber to "Testing..."
+        ConnectionStatus.ERROR -> ErrorRed to "Connection Failed"
+        ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant to "Not Connected"
+    }
+
+    // Human-readable route label (Tailscale / Tunnel / LAN)
+    val routeLabel = remember(baseUrl) {
+        when {
+            baseUrl.startsWith("http://100.") -> "via Tailscale"
+            baseUrl.contains("trycloudflare.com") -> "via Cloudflare Tunnel"
+            baseUrl.startsWith("http://192.168.") || baseUrl.startsWith("http://10.") ||
+                baseUrl.startsWith("http://172.16.") || baseUrl.startsWith("http://172.17.") ||
+                baseUrl.startsWith("http://172.18.") || baseUrl.startsWith("http://172.19.") ||
+                baseUrl.startsWith("http://172.2") -> "via Local Network"
+            baseUrl.contains("localhost") || baseUrl.contains("127.0.0.1") -> "on this device"
+            else -> ""
+        }
+    }
+
+    Column(modifier = Modifier.padding(bottom = 14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(statusColor)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (status == ConnectionStatus.CONNECTED && routeLabel.isNotBlank()) {
+                    "$statusText $routeLabel"
+                } else statusText,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = statusColor
+            )
+        }
+        if (errorDetail != null && status == ConnectionStatus.ERROR) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                errorDetail,
+                style = MaterialTheme.typography.bodySmall,
+                color = ErrorRed.copy(alpha = 0.8f)
+            )
+        }
+    }
+}
 
 @Composable
 fun SettingsSection(
