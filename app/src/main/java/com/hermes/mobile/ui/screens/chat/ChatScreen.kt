@@ -143,17 +143,20 @@ class ChatViewModel @Inject constructor(
 
     /**
      * Initialise the session. If a session ID is provided, resume it.
-     * Otherwise, create a new empty session.
+     * Otherwise, only create a new session if none exists yet —
+     * re-entering the Chat tab must NOT orphan the active session.
      * Cancel any previous init to prevent the "StandaloneCoroutine was cancelled" race.
      */
     fun initSession(sessionId: String?) {
         initJob?.cancel()
-        // Don't skip even if same ID — a fresh observeMessages ensures we show latest data
         initJob = viewModelScope.launch {
             if (sessionId != null) {
                 resumeSession(sessionId)
-            } else {
+            } else if (_sessionId.value == null) {
                 createNewSession()
+            } else {
+                // Re-entering the tab with an existing session — just re-observe
+                observeMessages(_sessionId.value!!)
             }
         }
     }
@@ -229,6 +232,10 @@ class ChatViewModel @Inject constructor(
             _toolCalls.value = emptyList()
             _errorMessage.value = null
 
+            // StringBuilder avoids O(n²) re-concat per chunk; UI reads via a
+            // throttled accumulator below.
+            val streamBuilder = StringBuilder()
+
             try {
                 repository.sendMessage(
                     sessionId = sid,
@@ -236,8 +243,8 @@ class ChatViewModel @Inject constructor(
                     attachmentUrl = attachmentUrl ?: "",
                     attachType = attachType ?: "",
                     onChunk = { chunk ->
-                        val newContent = _streamingContent.value + chunk
-                        _streamingContent.value = newContent
+                        streamBuilder.append(chunk)
+                        _streamingContent.value = streamBuilder.toString()
                     },
                     onToolCall = { id, name, args ->
                         val tc = ToolCallInfo(

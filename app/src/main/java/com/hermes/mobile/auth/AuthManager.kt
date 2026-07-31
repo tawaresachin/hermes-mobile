@@ -134,8 +134,12 @@ class AuthManager @Inject constructor(
                     val json = JSONObject(result.second)
                     storeTokens(json)
                     true
-                } else {
+                } else if (result.first == 401 || result.first == 403) {
+                    // Only auth rejection invalidates the session; transient
+                    // 5xx/network errors keep tokens so we can retry later.
                     clearTokens()
+                    false
+                } else {
                     false
                 }
             } catch (_: Exception) {

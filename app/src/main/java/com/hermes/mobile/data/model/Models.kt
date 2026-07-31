@@ -1,6 +1,7 @@
 package com.hermes.mobile.data.model
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.google.gson.annotations.SerializedName
 
@@ -27,7 +28,10 @@ data class StreamChunk(
 
 enum class MessageRole { USER, ASSISTANT, SYSTEM }
 
-@Entity(tableName = "messages")
+@Entity(
+    tableName = "messages",
+    indices = [Index(value = ["sessionId"])]
+)
 data class Message(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

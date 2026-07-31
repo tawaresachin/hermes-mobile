@@ -49,16 +49,18 @@ class HermesRepository @Inject constructor(
         attachmentUrl: String = "",
         attachType: String = "",
     ): String {
-        // Save user message
-        val userMsg = Message(
-            sessionId = sessionId,
-            role = MessageRole.USER,
-            content = query,
-            attachmentUrl = attachmentUrl.ifBlank { null },
-            attachmentType = attachType.ifBlank { null }
-        )
-        messageDao.insertMessage(userMsg)
-        sessionDao.incrementMessageCount(sessionId)
+        // Save user message ONLY on first attempt (retries must not duplicate it)
+        if (attempt == 1) {
+            val userMsg = Message(
+                sessionId = sessionId,
+                role = MessageRole.USER,
+                content = query,
+                attachmentUrl = attachmentUrl.ifBlank { null },
+                attachmentType = attachType.ifBlank { null }
+            )
+            messageDao.insertMessage(userMsg)
+            sessionDao.incrementMessageCount(sessionId)
+        }
 
         // Create placeholder for assistant response
         val assistantMsg = Message(
@@ -89,7 +91,7 @@ class HermesRepository @Inject constructor(
             if (errorMsg.contains("401") && attempt < 2) {
                 // Delete the placeholder message we just created
                 messageDao.deleteMessage(msgId)
-                // Retry silently
+                // Retry silently — user message already saved, so don't re-insert
                 return sendMessage(sessionId, query, onChunk, onToolCall, onToolResult, attempt + 1)
             }
             fullResponse.append("⚠️ Connection error: ${e.message}")

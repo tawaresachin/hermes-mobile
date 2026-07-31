@@ -224,12 +224,15 @@ class SettingsViewModel @Inject constructor(
                 rawUrl
             }
             val config = ServerConfig(baseUrl = normalizedUrl)
-            repository.saveConfig(config)
             try {
                 val connected = repository.checkConnectionRaw(config)
                 _uiState.update {
                     if (connected) it.copy(connectionStatus = ConnectionStatus.CONNECTED, errorDetail = null)
                     else it.copy(connectionStatus = ConnectionStatus.ERROR, errorDetail = "Server returned error status")
+                }
+                // Only persist the URL once the connection actually works
+                if (connected) {
+                    repository.saveConfig(config)
                 }
             } catch (e: Exception) {
                 _uiState.update {
