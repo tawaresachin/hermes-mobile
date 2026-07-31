@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 // ─── ViewModel ───
@@ -201,44 +202,50 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isAuthLoading = true, authError = null) }
             try {
-                // Go through the authenticated OkHttp client (JWT auto-attached),
-                // so /setup/connect accepts us even after an app restart.
-                val setupUrl = "$current/setup/connect" +
-                    if (_uiState.value.setupToken.isNotBlank()) "?token=${_uiState.value.setupToken}" else ""
-                val conn = java.net.URL(setupUrl).openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 8000
-                conn.readTimeout = 8000
-                // Auth via bridge API key (from QR) or JWT — persists across restarts
-                val bearer = _uiState.value.apiKey.ifBlank { authManager.getToken().orEmpty() }
-                conn.setRequestProperty("Authorization", "Bearer $bearer")
-                val code = conn.responseCode
-                if (code == 200) {
-                    val body = conn.inputStream.bufferedReader().readText()
-                    val json = org.json.JSONObject(body)
-                    val preferredUrl = json.optString("url", "").trimEnd('/')
-                    if (preferredUrl.isNotBlank()) {
-                        _uiState.update { it.copy(baseUrl = preferredUrl) }
-                        repository.saveConfig(
-                            ServerConfig(
-                                baseUrl = preferredUrl,
-                                apiKey = _uiState.value.apiKey,
-                                setupToken = _uiState.value.setupToken,
-                            )
-                        )
-                        _uiState.update { it.copy(authError = "Connected via ${preferredUrl.removePrefix("http://").removePrefix("https://")}") }
-                        testConnection()
-                    } else {
-                        _uiState.update { it.copy(authError = "Bridge did not return a URL") }
+                // Network must run on IO dispatcher — main-thread HTTP throws
+                // NetworkOnMainThreadException (which has a NULL message → "Refresh failed: null").
+                val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    // Auth via bridge API key (from QR) or JWT — persists across restarts
+                    val bearer = _uiState.value.apiKey.ifBlank { authManager.getToken().orEmpty() }
+                    val setupUrl = "$current/setup/connect" +
+                        if (_uiState.value.setupToken.isNotBlank()) "?token=${_uiState.value.setupToken}" else ""
+                    val conn = java.net.URL(setupUrl).openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 8000
+                    conn.readTimeout = 8000
+                    conn.setRequestProperty("Authorization", "Bearer $bearer")
+                    try {
+                        val code = conn.responseCode
+                        if (code == 200) {
+                            val body = conn.inputStream.bufferedReader().readText()
+                            org.json.JSONObject(body).optString("url", "").trimEnd('/')
+                        } else {
+                            throw java.io.IOException("Bridge returned HTTP $code")
+                        }
+                    } finally {
+                        conn.disconnect()
                     }
-                } else {
-                    _uiState.update { it.copy(authError = "Bridge returned HTTP $code") }
                 }
-                conn.disconnect()
+                val preferredUrl = result
+                if (preferredUrl.isNotBlank()) {
+                    _uiState.update { it.copy(baseUrl = preferredUrl) }
+                    repository.saveConfig(
+                        ServerConfig(
+                            baseUrl = preferredUrl,
+                            apiKey = _uiState.value.apiKey,
+                            setupToken = _uiState.value.setupToken,
+                        )
+                    )
+                    _uiState.update { it.copy(authError = "Connected via ${preferredUrl.removePrefix("http://").removePrefix("https://")}") }
+                    testConnection()
+                } else {
+                    _uiState.update { it.copy(authError = "Bridge did not return a URL") }
+                }
             } catch (e: Exception) {
+                val detail = e.message ?: e.javaClass.simpleName
                 val msg = when {
                     e is java.net.UnknownHostException -> "Can't reach bridge — the saved URL is stale. Scan the QR code again for the current URL."
                     e is java.net.SocketTimeoutException -> "Bridge timed out — the saved URL may be stale. Scan the QR code again."
-                    else -> "Refresh failed: ${e.message}. Scan the QR code again for the current URL."
+                    else -> "Refresh failed: $detail. Scan the QR code again for the current URL."
                 }
                 _uiState.update { it.copy(authError = msg) }
             }
