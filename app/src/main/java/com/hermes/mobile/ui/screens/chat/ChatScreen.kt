@@ -1799,28 +1799,10 @@ fun InputBar(
                         )
                     }
 
-                    // ── 4. Mic button (always visible, blue circle — like Telegram) ──
-                    FilledIconButton(
-                        onClick = onVoice,
-                        modifier = Modifier.size(40.dp),
-                        shape = CircleShape,
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = HermesPrimary,
-                            contentColor = Color.White
-                        ),
-                        enabled = enabled && !isRecording
-                    ) {
-                        Icon(
-                            imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
-                            contentDescription = "Voice input",
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    // ── 5. Send button (appears when text or attachment present — like Telegram) ──
+                    // ── 4. Mic / Send (alternate in the same slot — like Telegram) ──
+                    // Empty input → mic; text/attachment present → send replaces it.
                     val hasContent = inputText.isNotBlank() || pendingAttachment != null
                     if (hasContent) {
-                        Spacer(modifier = Modifier.width(4.dp))
                         FilledIconButton(
                             onClick = onSend,
                             modifier = Modifier.size(40.dp),
@@ -1834,6 +1816,23 @@ fun InputBar(
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Send,
                                 contentDescription = "Send",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    } else {
+                        FilledIconButton(
+                            onClick = onVoice,
+                            modifier = Modifier.size(40.dp),
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = HermesPrimary,
+                                contentColor = Color.White
+                            ),
+                            enabled = enabled && !isRecording
+                        ) {
+                            Icon(
+                                imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
+                                contentDescription = "Voice input",
                                 modifier = Modifier.size(20.dp)
                             )
                         }
