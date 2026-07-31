@@ -720,16 +720,25 @@ fun SettingsScreen(
                         true
                     } catch (_: Exception) { false }
                 }
+                // Real signal: are we connected THROUGH Tailscale right now?
+                val onTailscale = remember(uiState.baseUrl, uiState.connectionStatus) {
+                    uiState.baseUrl.startsWith("http://100.") &&
+                        uiState.connectionStatus == ConnectionStatus.CONNECTED
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.Filled.Shield,
                         contentDescription = null,
-                        tint = if (tailscaleInstalled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = if (onTailscale) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
                         Text(
-                            text = if (tailscaleInstalled) "Tailscale installed" else "Tailscale not installed",
+                            text = when {
+                                onTailscale -> "Connected via Tailscale"
+                                tailscaleInstalled -> "Tailscale installed — not connected"
+                                else -> "Tailscale not installed"
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium
                         )
@@ -772,12 +781,18 @@ fun SettingsScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = HermesPrimary)
                 ) {
                     Icon(
-                        if (tailscaleInstalled) Icons.Filled.CheckCircle else Icons.Filled.Download,
+                        if (onTailscale) Icons.Filled.CheckCircle else Icons.Filled.Download,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (tailscaleInstalled) "Sign in to Tailscale" else "Install Tailscale")
+                    Text(
+                        when {
+                            onTailscale -> "Connected via Tailscale"
+                            tailscaleInstalled -> "Open Tailscale"
+                            else -> "Install Tailscale"
+                        }
+                    )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
