@@ -191,4 +191,10 @@ class HermesRepository @Inject constructor(
 
     /** Expose SharedPreferences for reactive observation. */
     fun prefs(): android.content.SharedPreferences = apiService.prefs()
+
+    // ─── Text-to-Speech ───
+
+    suspend fun textToSpeech(text: String, voice: String = "en-IN-NeerjaNeural"): ByteArray? {
+        return apiService.textToSpeech(text, voice)
+    }
 }

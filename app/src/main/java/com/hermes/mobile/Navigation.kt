@@ -21,6 +21,7 @@ import com.hermes.mobile.ui.screens.chat.ChatScreen
 import com.hermes.mobile.ui.screens.home.HomeScreen
 import com.hermes.mobile.ui.screens.sessions.SessionsScreen
 import com.hermes.mobile.ui.screens.settings.SettingsScreen
+import com.hermes.mobile.ui.screens.voice.VoiceScreen
 import com.hermes.mobile.ui.theme.HermesPrimary
 
 // ═══════════════════════════════════════════════════════════
@@ -43,11 +44,12 @@ sealed class Screen(
 ) {
     data object Home : Screen("home", "Home", Icons.Filled.Home)
     data object Chat : Screen("chat", "Chat", Icons.Filled.Chat)
+    data object Voice : Screen("voice", "Voice", Icons.Filled.Mic)
     data object Sessions : Screen("sessions", "Sessions", Icons.Filled.History)
     data object Settings : Screen("settings", "Settings", Icons.Filled.Settings)
 }
 
-val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Sessions, Screen.Settings)
+val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Voice, Screen.Sessions, Screen.Settings)
 
 // ═══════════════════════════════════════════════════════════
 // Main Navigation — NavHost + bottom bar
@@ -64,10 +66,12 @@ fun MainNavigation(
     // Hide the bottom bar while the keyboard is open (Telegram behavior) —
     // otherwise it leaves a dead white band between the input bar and the IME.
     val isImeVisible = WindowInsets.isImeVisible
+    // Hide the bottom bar on the immersive Voice screen too
+    val isVoiceScreen = currentDestination?.route == Screen.Voice.route
 
     Scaffold(
         bottomBar = {
-            if (!isImeVisible) {
+            if (!isImeVisible && !isVoiceScreen) {
                 HermesBottomNavigationBar(
                     screens = bottomNavScreens,
                     currentDestination = currentDestination,
@@ -91,12 +95,27 @@ fun MainNavigation(
                     onNavigateToChat = { sessionId -> openChat(navController, sessionId) },
                     onNavigateToSessions = {
                         navController.navigate(Screen.Sessions.route)
+                    },
+                    onNavigateToVoice = {
+                        navController.navigate(Screen.Voice.route) {
+                            launchSingleTop = true
+                        }
                     }
                 )
             }
             composable(Screen.Chat.route) {
                 ChatScreen(
                     paddingValues = scaffoldPadding
+                )
+            }
+            composable(Screen.Voice.route) {
+                VoiceScreen(
+                    onExit = {
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(navController.graph.findStartDestination().id)
+                            launchSingleTop = true
+                        }
+                    }
                 )
             }
             composable(Screen.Sessions.route) {

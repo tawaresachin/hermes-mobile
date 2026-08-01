@@ -1,12 +1,15 @@
 package com.hermes.mobile.ui.screens.chat
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -58,6 +61,7 @@ import coil.compose.AsyncImage
 import com.hermes.mobile.data.local.AppDatabase
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.ui.components.ModelPickerSheet
 import com.hermes.mobile.R
 import com.hermes.mobile.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -65,6 +69,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.util.regex.Pattern
 import javax.inject.Inject
+import androidx.compose.ui.tooling.preview.Preview
 
 // ═══════════════════════════════════════════════════════════════
 // Data classes for tool-call display
@@ -479,8 +484,6 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     // ── Model picker state ──
     var showModelPicker by remember { mutableStateOf(false) }
-    var modelSearchQuery by remember { mutableStateOf("") }
-    var modelPickerGlobal by remember { mutableStateOf(false) }
 
     // ── File picker (stores selection, doesn't upload until send clicked) ──
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -594,7 +597,6 @@ fun ChatScreen(
                         .clip(RoundedCornerShape(8.dp))
                         .clickable {
                             vm.loadModels()
-                            modelSearchQuery = ""
                             showModelPicker = true
                         }
                         .padding(horizontal = 8.dp, vertical = 4.dp),
@@ -656,15 +658,6 @@ fun ChatScreen(
             ) { Text(err) }
         }
 
-        if (isStreaming && toolCalls.isNotEmpty()) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
-            }
-        }
-
         // ── Telegram-style chat area (full width, no border) ──
         Box(
             modifier = Modifier
@@ -704,6 +697,20 @@ fun ChatScreen(
                             isStreaming = isStreamingThis,
                             baseUrl = vm.getBaseUrl()
                         )
+                    }
+                    // Tool-execution cards scroll INLINE with the conversation
+                    // (never a floating panel overlapping the chat).
+                    if (isStreaming && toolCalls.isNotEmpty()) {
+                        item(key = "tool_calls") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
+                            }
+                        }
                     }
                     if (isStreaming && streamingContent.isBlank()) {
                         item(key = "typing_indicator") { TypingIndicator() }
@@ -769,164 +776,16 @@ fun ChatScreen(
 
         // ── Model Picker Bottom Sheet ──
         if (showModelPicker) {
-            ModalBottomSheet(
-                onDismissRequest = { showModelPicker = false },
-                modifier = Modifier.fillMaxHeight(0.85f)
-            ) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                    // Title + global toggle
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Select Model",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
-                        Text(
-                            text = "Global",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Switch(
-                            checked = modelPickerGlobal,
-                            onCheckedChange = { modelPickerGlobal = it },
-                            modifier = Modifier.padding(start = 4.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    // Search bar
-                    OutlinedTextField(
-                        value = modelSearchQuery,
-                        onValueChange = { modelSearchQuery = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Search models…") },
-                        leadingIcon = {
-                            Icon(Icons.Filled.Search, contentDescription = null)
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                            focusedBorderColor = HermesPrimary.copy(alpha = 0.5f),
-                            unfocusedBorderColor = Color.Transparent,
-                        )
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    // Loading state
-                    if (modelsLoading) {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().padding(32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(32.dp))
-                        }
-                    } else {
-                        // Filter models by search query
-                        val filtered = remember(availableModels, modelSearchQuery) {
-                            val list = if (modelSearchQuery.isBlank()) availableModels
-                            else availableModels.filter { m ->
-                                m.id.contains(modelSearchQuery, ignoreCase = true) ||
-                                m.name.contains(modelSearchQuery, ignoreCase = true)
-                            }
-                            // Group by provider, preserve order
-                            list.groupBy { m -> m.provider.ifBlank { "other" } }
-                                .toSortedMap()
-                        }
-                        LazyColumn(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(1.dp)
-                        ) {
-                            filtered.forEach { (provider, models) ->
-                                // Provider section header
-                                item(key = "provider_$provider") {
-                                    Surface(
-                                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                                        color = Color.Transparent
-                                    ) {
-                                        Text(
-                                            text = provider.uppercase(),
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = HermesPrimary,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                                        )
-                                    }
-                                }
-                                // Models in this provider group
-                                items(models, key = { it.id }) { model ->
-                                    val isCurrent = model.id == currentModel
-                                    Surface(
-                                        onClick = {
-                                            vm.switchModel(model.id, global = modelPickerGlobal)
-                                            showModelPicker = false
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = if (isCurrent)
-                                            HermesPrimary.copy(alpha = 0.1f)
-                                        else Color.Transparent
-                                    ) {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            // Icon
-                                            if (model.isVision) {
-                                                Icon(
-                                                    Icons.Filled.Visibility,
-                                                    contentDescription = null,
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            } else if (model.isFree) {
-                                                Icon(
-                                                    Icons.Filled.LockOpen,
-                                                    contentDescription = "Free",
-                                                    tint = SuccessGreen,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            } else {
-                                                Box(modifier = Modifier.size(18.dp))
-                                            }
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = model.name,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                                                    color = MaterialTheme.colorScheme.onSurface,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            }
-                                            if (isCurrent) {
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Icon(
-                                                    Icons.Filled.CheckCircle,
-                                                    contentDescription = "Current",
-                                                    tint = HermesPrimary,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-            }
+            ModelPickerSheet(
+                availableModels = availableModels,
+                currentModel = currentModel,
+                modelsLoading = modelsLoading,
+                onSelect = { modelId, global -> vm.switchModel(modelId, global = global) },
+                onDismiss = { showModelPicker = false }
+            )
         }
     }
 }
-
 // ═══════════════════════════════════════════════════════════════
 // Inline voice dictation — uses SpeechRecognizer directly
 // ═══════════════════════════════════════════════════════════════
@@ -1875,9 +1734,6 @@ fun StreamingIndicator(color: Color) {
     )
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Emoji picker grid
-// ═══════════════════════════════════════════════════════════════
 
 private val EMOJIS = listOf(
     "😀", "😂", "❤️", "🔥", "👍", "🎉", "✨", "💪",

@@ -227,6 +227,7 @@ class HomeViewModel @Inject constructor(
 fun HomeScreen(
     onNavigateToChat: (String) -> Unit,
     onNavigateToSessions: () -> Unit,
+    onNavigateToVoice: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -281,7 +282,7 @@ fun HomeScreen(
                     isLoading = uiState.isLoading,
                     onNewChat = { viewModel.createNewSession(onCreated = onNavigateToChat) },
                     onResumeSession = onNavigateToSessions,
-                    onVoiceInput = { viewModel.createNewSession(onCreated = onNavigateToChat) }
+                    onVoiceInput = onNavigateToVoice
                 )
             }
 

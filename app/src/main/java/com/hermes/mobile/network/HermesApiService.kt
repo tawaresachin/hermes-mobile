@@ -358,6 +358,33 @@ class HermesApiService @Inject constructor(
         }
     }
 
+    // ─── Text-to-Speech ───
+    // Default: Indian English female voice (edge-tts). Pass a different
+    // voice (e.g. "en-IN-PrabhatNeural" male) for variety.
+    suspend fun textToSpeech(text: String, voice: String = "en-IN-NeerjaNeural"): ByteArray? {
+        val baseUrl = config?.baseUrl ?: return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val payload = JSONObject().apply {
+                    put("text", text)
+                    put("voice", voice)
+                }
+                val request = Request.Builder()
+                    .url("$baseUrl/api/tts")
+                    .post(payload.toString().toRequestBody(jsonMediaType))
+                    .build()
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    response.body?.bytes()
+                } else {
+                    null
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
     // ─── File Upload ───
 
     suspend fun uploadFile(file: java.io.File, fileName: String, mimeType: String): String? {
