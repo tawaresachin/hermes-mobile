@@ -110,42 +110,55 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
 
         void main() {
                     float d = length(vTexCoord);
-                    float ang = atan(vTexCoord.y, vTexCoord.x);   // y-up
+                    float ang0 = atan(vTexCoord.y, vTexCoord.x);   // y-up
+                    float tm = uTime;
 
-                    // ── organic lumpy boundary (painterly wavy outline) ──
+                    // ── organic lumpy boundary, slowly breathing ──
+                    float ang = ang0;
                     float lump = 1.0
-                        + 0.03 * sin(ang * 3.0 + 0.5) * sin(ang * 2.0)
-                        + 0.02 * sin(ang * 5.0 + 1.3)
-                        + 0.012 * sin(ang * 7.0 + 0.7);
+                        + 0.03 * sin(ang * 3.0 + 0.5 + 0.2 * tm) * sin(ang * 2.0 - 0.15 * tm)
+                        + 0.02 * sin(ang * 5.0 + 1.3 + 0.1 * tm)
+                        + 0.012 * sin(ang * 7.0 + 0.7)
+                        + 0.012 * sin(tm * 0.3);
                     lump = max(lump, 0.6);
                     float rn = d / lump;
                     if (rn > 1.0) { discard; }
-                    bool core = rn <= 0.80;
 
                     vec3 coreCol = vec3(0.12, 0.043, 0.19);
 
-                    // ── iridescent rim band (magenta -> purple -> blue) ──
+                    // ── iridescent rim band, sweep rotates slowly ──
+                    float asw = ang + tm * 0.22;                    // rotating iridescence
                     float rim = smoothstep(0.82, 0.98, rn);
                     float rimIn = smoothstep(0.85, 0.98, rn);
                     vec3 iri = vec3(
-                        clamp(0.95 - 0.10 * (0.5 + 0.5 * cos(ang * 2.0)), 0.0, 1.0),
-                        clamp(0.22 + 0.30 * (0.5 + 0.5 * cos(ang * 3.0 + 1.0)), 0.0, 1.0),
-                        clamp(0.62 + 0.50 * (0.5 + 0.5 * cos(ang * 2.0 + 0.8)), 0.0, 1.0));
-                    float hot = 0.35 * exp(-pow(ang - 0.6, 2.0) / 0.08)
-                              + 0.28 * exp(-pow(ang + 2.6, 2.0) / 0.10);
+                                    clamp(0.95 - 0.10 * (0.5 + 0.5 * cos(asw * 2.0)), 0.0, 1.0),
+                                    clamp(0.22 + 0.30 * (0.5 + 0.5 * cos(asw * 3.0 + 1.0)), 0.0, 1.0),
+                                    clamp(0.62 + 0.50 * (0.5 + 0.5 * cos(asw * 2.0 + 0.8)), 0.0, 1.0));
+                    // specular hotspots drift along the rim
+                    float hot = 0.35 * exp(-pow(ang - 0.6 - tm * 0.25, 2.0) / 0.08)
+                              + 0.28 * exp(-pow(ang + 2.6 + tm * 0.20, 2.0) / 0.10);
                     vec3 rimLit = iri * rim * (0.85 + 0.5 * hot)
                                 + vec3(0.7, 0.5, 0.5) * rimIn * hot * 0.6;
 
-                    // ── luminous interior petal glows ──
+                    // ── drifting luminous petal waves ──
                     vec3 petal = vec3(0.0);
-                    petal += petalGauss(vTexCoord, vec2(0.60, -0.35), 0.22, vec3(0.40, 0.34, 0.98), d);
-                    petal += petalGauss(vTexCoord, vec2(0.72, 0.55), 0.24, vec3(0.38, 0.20, 0.72), d);
-                    petal += petalGauss(vTexCoord, vec2(-0.50, 0.20), 0.20, vec3(0.26, 0.15, 0.88), d);
-                    petal += petalGauss(vTexCoord, vec2(-0.55, 0.50), 0.18, vec3(0.30, 0.26, 0.92), d);
+                    petal += petalGauss(vTexCoord,
+                        vec2(0.60 + 0.08 * sin(tm * 0.4), -0.35 + 0.09 * cos(tm * 0.5)), 0.22,
+                        vec3(0.40, 0.34, 0.98), d);
+                    petal += petalGauss(vTexCoord,
+                        vec2(0.72 + 0.06 * cos(tm * 0.30), 0.55 + 0.07 * sin(tm * 0.35)), 0.24,
+                        vec3(0.38, 0.20, 0.72), d);
+                    petal += petalGauss(vTexCoord,
+                        vec2(-0.50 + 0.07 * sin(tm * 0.45), 0.20 + 0.06 * sin(tm * 0.40 + 1.0)), 0.20,
+                        vec3(0.26, 0.15, 0.88), d);
+                    petal += petalGauss(vTexCoord,
+                        vec2(-0.55 + 0.05 * cos(tm * 0.50), 0.50 + 0.06 * cos(tm * 0.40 + 2.0)), 0.18,
+                        vec3(0.30, 0.26, 0.92), d);
 
-                    // ── translucent inner glow (light through the bubble) ──
+                    // ── translucent inner glow (gentle shimmer) ──
                     float haze = smoothstep(0.0, 0.75, d) * (1.0 - rn)
-                               * (0.9 - 0.6 * smoothstep(0.0, 0.55, d));
+                               * (0.9 - 0.6 * smoothstep(0.0, 0.55, d))
+                               * (0.85 + 0.15 * sin(tm * 0.6 + d * 4.0));
                     vec3 hazeCol = vec3(0.22, 0.08, 0.36) * (haze * 0.6);
 
                     // ── composite ──
