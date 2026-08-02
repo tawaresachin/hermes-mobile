@@ -194,15 +194,18 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
             rib *= (0.6 + 0.6 * (0.5 + 0.5 * sin(tm * 0.7)));   // gentle pulse
             rib *= (0.7 + 0.6 * uAudioVolume);                  // voice swell
 
-            vec3 rib_color = vec3(
-                clamp(0.35 + 0.5 * (0.5 + 0.5 * sin(a)), 0.0, 1.0),
-                clamp(0.55 + 0.3 * (0.5 + 0.5 * cos(a * 2.0)), 0.0, 1.0),
-                clamp(0.97 + 0.03 * cos(a * 3.0), 0.0, 1.0));
+            // left(blue/cyan) -> right(magenta) vertical hue gradient
+            float hue = 0.5 + 0.5 * x;
+            vec3 leftC = vec3(0.30, 0.50, 1.00);   // electric blue/cyan
+            vec3 rightC = vec3(0.95, 0.40, 0.80);  // magenta/purple
+            float swirlHue = clamp(hue + 0.15 * sin(a * 2.0 - tm * 0.3), 0.0, 1.0);
+
+            vec3 rib_color = mix(leftC, rightC, swirlHue) * (0.85 + 0.35 * sin(tm * 0.6));
             vec3 ribbons = rib_color * rib * (0.9 + 0.3 * uAudioVolume);
 
-            // magenta/purple outer rim glow
-            vec3 rim_glow = vec3(0.55, 0.22, 0.85) * smoothstep(0.72, 0.99, d) * 0.85
-                          + vec3(0.40, 0.25, 0.70) * smoothstep(0.85, 0.99, d) * 0.5;
+            // outer glow follows the same left->right gradient
+            vec3 rim_c = mix(leftC * 0.80, rightC * 0.85, hue);
+            vec3 rim_glow = rim_c * smoothstep(0.75, 0.99, d) * 0.9
 
             vec3 finalColor = body + ribbons + rim_glow;
             float opacity = smoothstep(0.99, 0.985, d);
