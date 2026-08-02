@@ -855,6 +855,17 @@ fun JarvisSphere(
                 modifier = Modifier.fillMaxSize()
             )
 
+            // ── Send real-time audio volume to the shader (like the user's
+            // glUniform1f(u_audio_volume_loc, normalized_volume)) ──
+            val audioVolume = when (state) {
+                SphereState.LISTENING -> amplitude
+                SphereState.SPEAKING -> 0.35f + 0.55f * abs(sin(speakingWavePhase.value)).toFloat()
+                else -> 0f
+            }
+            LaunchedEffect(audioVolume) {
+                glRenderer.setAudioVolume(audioVolume)
+            }
+
             // ── Voice wave flares — arc bands pulsing with the voice,
             // overlaid above the shader sphere (exact shader untouched).
             Canvas(modifier = Modifier.fillMaxSize()) {

@@ -16,10 +16,19 @@ import javax.microedition.khronos.opengles.GL10
  */
 class SphereGLRenderer : GLSurfaceView.Renderer {
 
+    @Volatile private var uAudioVolume = 0f
+
     private var program = 0
     private var uTimeLoc = -1
+    private var uVolumeLoc = -1
     private var quadBuffer: FloatBuffer? = null
     private var startNanos = 0L
+
+    /** Real-time audio volume 0..1 — sent to the shader like the user's
+     * `glUniform1f(u_audio_volume_loc, normalized_volume)`. */
+    fun setAudioVolume(volume: Float) {
+        uAudioVolume = volume.coerceIn(0f, 1f)
+    }
 
     private val VERTEX_SHADER = """
         attribute vec4 aPos;
@@ -35,6 +44,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         precision mediump float;
         varying vec2 vTexCoord;
         uniform float uTime;
+        uniform float uAudioVolume;   // 0..1 real-time audio (additive layer)
 
         vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}
         vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
@@ -110,6 +120,12 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
             finalColor += softPink * foldPattern2 * 0.4;
             finalColor = mix(finalColor, brightMagenta, edgeGlow);
 
+            // ── Audio-reactive layer (ADDITIVE — at silence it equals 0,
+            // so the base look stays exactly the original shader) ──
+            finalColor += electricBlue * foldPattern1 * uAudioVolume * (1.0 - distanceToCenter) * 0.6;
+            finalColor += softPink * foldPattern2 * uAudioVolume * 0.35;
+            finalColor += brightMagenta * edgeGlow * uAudioVolume * 0.45;
+
             float opacity = smoothstep(0.85, 0.845, distanceToCenter);
             gl_FragColor = vec4(finalColor, opacity);
         }
@@ -118,6 +134,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         uTimeLoc = GLES20.glGetUniformLocation(program, "uTime")
+        uVolumeLoc = GLES20.glGetUniformLocation(program, "uAudioVolume")
         startNanos = System.nanoTime()
         GLES20.glClearColor(0f, 0f, 0f, 0f)
     }
@@ -132,6 +149,8 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
 
         val t = (System.nanoTime() - startNanos) / 1_000_000_000f
         GLES20.glUniform1f(uTimeLoc, t)
+        // send the real-time audio volume to the shader
+        GLES20.glUniform1f(uVolumeLoc, uAudioVolume)
 
         var buf = quadBuffer
         if (buf == null) {
