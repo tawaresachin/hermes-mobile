@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -729,6 +730,18 @@ fun JarvisSphere(
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
+    val isDark = isSystemInDarkTheme()
+
+    // Light/dark UI chrome
+    val chipBg = if (isDark) Color(0xFF141B2D).copy(alpha = 0.85f)
+                 else Color(0xFFFFFFFF).copy(alpha = 0.92f)
+    val chipBorder = if (isDark) Color(0xFF2A3A4A) else Color(0xFFCBD5E1)
+    val chipText = if (isDark) Color(0xFF8C9AAB) else Color(0xFF475569)
+    val cardBg = if (isDark) Color(0xFF0C1016).copy(alpha = 0.92f)
+                 else Color(0xFFFFFFFF).copy(alpha = 0.95f)
+    val cardContent = if (isDark) Color.White else Color(0xFF1A2233)
+    val exitBar = if (isDark) Color(0xFF2A3A4A) else Color(0xFFCBD5E1)
+    val screenBg = if (isDark) Color(0xFF000000) else Color(0xFFF4F6FA)
     val transition = rememberInfiniteTransition(label = "sphere")
     val breathAnim = transition.animateFloat(
         initialValue = 0f,
@@ -756,13 +769,13 @@ fun JarvisSphere(
     data class SphereColors(val core: Color, val ring: Color, val particle: Color, val bg: Color)
     val (coreColor, ringColor, particleColor, bgColor) = when (state) {
         SphereState.IDLE, SphereState.AWAITING ->
-            SphereColors(Color(0xFF2A3FD6), Color(0xFF8A3BFF), Color(0xFFB44DFF), Color(0xFF000000))
+            SphereColors(Color(0xFF2A3FD6), Color(0xFF8A3BFF), Color(0xFFB44DFF), screenBg)
         SphereState.LISTENING ->
-            SphereColors(Color(0xFFFF4DD2), Color(0xFF8A3BFF), Color(0xFF3D8BFF), Color(0xFF000000))
+            SphereColors(Color(0xFFFF4DD2), Color(0xFF8A3BFF), Color(0xFF3D8BFF), screenBg)
         SphereState.THINKING ->
-            SphereColors(Color(0xFF8A3BFF), Color(0xFFB44DFF), Color(0xFFFF4DD2), Color(0xFF000000))
+            SphereColors(Color(0xFF8A3BFF), Color(0xFFB44DFF), Color(0xFFFF4DD2), screenBg)
         SphereState.SPEAKING ->
-            SphereColors(Color(0xFF3D8BFF), Color(0xFF2A3FD6), Color(0xFF8A3BFF), Color(0xFF000000))
+            SphereColors(Color(0xFF3D8BFF), Color(0xFF2A3FD6), Color(0xFF8A3BFF), screenBg)
     }
 
     // Speaking waveform phase
@@ -874,36 +887,36 @@ fun JarvisSphere(
                 .align(Alignment.TopStart)
                 .padding(top = 48.dp, start = 16.dp)
                 .clip(RoundedCornerShape(50))
-                .background(Color(0xFF141B2D).copy(alpha = 0.85f))
-                .border(1.dp, Color(0xFF2A3A4A), RoundedCornerShape(50))
+                .background(chipBg)
+                .border(1.dp, chipBorder, RoundedCornerShape(50))
                 .clickable { onOpenModelPicker() }
                 .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Filled.SmartToy,
-                    contentDescription = null,
-                    tint = Color(0xFFB44DFF),
-                    modifier = Modifier.size(14.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = if (currentModel.isNotBlank())
-                        currentModel.substringAfterLast("/").take(18)
-                    else "Model",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.Filled.ArrowDropDown,
-                    contentDescription = "Select model",
-                    tint = Color(0xFF8C9AAB),
-                    modifier = Modifier.size(16.dp)
-                )
-            }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Filled.SmartToy,
+                contentDescription = null,
+                tint = Color(0xFFB44DFF),
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = if (currentModel.isNotBlank())
+                    currentModel.substringAfterLast("/").take(18)
+                else "Model",
+                style = MaterialTheme.typography.labelMedium,
+                color = cardContent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                imageVector = Icons.Filled.ArrowDropDown,
+                contentDescription = "Select model",
+                tint = chipText,
+                modifier = Modifier.size(16.dp)
+            )
+        }
         }
 
         // ── Top transcript bar (below the model chip — no overlap) ──
@@ -916,8 +929,8 @@ fun JarvisSphere(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF0C1016).copy(alpha = 0.92f),
-                        contentColor = Color.White
+                        containerColor = cardBg,
+                        contentColor = cardContent
                     ),
                     shape = RoundedCornerShape(16.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
@@ -944,7 +957,7 @@ fun JarvisSphere(
                                 Text(
                                     text = "Tap to interrupt",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF8C9AAB)
+                                    color = chipText
                                 )
                             }
                         }
@@ -968,7 +981,7 @@ fun JarvisSphere(
                     SphereState.AWAITING -> "Awaiting… speak or tap the handle to exit"
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF8C9AAB)
+                color = chipText
             )
         }
 
@@ -993,12 +1006,12 @@ fun JarvisSphere(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
                             .background(
-                                if (selected) Color(0xFF8A3BFF).copy(alpha = 0.35f)
-                                else Color(0xFF141B2D).copy(alpha = 0.85f)
+                                if (selected) Color(0xFF8A3BFF).copy(alpha = if (isDark) 0.35f else 0.16f)
+                                else chipBg
                             )
                             .border(
                                 width = 1.dp,
-                                color = if (selected) Color(0xFFB44DFF) else Color(0xFF2A3A4A),
+                                color = if (selected) Color(0xFFB44DFF) else chipBorder,
                                 shape = RoundedCornerShape(50)
                             )
                             .clickable { onLanguageSelected(lang) }
@@ -1008,7 +1021,7 @@ fun JarvisSphere(
                             text = lang.chip,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (selected) Color.White else Color(0xFF8C9AAB)
+                            color = if (selected) Color.White else chipText
                         )
                     }
                 }
@@ -1028,7 +1041,7 @@ fun JarvisSphere(
                 modifier = Modifier
                     .width(60.dp)
                     .height(4.dp)
-                    .background(Color(0xFF2A3A4A))
+                    .background(exitBar)
                     .clip(RoundedCornerShape(2.dp))
             )
         }
