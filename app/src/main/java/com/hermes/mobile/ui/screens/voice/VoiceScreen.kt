@@ -3,6 +3,8 @@ package com.hermes.mobile.ui.screens.voice
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.PixelFormat
+import android.opengl.GLSurfaceView
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,10 +30,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
@@ -655,14 +656,43 @@ private val TOOL_CALL_BLOCK = Regex(
     RegexOption.DOT_MATCHES_ALL
 )
 
-private data class Rosette(
-    val k: Double, val speed: Double, val phase0: Double,
-    val cA: Color, val cB: Color, val w: Float
+/** A shell-hugging smoke tendril: an arc near the rim with a wavy wobble. */
+private data class Tendril(
+    val arcStart: Double,
+    val arcLen: Double,
+    val rMin: Float,
+    val rMax: Float,
+    val cA: Long,
+    val cB: Long
 )
 
-private data class Ribbon(
-    val k: Double, val speed: Double, val phase0: Double,
-    val cA: Color, val cB: Color, val w: Float, val a: Float
+/** A thin bright web-filament threading the shell (no blur). */
+private data class Filament(
+    val arcStart: Double,
+    val arcLen: Double,
+    val rMin: Float,
+    val rMax: Float,
+    val c: Long
+)
+
+/** A voice-reactive wave flare: an arc band that pulses with amplitude. */
+private data class WaveFlare(
+    val arcStart: Double,
+    val arcLen: Double,
+    val r: Float,
+    val cA: Color,
+    val cB: Color
+)
+
+/** A large spiral swirl sweeping through the interior (reference: defined
+ * vortex arms moving across the surface and through the volume). */
+private data class Vortex(
+    val arcStart: Double,
+    val arcLen: Double,
+    val rFrom: Float,
+    val rTo: Float,
+    val cA: Long,
+    val cB: Long
 )
 
 // ─── Voice languages: STT locale (Android SpeechRecognizer) + TTS voice (edge-tts) ───
@@ -806,232 +836,37 @@ fun JarvisSphere(
                 .background(Color.Black)
                 .clickable { onTap() }
         ) {
-            // ── Soft plasma filaments (blurred → nebula glow) ──
-            Canvas(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .blur(10.dp)
-            ) {
-                val cx = center.x
-                val cy = center.y
-                val d = size.minDimension
-                val baseR = d * 0.40f
-
-                // Rim light — brightest at bottom-right (offset gradient center up-left)
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            coreColor.copy(alpha = 0.14f),
-                            ringColor.copy(alpha = 0.30f),
-                            particleColor.copy(alpha = 0.42f),
-                            Color.Transparent
-                        ),
-                        center = Offset(cx - d * 0.12f, cy - d * 0.12f),
-                        radius = d * 0.72f
-                    ),
-                    radius = d * 0.5f
-                )
-
-                // State-driven intensity & swirl speed
-                val intensity = when (state) {
-                    SphereState.LISTENING -> 0.65f + 0.45f * amplitude
-                    SphereState.SPEAKING -> 0.75f + 0.30f * abs(sin(speakingWavePhase.value)).toFloat()
-                    SphereState.THINKING -> 1.0f
-                    else -> 0.55f + 0.15f * breathAnim.value
-                }
-                val swirl = when (state) {
-                    SphereState.THINKING -> 1.5f
-                    SphereState.SPEAKING -> 1.15f
-                    else -> 0.75f
-                }
-
-                // Three rosette filaments — blue → purple → pink, swirling
-                val rosettes = listOf(
-                    Rosette(3.0, 0.50, 0.0, Color(0xFF2A3FD6), Color(0xFF8A3BFF), 7f),
-                    Rosette(5.0, -0.42, 2.1, Color(0xFF8A3BFF), Color(0xFFFF4DD2), 6f),
-                    Rosette(4.0, 0.46, 4.2, Color(0xFFFF4DD2), Color(0xFF3D8BFF), 8f)
-                )
-                val segs = 72
-                rosettes.forEach { ros ->
-                    val phase = rotationAnim.value * ros.speed * swirl + ros.phase0
-                    for (i in 0 until segs) {
-                        val th1 = i * 6.28318 / segs
-                        val th2 = (i + 1) * 6.28318 / segs
-                        val m1 = cos(ros.k * th1 + phase).toFloat()
-                        val m2 = cos(ros.k * th2 + phase).toFloat()
-                        val r1 = baseR * (0.62f + 0.42f * m1)
-                        val r2 = baseR * (0.62f + 0.42f * m2)
-                        val p1 = Offset(cx + r1 * cos(th1).toFloat(), cy + r1 * sin(th1).toFloat())
-                        val p2 = Offset(cx + r2 * cos(th2).toFloat(), cy + r2 * sin(th2).toFloat())
-                        val t = 0.5f + 0.5f * m1
-                        val depth = 1f - abs(m1)   // brightest/thickest at lobe peaks
-                        val col = lerp(ros.cA, ros.cB, t)
-                        drawLine(
-                            color = col.copy(alpha = (0.30f + 0.40f * depth) * intensity),
-                            start = p1,
-                            end = p2,
-                            strokeWidth = (ros.w * (0.35f + 0.9f * depth)).coerceIn(1f, 16f),
-                            cap = StrokeCap.Round
-                        )
+            // ── GPU shader sphere — exact validated GLSL (GLSurfaceView).
+            // Simplex-noise wisp folds + magenta edge ring + dark core,
+            // voice-reactive via uAmplitude/uMode uniforms.
+            val glRenderer = remember { SphereGLRenderer() }
+            AndroidView(
+                factory = { ctx ->
+                    GLSurfaceView(ctx).apply {
+                        setEGLContextClientVersion(2)
+                        setEGLConfigChooser(8, 8, 8, 8, 16, 0)
+                        holder.setFormat(PixelFormat.TRANSLUCENT)
+                        setRenderer(glRenderer)
+                        renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+                        setOnClickListener { onTap() }
                     }
-                }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+            val voiceEnergy = when (state) {
+                SphereState.LISTENING -> amplitude
+                SphereState.SPEAKING -> 0.40f + 0.40f * abs(sin(speakingWavePhase.value)).toFloat()
+                SphereState.THINKING -> 0.55f
+                else -> 0.18f + 0.10f * breathAnim.value
             }
-
-            // ── Volumetric shadow (dark upper-left → depth) ──
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val d = size.minDimension
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.32f)
-                        ),
-                        center = Offset(center.x + d * 0.10f, center.y + d * 0.10f),
-                        radius = d * 0.5f
-                    ),
-                    radius = d * 0.5f
-                )
+            val modeVal = when (state) {
+                SphereState.LISTENING -> 1
+                SphereState.SPEAKING -> 2
+                SphereState.THINKING -> 3
+                else -> 0
             }
-
-            // ── Bright teardrop swirl (upper-left, slowly orbiting) ──
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val d = size.minDimension
-                val cx = center.x
-                val cy = center.y
-                val bx = cx - d * 0.17f
-                val by = cy - d * 0.19f
-                rotate(
-                    degrees = rotationAnim.value * 0.30f,
-                    pivot = center
-                ) {
-                    val tear = Path().apply {
-                        moveTo(bx, by - d * 0.055f)
-                        cubicTo(bx - d * 0.10f, by - d * 0.095f, bx - d * 0.115f, by + d * 0.02f, bx - d * 0.045f, by + d * 0.055f)
-                        cubicTo(bx + d * 0.015f, by + d * 0.09f, bx + d * 0.095f, by + d * 0.035f, bx + d * 0.075f, by - d * 0.02f)
-                        cubicTo(bx + d * 0.055f, by - d * 0.055f, bx + d * 0.02f, by - d * 0.065f, bx, by - d * 0.055f)
-                        close()
-                    }
-                    drawPath(
-                        tear,
-                        Brush.radialGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.95f),
-                                Color(0xFF3D8BFF).copy(alpha = 0.85f),
-                                Color(0xFF2A3FD6).copy(alpha = 0.0f)
-                            ),
-                            center = Offset(bx, by),
-                            radius = d * 0.13f
-                        )
-                    )
-                }
-            }
-
-            // ── Crisp highlight ribbons (sharp layer, no blur) ──
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val cx = center.x
-                val cy = center.y
-                val d = size.minDimension
-                val baseR = d * 0.40f
-                val ribbons = listOf(
-                    Ribbon(3.0, 0.50, 0.0, Color(0xFF6A5CFF), Color(0xFFFF6BD6), 2.2f, 0.80f),
-                    Ribbon(5.0, -0.42, 2.1, Color(0xFF4DA3FF), Color(0xFFB44DFF), 1.8f, 0.65f)
-                )
-                val segs = 60
-                ribbons.forEach { rb ->
-                    val phase = rotationAnim.value * rb.speed * 1.15 + rb.phase0
-                    for (i in 0 until segs) {
-                        val th1 = i * 6.28318 / segs
-                        val th2 = (i + 1) * 6.28318 / segs
-                        val m1 = cos(rb.k * th1 + phase).toFloat()
-                        val m2 = cos(rb.k * th2 + phase).toFloat()
-                        val r1 = baseR * (0.62f + 0.42f * m1)
-                        val r2 = baseR * (0.62f + 0.42f * m2)
-                        val p1 = Offset(cx + r1 * cos(th1).toFloat(), cy + r1 * sin(th1).toFloat())
-                        val p2 = Offset(cx + r2 * cos(th2).toFloat(), cy + r2 * sin(th2).toFloat())
-                        val t = 0.5f + 0.5f * m1
-                        val depth = 1f - abs(m1)
-                        drawLine(
-                            color = lerp(rb.cA, rb.cB, t).copy(alpha = rb.a * (0.35f + 0.65f * depth)),
-                            start = p1,
-                            end = p2,
-                            strokeWidth = rb.w * (0.5f + 0.8f * depth),
-                            cap = StrokeCap.Round
-                        )
-                    }
-                }
-            }
-
-            // ── Bright rim outline (white → light purple, crisp + soft glow) ──
-            Canvas(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .blur(5.dp)
-            ) {
-                drawCircle(
-                    color = Color(0xFFE8D8FF).copy(alpha = 0.55f),
-                    radius = size.minDimension * 0.5f - 1f,
-                    style = Stroke(width = 6f)
-                )
-            }
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                drawCircle(
-                    brush = Brush.sweepGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.95f),
-                            Color(0xFFD9B8FF).copy(alpha = 0.75f),
-                            Color(0xFFB44DFF).copy(alpha = 0.55f),
-                            Color(0xFF8A3BFF).copy(alpha = 0.60f),
-                            Color.White.copy(alpha = 0.95f)
-                        ),
-                        center = center
-                    ),
-                    radius = size.minDimension * 0.5f - 1.5f,
-                    style = Stroke(width = 2.5f)
-                )
-            }
-
-            // ── Lens flare streaks (right edge, radiating outward) ──
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val cx = center.x
-                val cy = center.y
-                val r = size.minDimension * 0.5f
-                val streakOffsets = listOf(-0.055f, -0.02f, 0.012f, 0.045f)
-                streakOffsets.forEachIndexed { i, off ->
-                    val y = cy + off * size.minDimension
-                    val start = Offset(cx + r - 3f, y)
-                    val end = Offset(cx + r + (30f + i * 16f), y + off * size.minDimension * 0.6f)
-                    drawLine(
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.55f),
-                                Color(0xFFB44DFF).copy(alpha = 0.15f),
-                                Color.Transparent
-                            ),
-                            start = start,
-                            end = end
-                        ),
-                        start = start,
-                        end = end,
-                        strokeWidth = 1.4f
-                    )
-                }
-            }
-
-            // ── Bright glowing core ──
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.85f),
-                            coreColor.copy(alpha = 0.45f),
-                            Color.Transparent
-                        ),
-                        center = center,
-                        radius = size.minDimension * 0.15f
-                    ),
-                    radius = size.minDimension * 0.15f
-                )
+            LaunchedEffect(voiceEnergy, modeVal) {
+                glRenderer.setVoice(voiceEnergy, modeVal)
             }
         }
 
@@ -1073,12 +908,12 @@ fun JarvisSphere(
             }
         }
 
-        // ── Top transcript bar ──
+        // ── Top transcript bar (below the model chip — no overlap) ──
         if (transcript.isNotBlank()) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 48.dp, start = 24.dp, end = 24.dp, bottom = 0.dp)
+                    .padding(top = 96.dp, start = 24.dp, end = 24.dp, bottom = 0.dp)
             ) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
