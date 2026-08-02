@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Bridge server is HTTP-only and reachable over Tailscale (100.x),
-         LAN (192.168.x / 10.x) and localhost. Android's <domain> entries
-         can't match raw IPs/CIDRs, so allow cleartext globally.
-         Auth is enforced at the app layer (API key / JWT bearer). -->
+    <!-- Cleartext posture (deliberate, documented):
+         The bridge server is HTTP-only and reachable over Tailscale
+         (100.x raw IPs), LAN (192.168.x / 10.x) and localhost. Android's
+         <domain> entries cannot match raw IPs/CIDRs, and the primary
+         connection (Tailscale direct) is a raw 100.x IP, so cleartext
+         must stay enabled globally.
+         Exposure boundary: cleartext only exists on PRIVATE networks
+         (the user's own tailnet/LAN). Public traffic via the Cloudflare
+         tunnel is TLS-terminated by cloudflared before it reaches the
+         bridge. Auth (API key / JWT bearer) is enforced at the app layer
+         on every request; the server rejects unauthenticated access. -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
