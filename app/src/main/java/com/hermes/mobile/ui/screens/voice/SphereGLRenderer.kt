@@ -9,30 +9,17 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
 /**
- * GPU renderer for the voice sphere — an exact port of the validated
- * fullscreen-quad GLSL fragment shader (simplex-noise wisp folds + magenta
- * fresnel edge ring + dark core), with voice-reactive uniforms:
- *   uTime       — seconds (animates the wisp noise drift)
- *   uAmplitude  — 0..1 voice energy (mic level / TTS wave)
- *   uMode       — 0 idle, 1 listening, 2 speaking, 3 thinking
+ * GPU renderer for the voice sphere — VERBATIM port of the user's
+ * fullscreen-quad fragment shader (exact math, no modifications).
+ * Only GLES2 plumbing differs: attribute/varying instead of gl_Vertex,
+ * `precision mediump float` added, uniform uTime.
  */
 class SphereGLRenderer : GLSurfaceView.Renderer {
 
-    @Volatile private var uAmplitude = 0f
-    @Volatile private var uMode = 0f
-
     private var program = 0
     private var uTimeLoc = -1
-    private var uAmpLoc = -1
-    private var uModeLoc = -1
     private var quadBuffer: FloatBuffer? = null
     private var startNanos = 0L
-
-    /** Called from the UI thread; renderer picks it up next frame. */
-    fun setVoice(amplitude: Float, mode: Int) {
-        uAmplitude = amplitude.coerceIn(0f, 1f)
-        uMode = mode.toFloat()
-    }
 
     private val VERTEX_SHADER = """
         attribute vec4 aPos;
@@ -43,12 +30,11 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         }
     """.trimIndent()
 
+    // ── EXACT fragment shader from the user (only GLES2 plumbing added) ──
     private val FRAGMENT_SHADER = """
         precision mediump float;
         varying vec2 vTexCoord;
         uniform float uTime;
-        uniform float uAmplitude;
-        uniform float uMode;
 
         vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}
         vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
@@ -97,10 +83,10 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         }
 
         void main() {
-            float d = length(vTexCoord);
-            if (d > 0.85) { discard; }
+            float distanceToCenter = length(vTexCoord);
+            if (distanceToCenter > 0.85) { discard; }
 
-            float z = sqrt(0.85 * 0.85 - d * d);
+            float z = sqrt(0.85 * 0.85 - distanceToCenter * distanceToCenter);
             vec3 sphereNormal = normalize(vec3(vTexCoord, z));
 
             vec3 brightMagenta = vec3(0.92, 0.25, 0.98);
@@ -108,32 +94,23 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
             vec3 softPink      = vec3(0.95, 0.45, 0.75);
             vec3 deepBackground = vec3(0.02, 0.0, 0.05);
 
-            float edgeGlow = smoothstep(0.70, 0.85, d);
+            float edgeGlow = smoothstep(0.70, 0.85, distanceToCenter);
 
-            // voice-reactive drift: wisps flow faster & fold harder with energy
-            float amp = uAmplitude;
-            vec3 noisePos1 = vec3(sphereNormal.xy * 1.8, uTime * (0.15 + 0.12 * amp));
+            vec3 noisePos1 = vec3(sphereNormal.xy * 1.8, uTime * 0.15);
             vec3 noisePos2 = vec3(sphereNormal.xy * 3.5, -uTime * 0.1);
 
             float wisp1 = snoise(noisePos1);
-            float wisp2 = snoise(noisePos2 + vec3(wisp1 * (0.5 + 0.35 * amp)));
+            float wisp2 = snoise(noisePos2 + vec3(wisp1 * 0.5));
 
-            float fold1 = smoothstep(0.1 - 0.06 * amp, 0.4, abs(wisp1));
-            float fold2 = smoothstep(0.2, 0.5, abs(wisp2));
+            float foldPattern1 = smoothstep(0.1, 0.4, abs(wisp1));
+            float foldPattern2 = smoothstep(0.2, 0.5, abs(wisp2));
 
             vec3 finalColor = deepBackground;
-            finalColor += electricBlue * fold1 * (1.0 - d) * (0.7 + 0.55 * amp);
-            finalColor += softPink * fold2 * (0.4 + 0.35 * amp);
-            finalColor = mix(finalColor, brightMagenta, edgeGlow * (0.9 + 0.2 * amp));
+            finalColor += electricBlue * foldPattern1 * (1.0 - distanceToCenter) * 0.7;
+            finalColor += softPink * foldPattern2 * 0.4;
+            finalColor = mix(finalColor, brightMagenta, edgeGlow);
 
-            // thinking mode: cooler, calmer wisps; idle: subtle breathing
-            if (uMode > 2.5) {            // THINKING
-                finalColor = mix(finalColor, deepBackground, 0.25);
-            } else if (uMode < 0.5) {     // IDLE
-                finalColor = mix(finalColor, deepBackground, 0.35);
-            }
-
-            float opacity = smoothstep(0.85, 0.845, d);
+            float opacity = smoothstep(0.85, 0.845, distanceToCenter);
             gl_FragColor = vec4(finalColor, opacity);
         }
     """.trimIndent()
@@ -141,8 +118,6 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         uTimeLoc = GLES20.glGetUniformLocation(program, "uTime")
-        uAmpLoc = GLES20.glGetUniformLocation(program, "uAmplitude")
-        uModeLoc = GLES20.glGetUniformLocation(program, "uMode")
         startNanos = System.nanoTime()
         GLES20.glClearColor(0f, 0f, 0f, 0f)
     }
@@ -157,12 +132,9 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
 
         val t = (System.nanoTime() - startNanos) / 1_000_000_000f
         GLES20.glUniform1f(uTimeLoc, t)
-        GLES20.glUniform1f(uAmpLoc, uAmplitude)
-        GLES20.glUniform1f(uModeLoc, uMode)
 
         var buf = quadBuffer
         if (buf == null) {
-            // fullscreen quad in NDC [-1..1]
             val quad = floatArrayOf(
                 -1f, -1f, 0f,
                  1f, -1f, 0f,

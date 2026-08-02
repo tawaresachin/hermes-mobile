@@ -836,9 +836,10 @@ fun JarvisSphere(
                 .background(Color.Black)
                 .clickable { onTap() }
         ) {
-            // ── GPU shader sphere — exact validated GLSL (GLSurfaceView).
-            // Simplex-noise wisp folds + magenta edge ring + dark core,
-            // voice-reactive via uAmplitude/uMode uniforms.
+            // ── GPU shader sphere — exact validated GLSL (GLSurfaceView),
+            // verbatim from the user's fragment shader. Voice reactivity is
+            // drawn as a separate Compose overlay below (wave flares) so the
+            // shader itself stays pure.
             val glRenderer = remember { SphereGLRenderer() }
             AndroidView(
                 factory = { ctx ->
@@ -853,20 +854,49 @@ fun JarvisSphere(
                 },
                 modifier = Modifier.fillMaxSize()
             )
-            val voiceEnergy = when (state) {
-                SphereState.LISTENING -> amplitude
-                SphereState.SPEAKING -> 0.40f + 0.40f * abs(sin(speakingWavePhase.value)).toFloat()
-                SphereState.THINKING -> 0.55f
-                else -> 0.18f + 0.10f * breathAnim.value
-            }
-            val modeVal = when (state) {
-                SphereState.LISTENING -> 1
-                SphereState.SPEAKING -> 2
-                SphereState.THINKING -> 3
-                else -> 0
-            }
-            LaunchedEffect(voiceEnergy, modeVal) {
-                glRenderer.setVoice(voiceEnergy, modeVal)
+
+            // ── Voice wave flares — arc bands pulsing with the voice,
+            // overlaid above the shader sphere (exact shader untouched).
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val cx = center.x
+                val cy = center.y
+                val d = size.minDimension
+                val R = d * 0.5f
+                val pulse = when (state) {
+                    SphereState.LISTENING -> 0.30f + 0.60f * amplitude
+                    SphereState.SPEAKING -> 0.45f + 0.40f * abs(sin(speakingWavePhase.value)).toFloat()
+                    else -> 0.55f + 0.20f * breathAnim.value
+                }
+                val drift = rotationAnim.value * 0.15f
+                val flares = listOf(
+                    WaveFlare(0.6, 2.6, 0.62f, Color(0xFFFF4DD2), Color(0xFFFFD9F2)),
+                    WaveFlare(3.4, 1.9, 0.70f, Color(0xFF3D8BFF), Color(0xFF2A3FD6))
+                )
+                val segs = 48
+                flares.forEach { fl ->
+                    for (i in 0 until segs) {
+                        val th1 = fl.arcStart + fl.arcLen * i / segs + drift
+                        val th2 = fl.arcStart + fl.arcLen * (i + 1) / segs + drift
+                        val wave = abs(sin(i * 3.14159 / 6 + drift * 2)).toFloat()
+                        val w = 2f + 10f * pulse * wave
+                        val p1 = Offset(cx + R * fl.r * cos(th1).toFloat(), cy + R * fl.r * sin(th1).toFloat())
+                        val p2 = Offset(cx + R * fl.r * cos(th2).toFloat(), cy + R * fl.r * sin(th2).toFloat())
+                        val tt = i.toFloat() / segs
+                        val col = lerp(fl.cA, fl.cB, tt)
+                        drawLine(
+                            color = col.copy(alpha = (0.20f + 0.25f * pulse) * wave),
+                            start = p1, end = p2,
+                            strokeWidth = w * 2.2f,
+                            cap = StrokeCap.Round
+                        )
+                        drawLine(
+                            color = col.copy(alpha = 0.55f + 0.45f * pulse * wave),
+                            start = p1, end = p2,
+                            strokeWidth = w,
+                            cap = StrokeCap.Round
+                        )
+                    }
+                }
             }
         }
 
