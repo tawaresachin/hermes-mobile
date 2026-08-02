@@ -54,6 +54,14 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         uniform float uTime;
         uniform float uAudioVolume;
 
+        // luminous petal glow helper
+        vec3 petalGauss(vec2 p, vec2 c, float r, vec3 col, float d) {
+            float sd = length(p - c);
+            float w = exp(-(sd * sd) / (2.0 * r * r));
+            w *= clamp(1.0 - d, 0.0, 1.0) * 3.2;
+            return col * w;
+        }
+
         vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}
         vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
 
@@ -101,61 +109,57 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         }
 
         void main() {
-            float d = length(vTexCoord);
-            if (d > 0.85) { discard; }
+                    float d = length(vTexCoord);
+                    float ang = atan(vTexCoord.y, vTexCoord.x);   // y-up
 
-            float z = sqrt(0.85 * 0.85 - d * d);
-            vec3 sphereNormal = normalize(vec3(vTexCoord, z));
+                    // ── organic lumpy boundary (painterly wavy outline) ──
+                    float lump = 1.0
+                        + 0.03 * sin(ang * 3.0 + 0.5) * sin(ang * 2.0)
+                        + 0.02 * sin(ang * 5.0 + 1.3)
+                        + 0.012 * sin(ang * 7.0 + 0.7);
+                    lump = max(lump, 0.6);
+                    float rn = d / lump;
+                    if (rn > 1.0) { discard; }
+                    bool core = rn <= 0.80;
 
-            // ── target-matched palette (dark blue-violet) ──
-            vec3 brightRing = vec3(0.42, 0.26, 1.00);
-            vec3 electricBlue = vec3(0.22, 0.18, 1.00);
-            vec3 softPink = vec3(0.4705, 0.1170, 0.4586);
-            vec3 deepBackground = vec3(0.035, 0.02, 0.10);
+                    vec3 coreCol = vec3(0.12, 0.043, 0.19);
 
-            // ── sparse wisp folds (thin bright blue wisps on dark body) ──
-            vec3 noisePos1 = vec3(sphereNormal.xy * 1.4, uTime * 0.15);
-            vec3 noisePos2 = vec3(sphereNormal.xy * 2.8, -uTime * 0.1);
-            float wisp1 = snoise(noisePos1);
-            float wisp2 = snoise(noisePos2 + vec3(wisp1 * 0.5));
-            float fold1 = smoothstep(0.40, 0.70, abs(wisp1));
-            float fold2 = smoothstep(0.45, 0.75, abs(wisp2));
+                    // ── iridescent rim band (magenta -> purple -> blue) ──
+                    float rim = smoothstep(0.82, 0.98, rn);
+                    float rimIn = smoothstep(0.85, 0.98, rn);
+                    vec3 iri = vec3(
+                        clamp(0.95 - 0.10 * (0.5 + 0.5 * cos(ang * 2.0)), 0.0, 1.0),
+                        clamp(0.22 + 0.30 * (0.5 + 0.5 * cos(ang * 3.0 + 1.0)), 0.0, 1.0),
+                        clamp(0.62 + 0.50 * (0.5 + 0.5 * cos(ang * 2.0 + 0.8)), 0.0, 1.0));
+                    float hot = 0.35 * exp(-pow(ang - 0.6, 2.0) / 0.08)
+                              + 0.28 * exp(-pow(ang + 2.6, 2.0) / 0.10);
+                    vec3 rimLit = iri * rim * (0.85 + 0.5 * hot)
+                                + vec3(0.7, 0.5, 0.5) * rimIn * hot * 0.6;
 
-            // ── directional rim light from upper-left (110 deg, y-up) ──
-            vec3 lightDir = normalize(vec3(cos(radians(110.0)), sin(radians(110.0)), 0.35));
-            float lambert = max(dot(sphereNormal, lightDir), 0.0);
-            float directional = pow(lambert, 1.5);
+                    // ── luminous interior petal glows ──
+                    vec3 petal = vec3(0.0);
+                    petal += petalGauss(vTexCoord, vec2(0.60, -0.35), 0.22, vec3(0.40, 0.34, 0.98), d);
+                    petal += petalGauss(vTexCoord, vec2(0.72, 0.55), 0.24, vec3(0.38, 0.20, 0.72), d);
+                    petal += petalGauss(vTexCoord, vec2(-0.50, 0.20), 0.20, vec3(0.26, 0.15, 0.88), d);
+                    petal += petalGauss(vTexCoord, vec2(-0.55, 0.50), 0.18, vec3(0.30, 0.26, 0.92), d);
 
-            // ── gentle radial ramp ring (target: 14 -> 43 brightness) ──
-            float ringMix = smoothstep(0.15, 0.85, d);
-            float dirRing = ringMix * (1.0 - 0.75 + 0.75 * directional) * 0.46;
+                    // ── translucent inner glow (light through the bubble) ──
+                    float haze = smoothstep(0.0, 0.75, d) * (1.0 - rn)
+                               * (0.9 - 0.6 * smoothstep(0.0, 0.55, d));
+                    vec3 hazeCol = vec3(0.22, 0.08, 0.36) * (haze * 0.6);
 
-            // center falloff keeps the core near-black
-            float fall = smoothstep(0.15, 0.45, d);
+                    // ── composite ──
+                    vec3 innerCol = coreCol + hazeCol + petal;
+                    vec3 finalColor = mix(innerCol, rimLit, rim);
+                    finalColor = mix(vec3(0.10, 0.05, 0.16), finalColor, step(rn, 1.0));
 
-            vec3 body = deepBackground;
-            body += electricBlue * fold1 * (1.0 - d) * 0.7 * fall;
-            body += softPink * fold2 * 0.4 * 0.443 * fall;
-            body *= 0.68;
+                    // audio-reactive (0 at silence -> base intact)
+                    finalColor += petal * uAudioVolume * 0.6;
 
-            vec3 finalColor = body * (1.0 - dirRing) + brightRing * dirRing;
-
-            // ── specular hotspot at the light point on the rim ──
-            float ang = atan(vTexCoord.y, vTexCoord.x);
-            float az = radians(110.0);
-            float dang = abs(mod(ang - az + 3.14159, 6.28318) - 3.14159);
-            float spot = exp(-(dang * dang) / 0.25) * smoothstep(0.60, 0.85, d);
-            finalColor += vec3(0.60, 0.38, 1.0) * spot * 0.51;
-
-            // ── audio-reactive layer (additive — zero at silence) ──
-            finalColor += electricBlue * fold1 * uAudioVolume * (1.0 - d) * 0.6;
-            finalColor += softPink * fold2 * uAudioVolume * 0.35;
-            finalColor += brightRing * dirRing * uAudioVolume * 0.45;
-
-            float opacity = smoothstep(0.85, 0.845, d);
-            gl_FragColor = vec4(finalColor, opacity);
-        }
-    """.trimIndent()
+                    float opacity = smoothstep(1.0, 0.995, rn);
+                    gl_FragColor = vec4(finalColor, opacity);
+                }
+            """.trimIndent()
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
