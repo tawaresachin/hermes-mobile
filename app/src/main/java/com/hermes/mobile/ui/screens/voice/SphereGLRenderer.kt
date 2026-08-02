@@ -9,11 +9,11 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
 /**
- * GPU voice-sphere renderer — neon blue/magenta energy sphere whose interior is
- * SWIRLING PLASMA FLARES (simplex-noise, organic, non-repeating) on a dark
- * blue body with a luminous blue/cyan -> magenta rim. Matches the user's
- * reference tones; no regular geometric pattern, no white clipping.
- *   - uAudioVolume swells the flares (capped, 0 at silence -> base intact)
+ * GPU voice-sphere renderer — thin wispy filament interior (noise
+ * zero-crossings, curl-warped, dashed), dark blue body, luminous
+ * blue/cyan -> magenta rim, soft blue core. Tones matched to the user's
+ * reference; no white clipping.
+ *   - uAudioVolume brightens filaments (capped, 0 at silence -> base intact)
  *   - hardened: shader failure falls back to a solid dark disc (no crash)
  */
 class SphereGLRenderer : GLSurfaceView.Renderer {
@@ -96,55 +96,6 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         }
 
         void main() {
-            float d = length(vTexCoord);
-            if (d > 0.99) { discard; }
-            float x = vTexCoord.x;
-            float y = vTexCoord.y;
-            float a = atan(y, x);
-            float tm = uTime;
-
-            // swirl-warped coords (tangential energy wind)
-            float sw = 2.6;
-            float px = x * sw + 0.8 * sin(a + tm * 0.2) * (1.0 - d);
-            float py = y * sw - 0.8 * cos(a - tm * 0.2) * (1.0 - d);
-            float zz = tm * 0.10;
-            float n1 = snoise(vec3(px, py, zz));
-            float n2 = snoise(vec3(px * 2.0, py * 2.0, zz + 3.0));
-            float n = n1 * 0.65 + n2 * 0.35;
-
-            // soft organic flares at noise peaks
-            float flare = smoothstep(0.18, 0.62, abs(n));
-            flare *= smoothstep(0.10, 0.35, d) * (1.0 - 0.55 * smoothstep(0.78, 0.99, d));
-            flare *= (0.7 + 0.3 * sin(tm * 0.7));            // pulse
-            flare *= (0.5 + 0.35 * uAudioVolume);            // voice, capped
-
-            // thin swirl streak for definition
-            float twist = a * 3.0 - tm * 0.6;
-            float streak = exp(-(pow(sin(twist * 2.0), 2.0)) / (2.0 * 0.35 * 0.35));
-            streak *= smoothstep(0.2, 0.5, d) * (1.0 - 0.5 * smoothstep(0.8, 0.99, d));
-            flare = clamp(flare + streak * 0.35, 0.0, 1.0);
-
-            // dark blue body
-            vec3 body = vec3(0.022, 0.02, 0.05)
-                      + vec3(0.14, 0.19, 0.34) * (0.30 * smoothstep(0.2, 0.9, d));
-
-            // blue-left -> magenta-right flare color
-            float hue = 0.5 + 0.5 * x;
-            vec3 leftC = vec3(0.13, 0.30, 1.00);
-            vec3 rightC = vec3(0.40, 0.12, 0.92);
-            float flu = clamp(hue + 0.15 * sin(-tm * 0.2), 0.0, 1.0);
-            vec3 flare_col = mix(leftC, rightC, flu);
-            vec3 flares = flare_col * flare * 1.3;
-
-            // luminous rim (gradient) + soft blue core
-            vec3 rim_c = mix(leftC, rightC, hue);
-            vec3 rim_glow = rim_c * smoothstep(0.70, 0.99, d) * 2.3;
-            vec3 central = vec3(0.03, 0.05, 0.10) * clamp(1.0 - 2.2 * d, 0.0, 1.0) * 1.4;
-
-            vec3 finalColor = body + flares + rim_glow + central;
-            float opacity = 1.0 - smoothstep(0.985, 0.99, d);
-            gl_FragColor = vec4(finalColor, opacity);
-        }void main() {
             float d = length(vTexCoord);
             if (d > 0.99) { discard; }
             float x = vTexCoord.x;
