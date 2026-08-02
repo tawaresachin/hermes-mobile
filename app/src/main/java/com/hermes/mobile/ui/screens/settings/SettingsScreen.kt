@@ -112,6 +112,37 @@ class SettingsViewModel @Inject constructor(
     fun setSetupToken(token: String) { _uiState.update { it.copy(setupToken = token) } }
     fun setApiKey(key: String) { _uiState.update { it.copy(apiKey = key) } }
 
+    /**
+     * After a successful QR pairing, auto-create a device account so the
+     * bridge is usable immediately. Credentials are generated with
+     * SecureRandom and stored ENCRYPTED (SecurePrefs). Failure is silent —
+     * the user can still register manually in Settings.
+     */
+    fun autoRegisterDeviceIfNeeded() {
+        if (authManager.isLoggedIn.value) return
+        val base = _uiState.value.baseUrl.trimEnd('/')
+        if (base.isBlank()) return
+        viewModelScope.launch {
+            try {
+                val random = java.security.SecureRandom()
+                val email = "device-${java.lang.Long.toHexString(random.nextLong()).take(8)}@hermesbridge.app"
+                // 32 hex chars from a CSPRNG — no dictionary, no pattern.
+                val password = buildString {
+                    repeat(32) { append("0123456789abcdef"[random.nextInt(16)]) }
+                }
+                authManager.register(base, email, password)
+                    .onSuccess {
+                        repository.saveDeviceCredentials(email, password)
+                    }
+                    .onFailure { _ ->
+                        // Don't block pairing — manual register/login still available.
+                    }
+            } catch (_: Exception) {
+                // Never let auto-registration break the connection flow.
+            }
+        }
+    }
+
     fun register() {
         val state = _uiState.value
         if (state.email.isBlank() || state.password.isBlank()) {
@@ -183,6 +214,9 @@ class SettingsViewModel @Inject constructor(
                             setupToken = _uiState.value.setupToken,
                         )
                     )
+                    // Pairing done → create a device account so the bridge
+                    // works immediately (no manual email/password typing).
+                    autoRegisterDeviceIfNeeded()
                 }
             } catch (e: Exception) {
                 _uiState.update {

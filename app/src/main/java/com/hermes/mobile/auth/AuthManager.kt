@@ -35,7 +35,8 @@ class AuthManager @Inject constructor(
     }
 
     private val prefs: SharedPreferences by lazy {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        // Encrypted at rest (MIUI-safe fallback to plain inside SecurePrefs).
+        com.hermes.mobile.security.SecurePrefs.get(context, PREFS_NAME)
     }
 
     // ── Observable state ──

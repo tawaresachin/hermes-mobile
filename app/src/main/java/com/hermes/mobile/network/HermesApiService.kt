@@ -56,6 +56,25 @@ class HermesApiService @Inject constructor(
 
     fun hasDarkThemePreference(): Boolean = prefs.contains(KEY_DARK_THEME)
 
+    // ── Device account (auto-registered after QR pairing) ──
+    // Stored ENCRYPTED (AES256-GCM via SecurePrefs) — these are live
+    // credentials, never plaintext on disk.
+    private val devicePrefs: SharedPreferences
+        get() = com.hermes.mobile.security.SecurePrefs.get(context, com.hermes.mobile.security.SecurePrefs.DEVICE_PREFS)
+
+    fun saveDeviceCredentials(email: String, password: String) {
+        devicePrefs.edit()
+            .putString("device_email", email)
+            .putString("device_password", password)
+            .apply()
+    }
+
+    fun getDeviceCredentials(): Pair<String, String>? {
+        val email = devicePrefs.getString("device_email", null) ?: return null
+        val password = devicePrefs.getString("device_password", null) ?: return null
+        return email to password
+    }
+
     fun prefs(): SharedPreferences = prefs
 
     // ── HTTP Client with AuthInterceptor ──

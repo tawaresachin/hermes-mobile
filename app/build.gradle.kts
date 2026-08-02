@@ -14,8 +14,8 @@ android {
         applicationId = "com.hermes.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 48
-        versionName = "2.16.1"
+        versionCode = 49
+        versionName = "2.17.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -116,6 +116,9 @@ dependencies {
 
     // QR code scanning (zxing embedded scanner)
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+
+    // Encrypted storage for secrets (tokens, device credentials)
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Audio
     implementation("androidx.media:media:1.7.0")

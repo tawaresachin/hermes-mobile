@@ -156,6 +156,13 @@ class HermesRepository @Inject constructor(
 
     fun getBaseUrl(): String = apiService.getBaseUrl()
 
+    // ─── Device account (auto-registered on QR pairing) ───
+    fun saveDeviceCredentials(email: String, password: String) {
+        apiService.saveDeviceCredentials(email, password)
+    }
+
+    fun getDeviceCredentials(): Pair<String, String>? = apiService.getDeviceCredentials()
+
     suspend fun checkConnection(config: ServerConfig): ConnectionStatus {
         return try {
             if (apiService.healthCheck(config)) ConnectionStatus.CONNECTED
