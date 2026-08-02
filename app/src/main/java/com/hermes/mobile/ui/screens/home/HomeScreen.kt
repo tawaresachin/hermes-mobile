@@ -87,8 +87,6 @@ import com.hermes.mobile.data.model.Session
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.theme.DarkSurfaceVariant
 import com.hermes.mobile.ui.theme.ErrorRed
-import com.hermes.mobile.ui.theme.GlassWhite
-import com.hermes.mobile.ui.theme.GlassWhiteStrong
 import com.hermes.mobile.ui.theme.HermesAccent
 import com.hermes.mobile.ui.theme.HermesPrimary
 import com.hermes.mobile.ui.theme.HermesPrimaryDark
