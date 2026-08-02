@@ -68,9 +68,10 @@ class MainActivity : ComponentActivity() {
             }
 
             val actualDark = isDarkTheme ?: false
+            val loggedIn by authManager.isLoggedIn.collectAsState()
             CompositionLocalProvider(LocalDarkTheme provides actualDark) {
                 HermesMobileTheme(darkTheme = actualDark) {
-                    MainNavigation()
+                    MainNavigation(isLoggedIn = loggedIn)
                 }
             }
         }

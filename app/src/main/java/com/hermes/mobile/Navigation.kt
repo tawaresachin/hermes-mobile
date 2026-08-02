@@ -6,9 +6,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -58,6 +60,7 @@ val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Voice, Screen.Ses
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MainNavigation(
+    isLoggedIn: Boolean,
     navController: NavHostController = rememberNavController()
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -104,31 +107,58 @@ fun MainNavigation(
                 )
             }
             composable(Screen.Chat.route) {
-                ChatScreen(
-                    paddingValues = scaffoldPadding
-                )
+                if (isLoggedIn) {
+                    ChatScreen(
+                        paddingValues = scaffoldPadding
+                    )
+                } else {
+                    SignInRequired(
+                        feature = "Chat",
+                        onGoToSettings = {
+                            navController.navigate(Screen.Settings.route) { launchSingleTop = true }
+                        }
+                    )
+                }
             }
             composable(Screen.Voice.route) {
-                VoiceScreen(
-                    onExit = {
-                        navController.navigate(Screen.Home.route) {
-                            popUpTo(navController.graph.findStartDestination().id)
-                            launchSingleTop = true
+                if (isLoggedIn) {
+                    VoiceScreen(
+                        onExit = {
+                            navController.navigate(Screen.Home.route) {
+                                popUpTo(navController.graph.findStartDestination().id)
+                                launchSingleTop = true
+                            }
                         }
-                    }
-                )
+                    )
+                } else {
+                    SignInRequired(
+                        feature = "Voice",
+                        onGoToSettings = {
+                            navController.navigate(Screen.Settings.route) { launchSingleTop = true }
+                        }
+                    )
+                }
             }
             composable(Screen.Sessions.route) {
-                SessionsScreen(
-                    paddingValues = scaffoldPadding,
-                    onSessionSelected = { sessionId -> openChat(navController, sessionId) },
-                    onBack = {
-                        navController.popBackStack()
-                    },
-                    onNewChat = {
-                        openChat(navController, null)
-                    }
-                )
+                if (isLoggedIn) {
+                    SessionsScreen(
+                        paddingValues = scaffoldPadding,
+                        onSessionSelected = { sessionId -> openChat(navController, sessionId) },
+                        onBack = {
+                            navController.popBackStack()
+                        },
+                        onNewChat = {
+                            openChat(navController, null)
+                        }
+                    )
+                } else {
+                    SignInRequired(
+                        feature = "Sessions",
+                        onGoToSettings = {
+                            navController.navigate(Screen.Settings.route) { launchSingleTop = true }
+                        }
+                    )
+                }
             }
             composable(Screen.Settings.route) {
                 SettingsScreen(paddingValues = scaffoldPadding)
@@ -190,5 +220,49 @@ private fun openChat(navController: NavHostController, sessionId: String?) {
         }
         launchSingleTop = true
         restoreState = true
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Sign-in gate — Chat / Voice / Sessions require a signed-in account
+// ═══════════════════════════════════════════════════════════
+
+@Composable
+fun SignInRequired(
+    feature: String,
+    onGoToSettings: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Lock,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(48.dp)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Sign in required",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = "$feature is locked until you sign in with your bridge account.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(20.dp))
+        Button(onClick = onGoToSettings) {
+            Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Go to Settings")
+        }
     }
 }
