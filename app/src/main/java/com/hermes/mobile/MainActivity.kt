@@ -7,6 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.*
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.theme.HermesMobileTheme
+import com.hermes.mobile.ui.theme.LocalDarkTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -41,8 +42,10 @@ class MainActivity : ComponentActivity() {
             }
 
             val actualDark = isDarkTheme ?: false
-            HermesMobileTheme(darkTheme = actualDark) {
-                MainNavigation()
+            CompositionLocalProvider(LocalDarkTheme provides actualDark) {
+                HermesMobileTheme(darkTheme = actualDark) {
+                    MainNavigation()
+                }
             }
         }
     }

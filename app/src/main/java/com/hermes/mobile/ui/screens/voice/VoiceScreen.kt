@@ -14,7 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.isSystemInDarkTheme
+import com.hermes.mobile.ui.theme.LocalDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -730,7 +730,7 @@ fun JarvisSphere(
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
-    val isDark = isSystemInDarkTheme()
+    val isDark = LocalDarkTheme.current
 
     // Light/dark UI chrome
     val chipBg = if (isDark) Color(0xFF141B2D).copy(alpha = 0.85f)
