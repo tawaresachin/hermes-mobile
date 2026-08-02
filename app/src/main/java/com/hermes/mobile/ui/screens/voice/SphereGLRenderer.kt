@@ -171,8 +171,44 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
 
                     float opacity = smoothstep(1.0, 0.995, rn);
                     gl_FragColor = vec4(finalColor, opacity);
-                }
-            """.trimIndent()
+                }void main() {
+            float d = length(vTexCoord);
+            if (d > 0.99) { discard; }
+            float x = vTexCoord.x, y = vTexCoord.y;
+            float z = sqrt(max(0.0, 1.0 - x * x - y * y));
+            float a = atan(y, x);
+            float tm = uTime;
+
+            // dark blue body + soft radial haze
+            vec3 body = vec3(0.03, 0.025, 0.05)
+                      + vec3(0.10, 0.09, 0.26) * (0.25 * smoothstep(0.0, 1.0, d));
+
+            // swirling blue-white ribbon tendrils (2 counter-winding sets)
+            float twistA = a * 3.0 - (1.0 - z) * 6.0 - tm * 0.64;
+            float bandA = 1.0 - smoothstep(0.30, 0.75, abs(sin(twistA * 2.0)));
+            float twistB = -a * 2.0 - (1.0 - z) * 4.0 - tm * 0.40;
+            float bandB = 1.0 - smoothstep(0.40, 0.80, abs(sin(twistB * 2.0 + 0.8)));
+
+            float rib = clamp(bandA * 0.8 + bandB * 0.5, 0.0, 1.0);
+            rib *= smoothstep(0.15, 0.45, d) * (1.0 - 0.4 * smoothstep(0.75, 0.98, d));
+            rib *= (0.6 + 0.6 * (0.5 + 0.5 * sin(tm * 0.7)));   // gentle pulse
+            rib *= (0.7 + 0.6 * uAudioVolume);                  // voice swell
+
+            vec3 rib_color = vec3(
+                clamp(0.35 + 0.5 * (0.5 + 0.5 * sin(a)), 0.0, 1.0),
+                clamp(0.55 + 0.3 * (0.5 + 0.5 * cos(a * 2.0)), 0.0, 1.0),
+                clamp(0.97 + 0.03 * cos(a * 3.0), 0.0, 1.0));
+            vec3 ribbons = rib_color * rib * (0.9 + 0.3 * uAudioVolume);
+
+            // magenta/purple outer rim glow
+            vec3 rim_glow = vec3(0.55, 0.22, 0.85) * smoothstep(0.72, 0.99, d) * 0.85
+                          + vec3(0.40, 0.25, 0.70) * smoothstep(0.85, 0.99, d) * 0.5;
+
+            vec3 finalColor = body + ribbons + rim_glow;
+            float opacity = smoothstep(0.99, 0.985, d);
+            gl_FragColor = vec4(finalColor, opacity);
+        }
+    """.trimIndent()
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
