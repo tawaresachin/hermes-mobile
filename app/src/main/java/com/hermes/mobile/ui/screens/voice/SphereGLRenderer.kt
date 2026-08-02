@@ -41,7 +41,11 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
 
     // ── EXACT fragment shader from the user (only GLES2 plumbing added) ──
     private val FRAGMENT_SHADER = """
+        #ifdef GL_FRAGMENT_PRECISION_HIGH
+        precision highp float;
+        #else
         precision mediump float;
+        #endif
         varying vec2 vTexCoord;
         uniform float uTime;
         uniform float uAudioVolume;   // 0..1 real-time audio (additive layer)
