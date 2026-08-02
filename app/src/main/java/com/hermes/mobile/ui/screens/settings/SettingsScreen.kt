@@ -414,6 +414,8 @@ fun SettingsScreen(
     }
     // QR mode selector dialog
     var showQrDialog by remember { mutableStateOf(false) }
+    // E2E setup help dialog
+    var showSetupHelp by remember { mutableStateOf(false) }
 
     CompositionLocalProvider(LocalDarkTheme provides uiState.isDarkTheme) {
         Column(
@@ -424,12 +426,27 @@ fun SettingsScreen(
         ) {
             Spacer(modifier = Modifier.height(12.dp))
 
-            Text(
-                text = "Settings",
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.headlineLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.weight(1f)
+                )
+                // E2E setup help — click to see the full pairing guide
+                IconButton(onClick = { showSetupHelp = true }) {
+                    Icon(
+                        imageVector = Icons.Filled.HelpOutline,
+                        contentDescription = "Setup help",
+                        tint = HermesPrimary,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(16.dp))
 
             // ─── 1. CONNECTION (primary section — QR-first setup) ───
@@ -758,6 +775,59 @@ fun SettingsScreen(
         }
     }
 
+    // ── E2E setup help dialog (server prerequisites + app steps) ──
+    if (showSetupHelp) {
+        AlertDialog(
+            onDismissRequest = { showSetupHelp = false },
+            confirmButton = {
+                Button(onClick = { showSetupHelp = false }) { Text("Got it") }
+            },
+            title = { Text("Setup Guide — End to End") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    SetupHelpSection(
+                        title = "🖥 1. Server-side (on the machine with Hermes Agent)",
+                        steps = listOf(
+                            "Install the bridge:  python3 install.py  (or: hermes mobile-serve)",
+                            "The server starts and prints a pairing URL in the console",
+                            "Open the URL in a browser:  http://<ip>:9119/setup?token=…",
+                            "Register or log in — the page then shows your sign-in QR",
+                            "Prerequisite: Hermes Agent installed + an internet connection"
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    SetupHelpSection(
+                        title = "📱 2. App-side (this phone)",
+                        steps = listOf(
+                            "Install the Hermes Mobile APK (v2.18+)",
+                            "Open Settings → tap 'Scan QR Code'",
+                            "Point the camera at the QR on the setup page",
+                            "The app auto-configures the server URL + key",
+                            "It signs in as your registered account — Chat, Voice & Sessions unlock"
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    SetupHelpSection(
+                        title = "⚠️ Tips & troubleshooting",
+                        steps = listOf(
+                            "The sign-in QR is valid for 15 minutes after you register on the page",
+                            "Expired QR? Reopen the setup page, log in again — a fresh QR appears",
+                            "Tailscale (100.x) is the fastest route — both devices on the tailnet",
+                            "Connection shows 'Connected via Tailscale' when the P2P link is live",
+                            "Log out → Chat/Voice/Sessions lock until you sign in again"
+                        )
+                    )
+                }
+            },
+            shape = RoundedCornerShape(20.dp),
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
+
     // QR mode picker bottom sheet (Camera / Gallery)
     if (showQrDialog) {
         ModalBottomSheet(
@@ -988,5 +1058,47 @@ fun SettingsInfoRow(label: String, value: String) {
     ) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+/** A titled block of numbered steps inside the E2E setup help dialog. */
+@Composable
+fun SetupHelpSection(title: String, steps: List<String>) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = HermesPrimary,
+        modifier = Modifier.padding(bottom = 8.dp)
+    )
+    steps.forEachIndexed { index, step ->
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 3.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(HermesPrimary.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "${index + 1}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = HermesPrimary
+                )
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = step,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+        }
     }
 }
