@@ -9,10 +9,16 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
 /**
- * GPU renderer for the voice sphere — VERBATIM port of the user's
- * fullscreen-quad fragment shader (exact math, no modifications).
- * Only GLES2 plumbing differs: attribute/varying instead of gl_Vertex,
- * `precision mediump float` added, uniform uTime.
+ * GPU renderer for the voice sphere — target-matched fragment shader.
+ *
+ * The visual was iterated against the user's reference image with a numpy
+ * render harness (pixel-diff optimized) and the winning parameters were
+ * ported here verbatim:
+ *   - dark blue-violet body, near-black core
+ *   - sparse electric-blue wisp folds (simplex noise, high thresholds)
+ *   - directional rim lit from upper-left + specular hotspot
+ *   - gentle radial brightness ramp (14 -> 43 like the target)
+ *   - uAudioVolume: additive voice-reactive layer (0 at silence -> base intact)
  */
 class SphereGLRenderer : GLSurfaceView.Renderer {
 
@@ -24,8 +30,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
     private var quadBuffer: FloatBuffer? = null
     private var startNanos = 0L
 
-    /** Real-time audio volume 0..1 — sent to the shader like the user's
-     * `glUniform1f(u_audio_volume_loc, normalized_volume)`. */
+    /** Real-time audio volume 0..1 — sent to the shader each frame. */
     fun setAudioVolume(volume: Float) {
         uAudioVolume = volume.coerceIn(0f, 1f)
     }
@@ -39,10 +44,6 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         }
     """.trimIndent()
 
-    // ── APPROVED fragment shader — target-matched (dark blue-violet,
-    // directional rim upper-left + specular hotspot, soft wisp folds).
-    // Base structure = user's shader; only palette + directional lighting
-    // changed to match the confirmed target image.
     private val FRAGMENT_SHADER = """
         #ifdef GL_FRAGMENT_PRECISION_HIGH
         precision highp float;
@@ -51,7 +52,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         #endif
         varying vec2 vTexCoord;
         uniform float uTime;
-        uniform float uAudioVolume;   // 0..1 real-time audio (additive layer)
+        uniform float uAudioVolume;
 
         vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}
         vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
@@ -100,50 +101,58 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         }
 
         void main() {
-            float distanceToCenter = length(vTexCoord);
-            if (distanceToCenter > 0.85) { discard; }
+            float d = length(vTexCoord);
+            if (d > 0.85) { discard; }
 
-            float z = sqrt(0.85 * 0.85 - distanceToCenter * distanceToCenter);
+            float z = sqrt(0.85 * 0.85 - d * d);
             vec3 sphereNormal = normalize(vec3(vTexCoord, z));
 
             // ── target-matched palette (dark blue-violet) ──
-            vec3 brightRing  = vec3(0.55, 0.30, 1.00);
-            vec3 electricBlue = vec3(0.25, 0.20, 0.85);
-            vec3 softPink    = vec3(0.40, 0.18, 0.60);
-            vec3 deepBackground = vec3(0.03, 0.02, 0.10);
+            vec3 brightRing = vec3(0.42, 0.26, 1.00);
+            vec3 electricBlue = vec3(0.22, 0.18, 1.00);
+            vec3 softPink = vec3(0.4705, 0.1170, 0.4586);
+            vec3 deepBackground = vec3(0.035, 0.02, 0.10);
+
+            // ── sparse wisp folds (thin bright blue wisps on dark body) ──
+            vec3 noisePos1 = vec3(sphereNormal.xy * 1.4, uTime * 0.15);
+            vec3 noisePos2 = vec3(sphereNormal.xy * 2.8, -uTime * 0.1);
+            float wisp1 = snoise(noisePos1);
+            float wisp2 = snoise(noisePos2 + vec3(wisp1 * 0.5));
+            float fold1 = smoothstep(0.40, 0.70, abs(wisp1));
+            float fold2 = smoothstep(0.45, 0.75, abs(wisp2));
 
             // ── directional rim light from upper-left (110 deg, y-up) ──
-            vec3 lightDir = normalize(vec3(-0.3228, 0.8871, 0.3303));
+            vec3 lightDir = normalize(vec3(cos(radians(110.0)), sin(radians(110.0)), 0.35));
             float lambert = max(dot(sphereNormal, lightDir), 0.0);
             float directional = pow(lambert, 1.5);
 
-            float edgeGlow = smoothstep(0.68, 0.85, distanceToCenter);
-            edgeGlow *= (0.15 + 0.85 * directional);
+            // ── gentle radial ramp ring (target: 14 -> 43 brightness) ──
+            float ringMix = smoothstep(0.15, 0.85, d);
+            float dirRing = ringMix * (1.0 - 0.75 + 0.75 * directional) * 0.46;
 
-            vec3 noisePos1 = vec3(sphereNormal.xy * 1.4, uTime * 0.15);
-            vec3 noisePos2 = vec3(sphereNormal.xy * 2.8, -uTime * 0.1);
+            // center falloff keeps the core near-black
+            float fall = smoothstep(0.15, 0.45, d);
 
-            float wisp1 = snoise(noisePos1);
-            float wisp2 = snoise(noisePos2 + vec3(wisp1 * 0.5));
+            vec3 body = deepBackground;
+            body += electricBlue * fold1 * (1.0 - d) * 0.7 * fall;
+            body += softPink * fold2 * 0.4 * 0.443 * fall;
+            body *= 0.68;
 
-            float foldPattern1 = smoothstep(0.15, 0.45, abs(wisp1));
-            float foldPattern2 = smoothstep(0.25, 0.55, abs(wisp2));
+            vec3 finalColor = body * (1.0 - dirRing) + brightRing * dirRing;
 
-            vec3 finalColor = deepBackground;
-            finalColor += electricBlue * foldPattern1 * (1.0 - distanceToCenter) * 0.49;
-            finalColor += softPink * foldPattern2 * 0.12;
+            // ── specular hotspot at the light point on the rim ──
+            float ang = atan(vTexCoord.y, vTexCoord.x);
+            float az = radians(110.0);
+            float dang = abs(mod(ang - az + 3.14159, 6.28318) - 3.14159);
+            float spot = exp(-(dang * dang) / 0.25) * smoothstep(0.60, 0.85, d);
+            finalColor += vec3(0.60, 0.38, 1.0) * spot * 0.51;
 
-            // specular hotspot where light + rim coincide (upper-left)
-            finalColor += brightRing * pow(lambert, 4.0) * edgeGlow * 0.8;
+            // ── audio-reactive layer (additive — zero at silence) ──
+            finalColor += electricBlue * fold1 * uAudioVolume * (1.0 - d) * 0.6;
+            finalColor += softPink * fold2 * uAudioVolume * 0.35;
+            finalColor += brightRing * dirRing * uAudioVolume * 0.45;
 
-            finalColor = mix(finalColor, brightRing, edgeGlow);
-            finalColor *= 0.8;
-
-            // ── audio-reactive additive layer (0 at silence → base intact) ──
-            finalColor += electricBlue * foldPattern1 * uAudioVolume * (1.0 - distanceToCenter) * 0.5;
-            finalColor += brightRing * edgeGlow * uAudioVolume * 0.4;
-
-            float opacity = smoothstep(0.85, 0.845, distanceToCenter);
+            float opacity = smoothstep(0.85, 0.845, d);
             gl_FragColor = vec4(finalColor, opacity);
         }
     """.trimIndent()
@@ -166,7 +175,6 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
 
         val t = (System.nanoTime() - startNanos) / 1_000_000_000f
         GLES20.glUniform1f(uTimeLoc, t)
-        // send the real-time audio volume to the shader
         GLES20.glUniform1f(uVolumeLoc, uAudioVolume)
 
         var buf = quadBuffer
