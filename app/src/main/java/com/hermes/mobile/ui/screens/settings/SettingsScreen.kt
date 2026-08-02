@@ -61,6 +61,9 @@ data class SettingsUiState(
     val loggedInEmail: String = "",
     // QR setup token (from hermes://connect payload)
     val setupToken: String = "",
+    // One-time claim token (from a post-registration claim QR) — signs the
+    // app into the user's web-registered account
+    val claimToken: String = "",
     // Bridge API key (from hermes://connect payload) — persisted for refresh
     val apiKey: String = "",
 )
@@ -110,7 +113,34 @@ class SettingsViewModel @Inject constructor(
     fun clearAuthError() { _uiState.update { it.copy(authError = null) } }
     fun setError(msg: String) { _uiState.update { it.copy(authError = msg) } }
     fun setSetupToken(token: String) { _uiState.update { it.copy(setupToken = token) } }
+    fun setClaimToken(token: String) { _uiState.update { it.copy(claimToken = token) } }
     fun setApiKey(key: String) { _uiState.update { it.copy(apiKey = key) } }
+
+    /**
+     * Sign in as the user who registered on the web setup page, via the
+     * one-time claim token carried by the scanned QR. Falls back to the
+     * auto-registered device account only when no claim token is present.
+     */
+    fun signInAfterPairing() {
+        val base = _uiState.value.baseUrl.trimEnd('/')
+        if (base.isBlank()) return
+        val claim = _uiState.value.claimToken
+        if (claim.isNotBlank()) {
+            viewModelScope.launch {
+                authManager.claimAccount(base, claim)
+                    .onSuccess {
+                        // Claim is single-use — clear it so we never re-send.
+                        _uiState.update { it.copy(claimToken = "") }
+                    }
+                    .onFailure { _ ->
+                        // Claim failed/expired — fall back to a device account.
+                        autoRegisterDeviceIfNeeded()
+                    }
+            }
+        } else {
+            autoRegisterDeviceIfNeeded()
+        }
+    }
 
     /**
      * After a successful QR pairing, auto-create a device account so the
@@ -214,9 +244,9 @@ class SettingsViewModel @Inject constructor(
                             setupToken = _uiState.value.setupToken,
                         )
                     )
-                    // Pairing done → create a device account so the bridge
-                    // works immediately (no manual email/password typing).
-                    autoRegisterDeviceIfNeeded()
+                    // Pairing done → sign in: claim QR (web-registered user)
+                    // first, else auto-create a device account.
+                    signInAfterPairing()
                 }
             } catch (e: Exception) {
                 _uiState.update {
@@ -323,6 +353,12 @@ fun SettingsScreen(
         val setup = uri.getQueryParameter("setup")
         if (!setup.isNullOrBlank()) {
             vm.setSetupToken(setup)
+        }
+        // One-time claim token — present only on post-registration claim QRs;
+        // signs the app into the user's web-registered account.
+        val claim = uri.getQueryParameter("claim")
+        if (!claim.isNullOrBlank()) {
+            vm.setClaimToken(claim)
         }
         // Capture the bridge API key so refresh works after app restarts
         val apiKey = uri.getQueryParameter("key")

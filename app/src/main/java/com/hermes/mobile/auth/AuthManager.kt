@@ -153,6 +153,32 @@ class AuthManager @Inject constructor(
         clearTokens()
     }
 
+    /**
+     * Sign in via a one-time claim token from the pairing QR. The web setup
+     * page issues the token after the user registers/logs in there; scanning
+     * the claim QR exchanges it for this user's JWT — no password needed.
+     */
+    suspend fun claimAccount(serverUrl: String, claimToken: String): Result<Unit> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = URL("$serverUrl/auth/claim")
+                val payload = JSONObject().apply { put("token", claimToken) }
+                val response = httpPost(url.toString(), payload.toString())
+                if (response.first == 200) {
+                    storeTokens(JSONObject(response.second))
+                    Result.success(Unit)
+                } else {
+                    val detail = try {
+                        JSONObject(response.second).optString("detail", "Invalid claim token")
+                    } catch (_: Exception) { "Invalid claim token" }
+                    Result.failure(IOException(detail))
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+
     // ── Internal helpers ──
 
     private fun storeTokens(json: JSONObject) {
