@@ -144,6 +144,49 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
             vec3 finalColor = body + flares + rim_glow + central;
             float opacity = 1.0 - smoothstep(0.985, 0.99, d);
             gl_FragColor = vec4(finalColor, opacity);
+        }void main() {
+            float d = length(vTexCoord);
+            if (d > 0.99) { discard; }
+            float x = vTexCoord.x;
+            float y = vTexCoord.y;
+            float a = atan(y, x);
+            float tm = uTime;
+
+            // thin wispy filaments: noise zero-crossings, curl-warped, dashed
+            float warp = snoise(vec3(x * 1.4, y * 1.4, tm * 0.10));
+            float qx = x + 1.6 * sin(a + warp * 3.0) * (1.0 - d);
+            float qy = y - 1.6 * cos(a + warp * 3.0) * (1.0 - d);
+            float fz = snoise(vec3(qx * 1.6, qy * 1.6, tm * 0.08));
+            float filament = 1.0 - smoothstep(0.0, 0.065, abs(fz));
+
+            // sparse + dashed + radial placement + gentle pulse
+            float solv = 0.5 + 0.5 * sin(warp * 6.0);
+            filament *= smoothstep(0.26, 0.52, solv);
+            float dash = 0.5 + 0.5 * sin(snoise(vec3(x * 2.2, y * 2.2, tm * 0.12)) * 5.0 + tm);
+            filament *= smoothstep(0.15, 0.42, dash);
+            filament *= smoothstep(0.12, 0.32, d) * (1.0 - smoothstep(0.78, 0.96, d));
+            filament *= (0.75 + 0.25 * sin(tm * 0.6));
+            filament = clamp(filament, 0.0, 1.0);
+
+            // blue-left -> magenta-right hue
+            float hue = 0.5 + 0.5 * x;
+            vec3 leftC = vec3(0.16, 0.32, 1.00);
+            vec3 rightC = vec3(0.45, 0.14, 0.95);
+            float flu = clamp(hue + 0.1 * sin(-tm * 0.2), 0.0, 1.0);
+            vec3 filaments = mix(leftC, rightC, flu) * filament * 2.6;
+
+            // dark blue body + radial haze
+            vec3 body = vec3(0.02, 0.02, 0.05)
+                      + vec3(0.12, 0.16, 0.30) * (0.34 * smoothstep(0.18, 0.85, d));
+
+            // luminous rim + soft blue core
+            vec3 rim_c = mix(leftC, rightC, hue);
+            vec3 rim_glow = rim_c * smoothstep(0.68, 0.99, d) * 2.2;
+            vec3 central = vec3(0.03, 0.04, 0.08) * clamp(1.0 - 2.4 * d, 0.0, 1.0) * 1.3;
+
+            vec3 finalColor = body + filaments + rim_glow + central;
+            float opacity = 1.0 - smoothstep(0.985, 0.99, d);
+            gl_FragColor = vec4(finalColor, opacity);
         }
     """.trimIndent()
 
