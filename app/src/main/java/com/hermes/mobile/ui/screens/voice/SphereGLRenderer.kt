@@ -39,7 +39,10 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         }
     """.trimIndent()
 
-    // ── EXACT fragment shader from the user (only GLES2 plumbing added) ──
+    // ── APPROVED fragment shader — target-matched (dark blue-violet,
+    // directional rim upper-left + specular hotspot, soft wisp folds).
+    // Base structure = user's shader; only palette + directional lighting
+    // changed to match the confirmed target image.
     private val FRAGMENT_SHADER = """
         #ifdef GL_FRAGMENT_PRECISION_HIGH
         precision highp float;
@@ -103,32 +106,42 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
             float z = sqrt(0.85 * 0.85 - distanceToCenter * distanceToCenter);
             vec3 sphereNormal = normalize(vec3(vTexCoord, z));
 
-            vec3 brightMagenta = vec3(0.92, 0.25, 0.98);
-            vec3 electricBlue  = vec3(0.05, 0.35, 1.0);
-            vec3 softPink      = vec3(0.95, 0.45, 0.75);
-            vec3 deepBackground = vec3(0.02, 0.0, 0.05);
+            // ── target-matched palette (dark blue-violet) ──
+            vec3 brightRing  = vec3(0.55, 0.30, 1.00);
+            vec3 electricBlue = vec3(0.25, 0.20, 0.85);
+            vec3 softPink    = vec3(0.40, 0.18, 0.60);
+            vec3 deepBackground = vec3(0.03, 0.02, 0.10);
 
-            float edgeGlow = smoothstep(0.70, 0.85, distanceToCenter);
+            // ── directional rim light from upper-left (110 deg, y-up) ──
+            vec3 lightDir = normalize(vec3(-0.3228, 0.8871, 0.3303));
+            float lambert = max(dot(sphereNormal, lightDir), 0.0);
+            float directional = pow(lambert, 1.5);
 
-            vec3 noisePos1 = vec3(sphereNormal.xy * 1.8, uTime * 0.15);
-            vec3 noisePos2 = vec3(sphereNormal.xy * 3.5, -uTime * 0.1);
+            float edgeGlow = smoothstep(0.68, 0.85, distanceToCenter);
+            edgeGlow *= (0.15 + 0.85 * directional);
+
+            vec3 noisePos1 = vec3(sphereNormal.xy * 1.4, uTime * 0.15);
+            vec3 noisePos2 = vec3(sphereNormal.xy * 2.8, -uTime * 0.1);
 
             float wisp1 = snoise(noisePos1);
             float wisp2 = snoise(noisePos2 + vec3(wisp1 * 0.5));
 
-            float foldPattern1 = smoothstep(0.1, 0.4, abs(wisp1));
-            float foldPattern2 = smoothstep(0.2, 0.5, abs(wisp2));
+            float foldPattern1 = smoothstep(0.15, 0.45, abs(wisp1));
+            float foldPattern2 = smoothstep(0.25, 0.55, abs(wisp2));
 
             vec3 finalColor = deepBackground;
-            finalColor += electricBlue * foldPattern1 * (1.0 - distanceToCenter) * 0.7;
-            finalColor += softPink * foldPattern2 * 0.4;
-            finalColor = mix(finalColor, brightMagenta, edgeGlow);
+            finalColor += electricBlue * foldPattern1 * (1.0 - distanceToCenter) * 0.49;
+            finalColor += softPink * foldPattern2 * 0.12;
 
-            // ── Audio-reactive layer (ADDITIVE — at silence it equals 0,
-            // so the base look stays exactly the original shader) ──
-            finalColor += electricBlue * foldPattern1 * uAudioVolume * (1.0 - distanceToCenter) * 0.6;
-            finalColor += softPink * foldPattern2 * uAudioVolume * 0.35;
-            finalColor += brightMagenta * edgeGlow * uAudioVolume * 0.45;
+            // specular hotspot where light + rim coincide (upper-left)
+            finalColor += brightRing * pow(lambert, 4.0) * edgeGlow * 0.8;
+
+            finalColor = mix(finalColor, brightRing, edgeGlow);
+            finalColor *= 0.8;
+
+            // ── audio-reactive additive layer (0 at silence → base intact) ──
+            finalColor += electricBlue * foldPattern1 * uAudioVolume * (1.0 - distanceToCenter) * 0.5;
+            finalColor += brightRing * edgeGlow * uAudioVolume * 0.4;
 
             float opacity = smoothstep(0.85, 0.845, distanceToCenter);
             gl_FragColor = vec4(finalColor, opacity);
