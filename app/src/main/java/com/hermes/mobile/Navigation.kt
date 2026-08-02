@@ -66,6 +66,20 @@ fun MainNavigation(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
+    // Security: leave gated screens (Chat/Voice/Sessions) IMMEDIATELY when
+    // the user signs out — an already-open screen must not stay usable.
+    LaunchedEffect(isLoggedIn, currentDestination) {
+        if (!isLoggedIn) {
+            val route = currentDestination?.route
+            if (route == Screen.Chat.route || route == Screen.Voice.route || route == Screen.Sessions.route) {
+                navController.navigate(Screen.Home.route) {
+                    popUpTo(navController.graph.findStartDestination().id)
+                    launchSingleTop = true
+                }
+            }
+        }
+    }
+
     // Hide the bottom bar while the keyboard is open (Telegram behavior) —
     // otherwise it leaves a dead white band between the input bar and the IME.
     val isImeVisible = WindowInsets.isImeVisible

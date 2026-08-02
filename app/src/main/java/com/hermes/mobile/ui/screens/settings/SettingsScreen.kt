@@ -118,8 +118,10 @@ class SettingsViewModel @Inject constructor(
 
     /**
      * Sign in as the user who registered on the web setup page, via the
-     * one-time claim token carried by the scanned QR. Falls back to the
-     * auto-registered device account only when no claim token is present.
+     * claim token carried by the scanned QR. Claim failures are surfaced,
+     * NEVER silently replaced by a device account (that caused the wrong
+     * email showing). Only a plain pairing QR (no claim) falls back to the
+     * auto-registered device account.
      */
     fun signInAfterPairing() {
         val base = _uiState.value.baseUrl.trimEnd('/')
@@ -129,12 +131,19 @@ class SettingsViewModel @Inject constructor(
             viewModelScope.launch {
                 authManager.claimAccount(base, claim)
                     .onSuccess {
-                        // Claim is single-use — clear it so we never re-send.
-                        _uiState.update { it.copy(claimToken = "") }
+                        // Claim is reusable until expiry — keep it so a later
+                        // re-scan after logout still signs into this account.
+                        _uiState.update { it.copy(authError = null) }
                     }
-                    .onFailure { _ ->
-                        // Claim failed/expired — fall back to a device account.
-                        autoRegisterDeviceIfNeeded()
+                    .onFailure { e ->
+                        // Expired/invalid claim: tell the user to get a fresh
+                        // QR from the setup page — do NOT create a device
+                        // account silently.
+                        _uiState.update {
+                            it.copy(
+                                authError = "Sign-in QR expired — reopen the setup page for a fresh QR (${e.message ?: "claim rejected"})"
+                            )
+                        }
                     }
             }
         } else {
