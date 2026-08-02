@@ -2,19 +2,43 @@ package com.hermes.mobile
 
 import android.app.Application
 import android.os.Process
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import com.hermes.mobile.network.AuthInterceptor
 import dagger.hilt.android.HiltAndroidApp
+import okhttp3.OkHttpClient
 import java.io.File
 import java.io.FileWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
+import javax.inject.Inject
 
+/**
+ * Coil image loads (chat attachments under /uploads) must send the same
+ * Bearer token as API calls — the server now requires auth on /uploads.
+ */
 @HiltAndroidApp
-class HermesApp : Application() {
+class HermesApp : Application(), ImageLoaderFactory {
+
+    @Inject lateinit var authInterceptor: AuthInterceptor
 
     override fun onCreate() {
         super.onCreate()
         installCrashHandler()
+    }
+
+    override fun newImageLoader(): ImageLoader {
+        val client = OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .addInterceptor(authInterceptor)
+            .build()
+        return ImageLoader.Builder(this)
+            .okHttpClient(client)
+            .crossfade(true)
+            .build()
     }
 
     private fun installCrashHandler() {
