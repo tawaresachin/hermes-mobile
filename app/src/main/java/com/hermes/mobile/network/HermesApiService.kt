@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.*
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -382,6 +383,39 @@ class HermesApiService @Inject constructor(
                 val response = client.newCall(request).execute()
                 if (response.isSuccessful) {
                     response.body?.bytes()
+                } else {
+                    null
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
+    // ─── Speech-to-text (Whisper on bridge server) ───
+
+    /**
+     * Transcribe raw 16kHz mono PCM WAV bytes via the bridge's whisper
+     * endpoint. Returns the transcript, or null on any failure (caller
+     * falls back to the system SpeechRecognizer).
+     */
+    suspend fun transcribeAudio(wav: ByteArray, lang: String? = null): String? {
+        val baseUrl = config?.baseUrl ?: return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val token = authManager.getToken()
+                val urlBuilder = "$baseUrl/api/stt".toHttpUrlOrNull()?.newBuilder()?.apply {
+                    if (!lang.isNullOrBlank()) addQueryParameter("lang", lang)
+                }
+                val request = Request.Builder()
+                    .url(urlBuilder?.build() ?: return@withContext null)
+                    .post(wav.toRequestBody("audio/wav".toMediaType()))
+                    .apply { if (token != null) addHeader("Authorization", "Bearer $token") }
+                    .build()
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val json = JSONObject(response.body?.string() ?: "{}")
+                    json.optString("text").takeIf { it.isNotBlank() }
                 } else {
                     null
                 }

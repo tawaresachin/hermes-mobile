@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -44,6 +45,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ModelInfo
@@ -110,6 +113,8 @@ class VoiceViewModel @Inject constructor(
     private var initJob: Job? = null
     @Volatile private var lastSpokenSentence: String = ""
     @Volatile private var lastSpokenAt: Long = 0L
+    @Volatile private var voiceRunning = false
+    @Volatile private var voicePaused = false
 
     init {
         // Create a session for voice conversations on first open
@@ -128,6 +133,8 @@ class VoiceViewModel @Inject constructor(
     }
 
     fun startVoiceLoop() {
+        voiceRunning = true
+        voicePaused = false
         voiceModeJob?.cancel()
         voiceModeJob = viewModelScope.launch {
             // Wait for session init
@@ -245,11 +252,33 @@ class VoiceViewModel @Inject constructor(
     }
 
     fun stopVoiceLoop() {
+        voiceRunning = false
+        voicePaused = false
         voiceModeJob?.cancel()
         ttsPlaybackJob?.cancel()
         _voiceModeState.value = SphereState.IDLE
         _voiceAmplitude.value = 0f
         _ttsProgress.value = 0f
+    }
+
+    /**
+     * Background/foreground transitions (privacy + battery):
+     * STOP → kill mic + TTS immediately (no recording/speaking while the
+     * app is not visible); START → resume the loop when it was running.
+     */
+    fun pauseVoice() {
+        if (!voiceRunning) return
+        voicePaused = true
+        voiceModeJob?.cancel()
+        ttsPlaybackJob?.cancel()
+        _voiceModeState.value = SphereState.IDLE
+        _voiceAmplitude.value = 0f
+    }
+
+    fun resumeVoice() {
+        if (!voiceRunning || !voicePaused) return
+        voicePaused = false
+        startVoiceLoop()
     }
 
     fun setVoiceAmplitude(amp: Float) {
@@ -316,7 +345,104 @@ class VoiceViewModel @Inject constructor(
         }
     }
 
+    /**
+     * One listen cycle. Whisper-first: the bridge's whisper STT records
+     * SILENTLY (no system "listening" beep) and handles Indian languages
+     * better than the ROM recognizer. Falls back to the Android
+     * SpeechRecognizer when the bridge is unreachable or returns nothing.
+     */
     private suspend fun listenOnce(): String? {
+        val whisperText = try {
+            listenOnceWhisper()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("VoiceScreen", "Whisper listen failed, falling back: ${e.message}")
+            null
+        }
+        if (!whisperText.isNullOrBlank()) return whisperText
+        return listenOnceSystem()
+    }
+
+    /**
+     * SILENT capture for the bridge's whisper STT: records 16 kHz mono PCM
+     * directly (no SpeechRecognizer → NO beep), auto-stops after ~1.2s of
+     * silence, wraps in a WAV header and uploads to /api/stt. The RMS level
+     * still drives the sphere wave (same 0..1 amplitude path).
+     */
+    private suspend fun listenOnceWhisper(): String? = withContext(Dispatchers.IO) {
+        val sampleRate = 16_000
+        val minBuf = android.media.AudioRecord.getMinBufferSize(
+            sampleRate,
+            android.media.AudioFormat.CHANNEL_IN_MONO,
+            android.media.AudioFormat.ENCODING_PCM_16BIT
+        )
+        val bufSize = max(minBuf * 2, sampleRate / 2) // ≥0.5s of buffer
+        var record: android.media.AudioRecord? = null
+        try {
+            record = android.media.AudioRecord(
+                android.media.MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                android.media.AudioFormat.CHANNEL_IN_MONO,
+                android.media.AudioFormat.ENCODING_PCM_16BIT,
+                bufSize
+            )
+            record.startRecording()
+            val pcm = java.io.ByteArrayOutputStream()
+            val buf = ShortArray(1024)
+            var speechStarted = false
+            var lastSpeechMs = 0L
+            val deadline = System.currentTimeMillis() + 15_000
+            var wroteBytes = 0
+            while (System.currentTimeMillis() < deadline) {
+                val n = record.read(buf, 0, buf.size)
+                if (n <= 0) continue
+                val now = System.currentTimeMillis()
+                var sumSq = 0.0
+                for (i in 0 until n) sumSq += buf[i].toDouble() * buf[i]
+                val rms = kotlin.math.sqrt(sumSq / n)
+                setVoiceAmplitude((rms / 6000.0).coerceIn(0.0, 1.0).toFloat())
+                if (rms > 700.0) {
+                    lastSpeechMs = now
+                    if (!speechStarted) speechStarted = true
+                }
+                if (speechStarted) {
+                    // Write PCM little-endian into the growing WAV payload.
+                    val bytes = java.nio.ByteBuffer.allocate(n * 2)
+                        .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                    for (i in 0 until n) bytes.putShort(buf[i])
+                    pcm.write(bytes.array())
+                    wroteBytes += n * 2
+                    if (now - lastSpeechMs > 1200) break // silence → auto-stop
+                }
+            }
+            if (!speechStarted || wroteBytes < 3200) return@withContext null // <0.1s speech
+            val langHint = _language.value.speechLocale.substringBefore('-').lowercase()
+            repository.transcribeAudio(buildWavHeader(pcm.size()) + pcm.toByteArray(), langHint)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("VoiceScreen", "Whisper capture failed: ${e.message}")
+            null
+        } finally {
+            try { record?.stop() } catch (_: Exception) {}
+            try { record?.release() } catch (_: Exception) {}
+            setVoiceAmplitude(0f)
+        }
+    }
+
+    /** Standard 44-byte RIFF header for 16 kHz mono 16-bit PCM. */
+    private fun buildWavHeader(dataLen: Int): ByteArray {
+        val buf = java.nio.ByteBuffer.allocate(44).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        buf.put("RIFF".toByteArray()); buf.putInt(36 + dataLen); buf.put("WAVE".toByteArray())
+        buf.put("fmt ".toByteArray()); buf.putInt(16); buf.putShort(1); buf.putShort(1)
+        buf.putInt(16_000); buf.putInt(16_000 * 2); buf.putShort(2); buf.putShort(16)
+        buf.put("data".toByteArray()); buf.putInt(dataLen)
+        return buf.array()
+    }
+
+    /** Android SpeechRecognizer path (fallback — has the system beep). */
+    private suspend fun listenOnceSystem(): String? {
         var recognizer: android.speech.SpeechRecognizer? = null
         val result: String? = try {
             withTimeout(15_000) {
@@ -499,39 +625,49 @@ class VoiceViewModel @Inject constructor(
             } ?: return
             _ttsProgress.value = 0.1f
 
-            // Play via MediaPlayer
+            // Play via MediaPlayer. tempFile is deleted in the OUTER finally
+            // so error paths (prepare/start throws) can't leak mp3s.
             val tempFile = java.io.File(context.cacheDir, "tts_${System.currentTimeMillis()}.mp3")
-            tempFile.writeBytes(audioBytes)
-
-            val player = android.media.MediaPlayer().apply {
-                setDataSource(tempFile.absolutePath)
-                prepare()
-                start()
-            }
-
-            val duration = player.duration.toFloat()
-            val progressJob = viewModelScope.launch {
-                try {
-                    while (isActive && player.isPlaying) {
-                        val current = player.currentPosition.toFloat()
-                        _ttsProgress.value = (current / duration).coerceIn(0f, 1f)
-                        delay(100)
-                    }
-                } finally {
-                    _ttsProgress.value = 1f
-                }
-            }
-
-            // Wait for completion (cancellation propagates via delay →
-            // CancellationException caught below)
+            var player: android.media.MediaPlayer? = null
             try {
-                while (player.isPlaying) {
-                    delay(200)
+                tempFile.writeBytes(audioBytes)
+
+                player = android.media.MediaPlayer().apply {
+                    setDataSource(tempFile.absolutePath)
+                    prepare()
+                    start()
+                }
+
+                val duration = player?.duration?.toFloat() ?: 0f
+                val progressJob = viewModelScope.launch {
+                    try {
+                        while (isActive && player?.isPlaying == true) {
+                            val current = player?.currentPosition?.toFloat() ?: 0f
+                            _ttsProgress.value = (current / duration).coerceIn(0f, 1f)
+                            delay(100)
+                        }
+                    } finally {
+                        _ttsProgress.value = 1f
+                    }
+                }
+
+                // Wait for completion (cancellation propagates via delay →
+                // CancellationException caught below). 30s timeout so a
+                // stuck MediaPlayer can never freeze the voice loop.
+                try {
+                    withTimeout(30_000) {
+                        while (player?.isPlaying == true) {
+                            delay(200)
+                        }
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    Log.w("VoiceScreen", "TTS playback stuck, skipping sentence")
+                } finally {
+                    progressJob.cancel()
+                    player?.release()
                 }
             } finally {
-                progressJob.cancel()
-                player.release()
-                tempFile.delete()
+                try { tempFile.delete() } catch (_: Exception) {}
             }
         } catch (_: CancellationException) {
             _ttsProgress.value = 0f
@@ -597,9 +733,20 @@ fun VoiceScreen(
         }
     }
 
-    // Stop the loop when leaving the screen
-    DisposableEffect(Unit) {
+    // Privacy/battery: pause mic + TTS when the app goes to background,
+    // resume the loop on return, stop completely when leaving the screen.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> vm.pauseVoice()
+                Lifecycle.Event.ON_START -> vm.resumeVoice()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
             vm.stopVoiceLoop()
         }
     }
@@ -856,6 +1003,10 @@ fun JarvisSphere(
             // drawn as a separate Compose overlay below (wave flares) so the
             // shader itself stays pure.
             val glRenderer = remember { SphereGLRenderer() }
+            // Pause GL when the app is backgrounded — RENDERMODE_CONTINUOUSLY
+            // otherwise renders full-FPS forever (battery drain).
+            val glLifecycleOwner = LocalLifecycleOwner.current
+            var glView by remember { mutableStateOf<GLSurfaceView?>(null) }
             AndroidView(
                 factory = { ctx ->
                     GLSurfaceView(ctx).apply {
@@ -867,8 +1018,22 @@ fun JarvisSphere(
                         setOnClickListener { onTap() }
                     }
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                update = { glView = it }
             )
+            DisposableEffect(glLifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    when (event) {
+                        Lifecycle.Event.ON_PAUSE -> glView?.onPause()
+                        Lifecycle.Event.ON_RESUME -> glView?.onResume()
+                        else -> {}
+                    }
+                }
+                glLifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    glLifecycleOwner.lifecycle.removeObserver(observer)
+                }
+            }
 
             // ── Send real-time audio volume to the shader (like the user's
             // glUniform1f(u_audio_volume_loc, normalized_volume)) ──

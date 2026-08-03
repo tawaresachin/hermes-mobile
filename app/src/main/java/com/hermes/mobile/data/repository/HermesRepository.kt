@@ -204,4 +204,9 @@ class HermesRepository @Inject constructor(
     suspend fun textToSpeech(text: String, voice: String = "en-IN-NeerjaNeural"): ByteArray? {
         return apiService.textToSpeech(text, voice)
     }
+
+    /** Whisper STT via the bridge (null → caller falls back to system). */
+    suspend fun transcribeAudio(wav: ByteArray, lang: String? = null): String? {
+        return apiService.transcribeAudio(wav, lang)
+    }
 }
