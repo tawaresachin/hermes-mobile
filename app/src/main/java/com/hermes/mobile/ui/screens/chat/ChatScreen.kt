@@ -220,8 +220,13 @@ class ChatViewModel @Inject constructor(
     }
 
     // ── Send message ──
+    // Generation counter: bump on every send so stale SSE chunks from a
+    // cancelled stream can't clobber the new stream's UI content.
+    private var streamGeneration = 0
+
     fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null) {
         val sid = _sessionId.value ?: return
+        val gen = ++streamGeneration
 
         // Cancel previous stream and save pending content
         streamingJob?.cancel()
@@ -249,11 +254,14 @@ class ChatViewModel @Inject constructor(
                     attachmentUrl = attachmentUrl ?: "",
                     attachType = attachType ?: "",
                     onChunk = { chunk ->
-                        streamBuilder.append(chunk)
-                        val now = android.os.SystemClock.elapsedRealtime()
-                        if (now - lastEmitMs >= 50L) {
-                            lastEmitMs = now
-                            _streamingContent.value = streamBuilder.toString()
+                        // Drop chunks from a superseded stream (generation changed).
+                        if (gen == streamGeneration) {
+                            streamBuilder.append(chunk)
+                            val now = android.os.SystemClock.elapsedRealtime()
+                            if (now - lastEmitMs >= 50L) {
+                                lastEmitMs = now
+                                _streamingContent.value = streamBuilder.toString()
+                            }
                         }
                     },
                     onToolCall = { id, name, args ->
@@ -289,35 +297,6 @@ class ChatViewModel @Inject constructor(
                 _errorMessage.value = e.message
             }
         }
-    }
-
-    private fun detectToolCalls(content: String) {
-        // Parse tool call JSON blocks: ```tool_call { ... } ```
-        val toolCallPattern = Regex(
-            """```tool_call\s*\n?(\{.*?\})\n?```""",
-            setOf(RegexOption.DOT_MATCHES_ALL)
-        )
-        val matches = toolCallPattern.findAll(content)
-        val calls = matches.mapNotNull { match ->
-            try {
-                val json = org.json.JSONObject(match.groupValues[1])
-                ToolCallInfo(
-                    name = json.optString("name", "unknown"),
-                    arguments = json.optString("arguments", ""),
-                    id = json.optString("id", ""),
-                    status = ToolCallStatus.RUNNING
-                )
-            } catch (e: Exception) { null }
-        }.toList()
-        if (calls.isNotEmpty()) {
-            _toolCalls.value = calls
-        }
-    }
-
-    fun retryLastMessage() {
-        val msgs = _messages.value
-        val lastUserMsg = msgs.lastOrNull { it.role == MessageRole.USER } ?: return
-        sendMessage(lastUserMsg.content)
     }
 
     fun getBaseUrl(): String = repository.getBaseUrl()
@@ -942,7 +921,7 @@ fun MessageBubble(
     onEdit: (() -> Unit)? = null
 ) {
     val isUser = message.role == MessageRole.USER
-    val isDark = MaterialTheme.colorScheme.background == DarkBg
+    val isDark = LocalDarkTheme.current
     val bubbleColor = if (isUser) {
         if (isDark) UserBubbleDark else UserBubbleLight
     } else {

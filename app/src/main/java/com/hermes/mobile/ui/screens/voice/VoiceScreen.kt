@@ -778,8 +778,10 @@ fun JarvisSphere(
             SphereColors(Color(0xFF3D8BFF), Color(0xFF2A3FD6), Color(0xFF8A3BFF), screenBg)
     }
 
-    // Speaking waveform phase
-    LaunchedEffect(state, ttsProgress) {
+    // Speaking waveform phase — keyed on STATE only (ttsProgress changes
+    // ~10x/sec while speaking; re-keying there cancelled the wave loop
+    // every ~100ms so the animation barely advanced).
+    LaunchedEffect(state) {
         if (state == SphereState.SPEAKING) {
             val job = scope.launch {
                 while (state == SphereState.SPEAKING) {
@@ -787,7 +789,7 @@ fun JarvisSphere(
                     delay(50)
                 }
             }
-            job.invokeOnCompletion { } // simplified - just cancel on recomposition
+            job.invokeOnCompletion { }
         }
     }
 

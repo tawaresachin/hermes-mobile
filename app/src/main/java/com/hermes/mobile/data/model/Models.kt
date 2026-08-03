@@ -3,28 +3,8 @@ package com.hermes.mobile.data.model
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
-import com.google.gson.annotations.SerializedName
 
 // ─── Chat / Message Models ───
-
-data class ChatRequest(
-    val query: String,
-    val session_id: String? = null,
-    val stream: Boolean = true
-)
-
-data class ChatResponse(
-    val message: String,
-    val session_id: String? = null,
-    val done: Boolean = true
-)
-
-data class StreamChunk(
-    val content: String? = null,
-    val done: Boolean = false,
-    @SerializedName("session_id")
-    val sessionId: String? = null
-)
 
 enum class MessageRole { USER, ASSISTANT, SYSTEM }
 
@@ -56,14 +36,6 @@ data class Session(
     val updatedAt: Long = System.currentTimeMillis(),
     val messageCount: Int = 0,
     val isActive: Boolean = true
-)
-
-data class SessionSummary(
-    val id: String,
-    val title: String?,
-    val created_at: String?,
-    val updated_at: String?,
-    val message_count: Int = 0
 )
 
 // ─── Model Info ───

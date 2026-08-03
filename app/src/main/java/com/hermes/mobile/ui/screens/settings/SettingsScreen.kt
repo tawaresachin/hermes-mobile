@@ -36,6 +36,7 @@ import com.hermes.mobile.ui.theme.*
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -389,11 +390,26 @@ fun SettingsScreen(
         ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null) {
-            viewModel.viewModelScope.launch {
+            viewModel.viewModelScope.launch(Dispatchers.Default) {
                 try {
-                    val inputStream = context.contentResolver.openInputStream(uri)
-                    val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
-                    inputStream?.close()
+                    // Decode OFF main thread and DOWNSAMPLED — a 12-48MP photo
+                    // decoded at full size + IntArray(w*h) is 48-190MB and OOMs.
+                    val bounds = android.graphics.BitmapFactory.Options().apply {
+                        inJustDecodeBounds = true
+                    }
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        android.graphics.BitmapFactory.decodeStream(input, null, bounds)
+                    }
+                    var sample = 1
+                    while (bounds.outWidth / sample > 1200 || bounds.outHeight / sample > 1200) {
+                        sample *= 2
+                    }
+                    val opts = android.graphics.BitmapFactory.Options().apply {
+                        inSampleSize = sample
+                    }
+                    val bitmap = context.contentResolver.openInputStream(uri)?.use { input ->
+                        android.graphics.BitmapFactory.decodeStream(input, null, opts)
+                    }
                     if (bitmap != null) {
                         val w = bitmap.width
                         val h = bitmap.height
@@ -403,7 +419,9 @@ fun SettingsScreen(
                         val binaryBitmap = com.google.zxing.BinaryBitmap(com.google.zxing.common.HybridBinarizer(source))
                         val result = com.google.zxing.MultiFormatReader().decode(binaryBitmap)
                         if (result?.text != null) {
-                            handleQrResult(result.text, viewModel)
+                            withContext(Dispatchers.Main) {
+                                handleQrResult(result.text, viewModel)
+                            }
                         }
                     }
                 } catch (e: Exception) {

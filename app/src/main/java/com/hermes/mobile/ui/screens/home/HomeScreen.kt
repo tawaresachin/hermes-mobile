@@ -9,7 +9,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.VectorConverter
 import androidx.compose.animation.fadeOut
@@ -85,7 +84,6 @@ import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.Session
 import com.hermes.mobile.data.repository.HermesRepository
-import com.hermes.mobile.ui.theme.DarkSurfaceVariant
 import com.hermes.mobile.ui.theme.ErrorRed
 import com.hermes.mobile.ui.theme.HermesAccent
 import com.hermes.mobile.ui.theme.HermesPrimary

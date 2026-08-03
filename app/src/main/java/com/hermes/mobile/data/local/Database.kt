@@ -22,9 +22,6 @@ interface SessionDao {
 
     @Query("UPDATE sessions SET messageCount = messageCount + 1, updatedAt = :timestamp WHERE id = :sessionId")
     suspend fun incrementMessageCount(sessionId: String, timestamp: Long = System.currentTimeMillis())
-
-    @Query("UPDATE sessions SET title = :title WHERE id = :sessionId")
-    suspend fun updateSessionTitle(sessionId: String, title: String)
 }
 
 @Dao
@@ -37,9 +34,6 @@ interface MessageDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: Message): Long
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertMessages(messages: List<Message>)
 
     @Query("UPDATE messages SET content = :content, isStreaming = :isStreaming WHERE id = :messageId")
     suspend fun updateMessage(messageId: Long, content: String, isStreaming: Boolean = false)
@@ -59,9 +53,6 @@ interface MessageDao {
         )
     """)
     suspend fun updateLastStreamingMessage(sessionId: String, content: String)
-
-    @Query("SELECT * FROM messages WHERE id = :messageId")
-    suspend fun getMessage(messageId: Long): Message?
 }
 
 @Database(

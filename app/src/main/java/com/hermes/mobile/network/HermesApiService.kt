@@ -93,13 +93,20 @@ class HermesApiService @Inject constructor(
         get() = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     // ── Server URL persistence ──
+    // baseUrl stays in plain prefs (non-secret); apiKey + setupToken go to
+    // SecurePrefs (AES256-GCM at rest) — same store device creds use.
 
     private var config: ServerConfig? = null
+
+    private val secretPrefs: SharedPreferences
+        get() = com.hermes.mobile.security.SecurePrefs.get(context, "hermes_config")
 
     fun updateConfig(cfg: ServerConfig) {
         config = cfg
         prefs.edit()
             .putString(KEY_BASE_URL, cfg.baseUrl)
+            .apply()
+        secretPrefs.edit()
             .putString(KEY_API_KEY, cfg.apiKey.orEmpty())
             .putString(KEY_SETUP_TOKEN, cfg.setupToken.orEmpty())
             .apply()
@@ -110,8 +117,8 @@ class HermesApiService @Inject constructor(
         val url = prefs.getString(KEY_BASE_URL, null) ?: return null
         val restored = ServerConfig(
             baseUrl = url,
-            apiKey = prefs.getString(KEY_API_KEY, "") ?: "",
-            setupToken = prefs.getString(KEY_SETUP_TOKEN, "") ?: "",
+            apiKey = secretPrefs.getString(KEY_API_KEY, "") ?: "",
+            setupToken = secretPrefs.getString(KEY_SETUP_TOKEN, "") ?: "",
         )
         config = restored
         return restored
@@ -121,26 +128,6 @@ class HermesApiService @Inject constructor(
 
     // ── Token refresh guard (one at a time) ──
     private val refreshLock = Mutex()
-
-    /**
-     * Execute a block and retry once on 401 after refreshing the token.
-     */
-    suspend fun <T> withAuthRetry(block: suspend () -> T): T {
-        try {
-            return block()
-        } catch (e: IOException) {
-            if (e.message?.contains("401") == true || e.message?.contains("Unauthorized") == true) {
-                val baseUrl = getBaseUrl()
-                refreshLock.withLock {
-                    val refreshed = authManager.refreshToken(baseUrl)
-                    if (refreshed) {
-                        return@withLock block()
-                    }
-                }
-            }
-            throw e
-        }
-    }
 
     // ─── Health Check ───
 

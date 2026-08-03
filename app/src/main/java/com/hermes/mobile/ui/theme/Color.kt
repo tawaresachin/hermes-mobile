@@ -54,22 +54,7 @@ val HermesSecondary     = TelegramBlue
 val HermesSecondaryDark = Color(0xFF1D4ED8)  // darker blue
 val HermesAccent        = TelegramBlue
 
-// Dark theme aliases
-val DarkBackground      = DarkBg
-val DarkSurfaceVariant  = DarkSurface2
-val DarkOnSurface        = DarkFg
-val DarkOnSurfaceVariant = DarkFgMuted
-
-// Light theme aliases
-val LightBackground      = LightBg
-val LightOnSurface        = LightFg
-val LightOnSurfaceVariant = LightFgMuted
-
 // Semantic aliases
 val ErrorRed      = TelegramRed
 val SuccessGreen  = TelegramGreen
 val WarningAmber  = TelegramAmber
-
-// Bubble aliases (used by ChatScreen imports)
-val UserBubble      = UserBubbleLight    // default light
-val AssistantBubble = OtherBubbleLight   // default light
