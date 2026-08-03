@@ -523,7 +523,12 @@ class VoiceViewModel @Inject constructor(
         return result
     }
 
-    /** Split text into (complete sentences, trailing partial). */
+    /**
+     * Split text into (complete sentences, trailing partial). Splits ONLY
+     * on real sentence enders — NOT newlines: LLM bullet lists
+     * ("1. x\n2. y") otherwise become 3-4 tiny TTS calls with dead air
+     * between them, which is what makes voice replies sound robotic.
+     */
     private fun splitSentences(text: String): Pair<List<String>, String> {
         val done = mutableListOf<String>()
         var last = 0
@@ -533,7 +538,7 @@ class VoiceViewModel @Inject constructor(
             val prevDigit = i > 0 && text[i - 1].isDigit()
             val nextDigit = i + 1 < text.length && text[i + 1].isDigit()
             val isDecimal = c == '.' && (prevDigit || nextDigit)
-            if (!isDecimal && (c == '.' || c == '!' || c == '?' || c == '।' || c == '\n')) {
+            if (!isDecimal && (c == '.' || c == '!' || c == '?' || c == '।')) {
                 val s = text.substring(last, i + 1).trim()
                 if (s.isNotBlank()) done.add(s)
                 last = i + 1
