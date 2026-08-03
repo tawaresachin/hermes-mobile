@@ -675,7 +675,15 @@ fun ChatScreen(
                     )
                 ) {
                     items(
-                        items = filteredMessages(searchQuery, messages),
+                        items = filteredMessages(searchQuery, messages).filter {
+                            // Never render blank assistant rows (whitespace-only
+                            // responses / abandoned placeholders) — they show
+                            // as unexplained gaps between messages. Streaming
+                            // placeholders stay (they carry the live text).
+                            it.role != MessageRole.ASSISTANT ||
+                                it.isStreaming ||
+                                it.content.isNotBlank()
+                        },
                         key = { it.id.toString() }
                     ) { message ->
                         val isStreamingThis = isStreaming && message.isStreaming
