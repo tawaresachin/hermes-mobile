@@ -82,12 +82,10 @@ fun MainNavigation(
     // Hide the bottom bar while the keyboard is open (Telegram behavior) —
     // otherwise it leaves a dead white band between the input bar and the IME.
     val isImeVisible = WindowInsets.isImeVisible
-    // Hide the bottom bar on the immersive Voice screen too
-    val isVoiceScreen = currentDestination?.route == Screen.Voice.route
 
     Scaffold(
         bottomBar = {
-            if (!isImeVisible && !isVoiceScreen) {
+            if (!isImeVisible) {
                 HermesBottomNavigationBar(
                     screens = bottomNavScreens,
                     currentDestination = currentDestination,
