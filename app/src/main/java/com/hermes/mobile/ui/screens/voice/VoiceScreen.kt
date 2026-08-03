@@ -1113,30 +1113,61 @@ fun JarvisSphere(
 
         }
 
-        // ── Model chip (top-left — opens the shared model picker) ──
-        Box(
+        // ── Top-left controls: reply-mode toggle + model chip ──
+        Row(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(top = 48.dp, start = 16.dp)
-                .clip(RoundedCornerShape(50))
-                .background(chipBg)
-                .border(1.dp, chipBorder, RoundedCornerShape(50))
-                .clickable { onOpenModelPicker() }
-                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .padding(top = 48.dp, start = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Filled.SmartToy,
-                contentDescription = null,
-                tint = Color(0xFFB44DFF),
-                modifier = Modifier.size(14.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = if (currentModel.isNotBlank())
-                    currentModel.substringAfterLast("/").take(18)
-                else "Model",
-                style = MaterialTheme.typography.labelMedium,
+            // Reply mode toggle: Stream (fast, per-sentence) vs Full reply
+            // (whole response, smoother prosody)
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(
+                        if (fullResponseMode) Color(0xFF8A3BFF).copy(alpha = if (isDark) 0.35f else 0.16f)
+                        else chipBg
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = if (fullResponseMode) Color(0xFFB44DFF) else chipBorder,
+                        shape = RoundedCornerShape(50)
+                    )
+                    .clickable { onToggleFullResponse() }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = if (fullResponseMode) "Full reply" else "Stream",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (fullResponseMode) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (fullResponseMode) Color.White else chipText
+                )
+            }
+
+            // Model chip — opens the shared model picker
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(chipBg)
+                    .border(1.dp, chipBorder, RoundedCornerShape(50))
+                    .clickable { onOpenModelPicker() }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.SmartToy,
+                    contentDescription = null,
+                    tint = Color(0xFFB44DFF),
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (currentModel.isNotBlank())
+                        currentModel.substringAfterLast("/").take(18)
+                    else "Model",
+                    style = MaterialTheme.typography.labelMedium,
                 color = cardContent,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -1148,8 +1179,9 @@ fun JarvisSphere(
                 tint = chipText,
                 modifier = Modifier.size(16.dp)
             )
-        }
-        }
+            } // Row (model chip content)
+            } // Box (model chip)
+        } // Row (top-left controls)
 
         // ── Top transcript bar (below the model chip — no overlap) ──
         if (transcript.isNotBlank()) {
@@ -1232,30 +1264,7 @@ fun JarvisSphere(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // ── Reply mode toggle: Stream (fast, per-sentence) vs
-                // Full reply (whole response, smoother prosody) ──
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(
-                            if (fullResponseMode) Color(0xFF8A3BFF).copy(alpha = if (isDark) 0.35f else 0.16f)
-                            else chipBg
-                        )
-                        .border(
-                            width = 1.dp,
-                            color = if (fullResponseMode) Color(0xFFB44DFF) else chipBorder,
-                            shape = RoundedCornerShape(50)
-                        )
-                        .clickable { onToggleFullResponse() }
-                        .padding(horizontal = 14.dp, vertical = 7.dp)
-                ) {
-                    Text(
-                        text = if (fullResponseMode) "Full reply" else "Stream",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = if (fullResponseMode) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (fullResponseMode) Color.White else chipText
-                    )
-                }
+                // ── Reply mode toggle lives next to the model chip (top) ──
                 VoiceLanguage.entries.forEach { lang ->
                     val selected = lang == language
                     Box(
