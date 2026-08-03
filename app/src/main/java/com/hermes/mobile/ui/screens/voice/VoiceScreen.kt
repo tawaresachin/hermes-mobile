@@ -98,6 +98,21 @@ class VoiceViewModel @Inject constructor(
     private val _language = MutableStateFlow(VoiceLanguage.ENGLISH)
     val language: StateFlow<VoiceLanguage> = _language.asStateFlow()
 
+    // ── Reply mode: stream (per-sentence, fast start) vs full (whole
+    // reply synthesized as a few large chunks — smoother prosody, slower
+    // first audio). Persisted across sessions. ──
+    private val _fullResponseMode = MutableStateFlow(
+        context.getSharedPreferences("voice_prefs", Context.MODE_PRIVATE)
+            .getBoolean("full_response_mode", false)
+    )
+    val fullResponseMode: StateFlow<Boolean> = _fullResponseMode.asStateFlow()
+
+    fun setFullResponseMode(on: Boolean) {
+        _fullResponseMode.value = on
+        context.getSharedPreferences("voice_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean("full_response_mode", on).apply()
+    }
+
     // ── Model selection (same live picker as chat — server-side active model) ──
     private val _currentModel = MutableStateFlow("")
     val currentModel: StateFlow<String> = _currentModel.asStateFlow()
@@ -209,12 +224,17 @@ class VoiceViewModel @Inject constructor(
                                     if (clean.isBlank()) return@sendMessage
                                     pending.append(clean)
                                     _voiceTranscript.value = pending.toString()
-                                    // Flush complete sentences to the TTS queue
-                                    val (done, rest) = splitSentences(pending.toString())
-                                    if (done.isNotEmpty()) {
-                                        done.forEach { ttsQueue.trySend(it) }
-                                        pending.setLength(0)
-                                        pending.append(rest)
+                                    // Stream mode: flush complete sentences
+                                    // to the TTS queue as they arrive. Full
+                                    // mode keeps accumulating — the whole
+                                    // reply is chunked once, at stream end.
+                                    if (!_fullResponseMode.value) {
+                                        val (done, rest) = splitSentences(pending.toString())
+                                        if (done.isNotEmpty()) {
+                                            done.forEach { ttsQueue.trySend(it) }
+                                            pending.setLength(0)
+                                            pending.append(rest)
+                                        }
                                     }
                                 }
                             )
@@ -227,8 +247,17 @@ class VoiceViewModel @Inject constructor(
                         // Always flush the trailing partial + close, even if
                         // sendMessage throws — otherwise the queue consumer
                         // would block on the open channel forever.
-                        if (pending.isNotBlank()) {
-                            ttsQueue.trySend(pending.toString())
+                        val finalText = pending.toString().trim()
+                        if (finalText.isNotBlank()) {
+                            if (_fullResponseMode.value) {
+                                // Speak the COMPLETE reply as a few large
+                                // chunks (≤3500 chars each, sentence-aligned)
+                                // — under the server's 4000-char TTS cap,
+                                // keeps whole-sentence prosody.
+                                chunkForTts(finalText).forEach { ttsQueue.trySend(it) }
+                            } else {
+                                ttsQueue.trySend(finalText)
+                            }
                         }
                         ttsQueue.close()
                     }
@@ -548,6 +577,32 @@ class VoiceViewModel @Inject constructor(
     }
 
     /**
+     * Split a complete reply into TTS chunks of ≤ maxLen chars, breaking
+     * at sentence boundaries so each synthesis keeps natural prosody and
+     * stays under the server's 4000-char TTS cap. Used by full-response
+     * mode (fewer, larger TTS calls than per-sentence streaming).
+     */
+    private fun chunkForTts(text: String, maxLen: Int = 3500): List<String> {
+        val (sentences, tail) = splitSentences(text)
+        val chunks = mutableListOf<String>()
+        val cur = StringBuilder()
+        fun flush() {
+            if (cur.isNotBlank()) chunks.add(cur.toString().trim())
+            cur.setLength(0)
+        }
+        for (s in sentences) {
+            if (cur.isNotEmpty() && cur.length + s.length > maxLen) flush()
+            cur.append(s).append(' ')
+        }
+        if (tail.isNotBlank()) {
+            if (cur.isNotEmpty() && cur.length + tail.length > maxLen) flush()
+            cur.append(tail)
+        }
+        flush()
+        return chunks
+    }
+
+    /**
      * JARVIS-style echo rejection/salvage with FUZZY matching.
      * Echo survives STT mis-transcription (e.g. "explores"→"laws") because
      * words are matched by Levenshtein similarity, not exact equality.
@@ -708,6 +763,7 @@ fun VoiceScreen(
     val currentModel by vm.currentModel.collectAsState()
     val availableModels by vm.availableModels.collectAsState()
     val modelsLoading by vm.modelsLoading.collectAsState()
+    val fullResponseMode by vm.fullResponseMode.collectAsState()
 
     var showModelPicker by remember { mutableStateOf(false) }
 
@@ -768,6 +824,8 @@ fun VoiceScreen(
             vm.loadModels()
             showModelPicker = true
         },
+        fullResponseMode = fullResponseMode,
+        onToggleFullResponse = { vm.setFullResponseMode(!fullResponseMode) },
         onTap = {
             when (state) {
                 SphereState.SPEAKING -> vm.interruptTts()
@@ -877,6 +935,8 @@ fun JarvisSphere(
     onLanguageSelected: (VoiceLanguage) -> Unit = {},
     currentModel: String = "",
     onOpenModelPicker: () -> Unit = {},
+    fullResponseMode: Boolean = false,
+    onToggleFullResponse: () -> Unit = {},
     onTap: () -> Unit,
     onExit: () -> Unit,
     modifier: Modifier = Modifier
@@ -1172,6 +1232,30 @@ fun JarvisSphere(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // ── Reply mode toggle: Stream (fast, per-sentence) vs
+                // Full reply (whole response, smoother prosody) ──
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (fullResponseMode) Color(0xFF8A3BFF).copy(alpha = if (isDark) 0.35f else 0.16f)
+                            else chipBg
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = if (fullResponseMode) Color(0xFFB44DFF) else chipBorder,
+                            shape = RoundedCornerShape(50)
+                        )
+                        .clickable { onToggleFullResponse() }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                ) {
+                    Text(
+                        text = if (fullResponseMode) "Full reply" else "Stream",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (fullResponseMode) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (fullResponseMode) Color.White else chipText
+                    )
+                }
                 VoiceLanguage.entries.forEach { lang ->
                     val selected = lang == language
                     Box(
