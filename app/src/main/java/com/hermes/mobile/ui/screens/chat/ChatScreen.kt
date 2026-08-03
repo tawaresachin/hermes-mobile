@@ -526,10 +526,11 @@ fun ChatScreen(
     // Auto-scroll to bottom — only when already near the bottom (don't yank users reading history)
     LaunchedEffect(messages.size, streamingContent) {
         if (messages.isNotEmpty()) {
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val nearBottom = lastVisible >= messages.size - 3
+            // Reverse layout: index 0 is the bottom (newest message).
+            val firstVisible = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
+            val nearBottom = firstVisible <= 3
             if (nearBottom || streamingContent.isNotBlank()) {
-                listState.scrollToItem(messages.size - 1)
+                listState.scrollToItem(0)
             }
         }
     }
@@ -666,6 +667,10 @@ fun ChatScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
+                    // Telegram-style: newest message hugs the input bar,
+                    // history grows UPWARD. With few messages the blank
+                    // space sits ABOVE (not between messages and input).
+                    reverseLayout = true,
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                     contentPadding = PaddingValues(
                         start = 8.dp,
@@ -674,16 +679,38 @@ fun ChatScreen(
                         bottom = 2.dp
                     )
                 ) {
+                    // Reverse layout renders FIRST declared items at the
+                    // BOTTOM — so declare bottom-most UI first:
+                    // 1. typing pulse (very bottom, above the input)
+                    // 2. tool-execution cards (inline, under the newest msg)
+                    // 3. messages, newest first
+                    if (isStreaming && streamingContent.isBlank()) {
+                        item(key = "typing_indicator") { TypingIndicator() }
+                    }
+                    if (isStreaming && toolCalls.isNotEmpty()) {
+                        item(key = "tool_calls") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
+                            }
+                        }
+                    }
                     items(
-                        items = filteredMessages(searchQuery, messages).filter {
-                            // Never render blank assistant rows (whitespace-only
-                            // responses / abandoned placeholders) — they show
-                            // as unexplained gaps between messages. Streaming
-                            // placeholders stay (they carry the live text).
-                            it.role != MessageRole.ASSISTANT ||
-                                it.isStreaming ||
-                                it.content.isNotBlank()
-                        },
+                        items = filteredMessages(searchQuery, messages)
+                            .asReversed()
+                            .filter {
+                                // Never render blank assistant rows (whitespace-only
+                                // responses / abandoned placeholders) — they show
+                                // as unexplained gaps between messages. Streaming
+                                // placeholders stay (they carry the live text).
+                                it.role != MessageRole.ASSISTANT ||
+                                    it.isStreaming ||
+                                    it.content.isNotBlank()
+                            },
                         key = { it.id.toString() }
                     ) { message ->
                         val isStreamingThis = isStreaming && message.isStreaming
@@ -702,23 +729,6 @@ fun ChatScreen(
                                 }
                             } else null
                         )
-                    }
-                    // Tool-execution cards scroll INLINE with the conversation
-                    // (never a floating panel overlapping the chat).
-                    if (isStreaming && toolCalls.isNotEmpty()) {
-                        item(key = "tool_calls") {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 4.dp, vertical = 4.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
-                            }
-                        }
-                    }
-                    if (isStreaming && streamingContent.isBlank()) {
-                        item(key = "typing_indicator") { TypingIndicator() }
                     }
                 }
             }
@@ -955,17 +965,24 @@ fun MessageBubble(
         else baseUrl.trimEnd('/') + rel
     }
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = alignment
-    ) {
-        Column(
-            modifier = Modifier
-                .widthIn(max = 480.dp)
-                .animateContentSize(
-                    animationSpec = tween(durationMillis = 200)
-                )
+    // Telegram-style bubble: width hugs the text (wraps), never wider than
+    // ~78% of the available space — short texts get small bubbles.
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val bubbleMax = this.maxWidth * 0.78f
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = alignment
         ) {
+            // Box so the tail can OVERLAY the bubble's top corner (a Column
+            // child would render below the bubble instead).
+            Box {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = bubbleMax)
+                    .animateContentSize(
+                        animationSpec = tween(durationMillis = 200)
+                    )
+            ) {
             Surface(
                 shape = bubbleShape,
                 color = bubbleColor,
@@ -1044,6 +1061,32 @@ fun MessageBubble(
                     }
                 }
             }
+            } // Column (bubble)
+            // ── Telegram-style tail (small arrow at the top corner) — a
+            // BOX child so it overlays the bubble corner (BoxScope.align
+            // accepts full alignments; ColumnScope only horizontal ones).
+            Canvas(
+                modifier = Modifier
+                    .align(if (isUser) Alignment.TopEnd else Alignment.TopStart)
+                    .size(9.dp)
+            ) {
+                val tailPath = Path().apply {
+                    if (isUser) {
+                        // Right-side bubble: tail at the top-right, pointing out
+                        moveTo(0f, 9.dp.toPx())
+                        lineTo(9.dp.toPx(), 0f)
+                        lineTo(9.dp.toPx(), 9.dp.toPx())
+                    } else {
+                        // Left-side bubble: tail at the top-left, pointing out
+                        moveTo(0f, 0f)
+                        lineTo(9.dp.toPx(), 9.dp.toPx())
+                        lineTo(0f, 9.dp.toPx())
+                    }
+                    close()
+                }
+                drawPath(tailPath, bubbleColor)
+            }
+            } // Box (tail overlay)
         }
     }
 }
