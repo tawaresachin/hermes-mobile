@@ -1,5 +1,6 @@
 package com.hermes.mobile.ui.screens.chat
 
+import com.hermes.mobile.BuildConfig
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -595,6 +596,14 @@ fun ChatScreen(
                             color = HermesPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
+                        )
+                        // Build tag — visible in every screenshot so a stale
+                        // install is immediately obvious (user reports layout
+                        // bugs against builds that weren't actually running).
+                        Text(
+                            text = "v${BuildConfig.VERSION_NAME}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
                     }
                     Spacer(modifier = Modifier.width(4.dp))
