@@ -172,12 +172,11 @@ class HomeViewModel @Inject constructor(
             // Use saved config (from Settings) instead of blank defaults
             val savedConfig = repository.getSavedConfig()
             if (savedConfig != null) {
-                // Check connection with saved config (won't overwrite with empty values)
+                // Check connection with saved config (won't overwrite with empty values).
+                // ONE call — RTT measured on the same request (was: two calls).
+                val start = System.currentTimeMillis()
                 val status = repository.checkConnection(savedConfig)
                 val latency = if (status == ConnectionStatus.CONNECTED) {
-                    // Perform a lightweight connection check to measure RTT
-                    val start = System.currentTimeMillis()
-                    repository.checkConnection(savedConfig)
                     System.currentTimeMillis() - start
                 } else 0L
                 _uiState.update { state ->

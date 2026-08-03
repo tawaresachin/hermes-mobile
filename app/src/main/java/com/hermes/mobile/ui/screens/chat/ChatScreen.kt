@@ -120,13 +120,6 @@ class ChatViewModel @Inject constructor(
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.DISCONNECTED)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
 
-    // ── Voice recording ──
-    private val _isRecording = MutableStateFlow(false)
-    val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
-
-    private val _recordingAmplitude = MutableStateFlow(0f)
-    val recordingAmplitude: StateFlow<Float> = _recordingAmplitude.asStateFlow()
-
     // ── Model selection ──
     private val _currentModel = MutableStateFlow("")
     val currentModel: StateFlow<String> = _currentModel.asStateFlow()
@@ -138,7 +131,11 @@ class ChatViewModel @Inject constructor(
     val modelsLoading: StateFlow<Boolean> = _modelsLoading.asStateFlow()
 
     // ── Emoji picker ──
-    val showEmojiPicker = MutableStateFlow(false)
+    var showEmojiPicker = MutableStateFlow(false)
+        private set
+
+    fun toggleEmojiPicker() { showEmojiPicker.value = !showEmojiPicker.value }
+    fun hideEmojiPicker() { showEmojiPicker.value = false }
 
     // ── Error state ──
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -240,9 +237,10 @@ class ChatViewModel @Inject constructor(
             _toolCalls.value = emptyList()
             _errorMessage.value = null
 
-            // StringBuilder avoids O(n²) re-concat per chunk; UI reads via a
-            // throttled accumulator below.
+            // StringBuilder avoids O(n²) re-concat per chunk; emissions are
+            // time-throttled (≤20/s) so the UI doesn't recompose per chunk.
             val streamBuilder = StringBuilder()
+            var lastEmitMs = 0L
 
             try {
                 repository.sendMessage(
@@ -252,7 +250,11 @@ class ChatViewModel @Inject constructor(
                     attachType = attachType ?: "",
                     onChunk = { chunk ->
                         streamBuilder.append(chunk)
-                        _streamingContent.value = streamBuilder.toString()
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (now - lastEmitMs >= 50L) {
+                            lastEmitMs = now
+                            _streamingContent.value = streamBuilder.toString()
+                        }
                     },
                     onToolCall = { id, name, args ->
                         val tc = ToolCallInfo(
@@ -273,6 +275,8 @@ class ChatViewModel @Inject constructor(
                     }
                 )
                 _isStreaming.value = false
+                // Clear streaming buffer — the finalized message (full content,
+                // repo-side) replaces the streaming bubble in the list.
                 _streamingContent.value = ""
                 // Cancel any prior delayed clear so it can't wipe the NEXT message's tool calls
                 toolClearJob?.cancel()
@@ -317,16 +321,6 @@ class ChatViewModel @Inject constructor(
     }
 
     fun getBaseUrl(): String = repository.getBaseUrl()
-
-    // ── Voice dictation ──
-    fun startRecording() {
-        // Voice recording handled by startVoiceDictation() in ChatScreen directly
-        // via SpeechRecognizer with permission launcher
-    }
-
-    fun stopRecording() {
-        // No-op — voice recording managed by permission launcher
-    }
 
     // ── Connection ──
     fun checkConnection() {
@@ -468,8 +462,6 @@ fun ChatScreen(
     val streamingContent by vm.streamingContent.collectAsState()
     val isStreaming by vm.isStreaming.collectAsState()
     val connectionStatus by vm.connectionStatus.collectAsState()
-    val isRecording by vm.isRecording.collectAsState()
-    val recordingAmplitude by vm.recordingAmplitude.collectAsState()
     val toolCalls by vm.toolCalls.collectAsState()
     val errorMessage by vm.errorMessage.collectAsState()
     val sessionIdState by vm.sessionId.collectAsState()
@@ -496,7 +488,7 @@ fun ChatScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            vm.showEmojiPicker.value = false
+            vm.hideEmojiPicker()
             scope.launch(Dispatchers.IO) {
                 val cr = context.contentResolver
                 val mimeType = cr.getType(uri) ?: "application/octet-stream"
@@ -745,17 +737,6 @@ fun ChatScreen(
             }
         }
 
-        AnimatedVisibility(
-            visible = isRecording,
-            enter = fadeIn() + slideInVertically { it },
-            exit = fadeOut() + slideOutVertically { it }
-        ) {
-            VoiceRecordingBar(
-                amplitude = recordingAmplitude,
-                onStop = { vm.stopRecording() }
-            )
-        }
-
         InputBar(
             inputText = inputText,
             onInputChange = { inputText = it },
@@ -789,15 +770,14 @@ fun ChatScreen(
             },
             onEmoji = { emoji ->
                 inputText += emoji
-                vm.showEmojiPicker.value = false
+                vm.hideEmojiPicker()
             },
             onAttach = { filePickerLauncher.launch(arrayOf("*/*")) },
             pendingAttachment = pendingAttachment,
             onRemoveAttachment = { pendingAttachment = null },
-            isRecording = isRecording,
             isStreaming = isStreaming,
             showEmojiPicker = showEmojiPicker,
-            onToggleEmojiPicker = { vm.showEmojiPicker.value = !vm.showEmojiPicker.value },
+            onToggleEmojiPicker = { vm.toggleEmojiPicker() },
             enabled = sessionIdState != null
         )
 
@@ -1322,54 +1302,6 @@ fun ToolCallCard(toolCall: ToolCallInfo) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Voice recording bar
-// ═══════════════════════════════════════════════════════════════
-
-@Composable
-fun VoiceRecordingBar(
-    amplitude: Float,
-    onStop: () -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 8.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Filled.Mic,
-                    contentDescription = null,
-                    tint = ErrorRed,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Recording…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-            TextButton(onClick = onStop) {
-                Icon(
-                    imageVector = Icons.Filled.Stop,
-                    contentDescription = "Stop",
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Stop")
-            }
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
 // Attachment preview (shown above text field before send)
 // ═══════════════════════════════════════════════════════════════
 
@@ -1551,7 +1483,6 @@ fun InputBar(
     onAttach: () -> Unit,
     pendingAttachment: PendingAttachment?,
     onRemoveAttachment: () -> Unit,
-    isRecording: Boolean,
     isStreaming: Boolean,
     showEmojiPicker: Boolean,
     onToggleEmojiPicker: () -> Unit,
@@ -1684,10 +1615,10 @@ fun InputBar(
                                 containerColor = HermesPrimary,
                                 contentColor = Color.White
                             ),
-                            enabled = enabled && !isRecording
+                            enabled = enabled
                         ) {
                             Icon(
-                                imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
+                                imageVector = Icons.Filled.Mic,
                                 contentDescription = "Voice input",
                                 modifier = Modifier.size(20.dp)
                             )
