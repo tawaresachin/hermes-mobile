@@ -480,6 +480,12 @@ fun ChatScreen(
 
     var inputText by remember { mutableStateOf("") }
     var pendingAttachment by remember { mutableStateOf<PendingAttachment?>(null) }
+    // Message being edited (loads its text into the input; resend stays in
+    // the SAME session instead of spawning a new chat).
+    var editingMessageId by remember { mutableStateOf<String?>(null) }
+    // Local in-chat search over the loaded messages.
+    var showSearch by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     // ── Model picker state ──
@@ -629,22 +635,31 @@ fun ChatScreen(
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 // Search
-                IconButton(onClick = { }) {
+                IconButton(onClick = { showSearch = !showSearch; searchQuery = "" }) {
                     Icon(
                         imageVector = Icons.Filled.Search,
                         contentDescription = "Search",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = if (showSearch) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 // New chat
                 IconButton(onClick = { vm.clearSession() }) {
                     Icon(
-                        imageVector = Icons.Filled.Edit,
+                        imageVector = Icons.Filled.Add,
                         contentDescription = "New chat",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
+        }
+
+        AnimatedVisibility(visible = showSearch) {
+            ChatSearchBar(
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                resultCount = visibleMessagesCount(searchQuery, messages),
+                onClose = { showSearch = false; searchQuery = "" }
+            )
         }
 
         ConnectionStatusBar(connectionStatus = connectionStatus)
@@ -688,14 +703,25 @@ fun ChatScreen(
                         bottom = 2.dp
                     )
                 ) {
-                    items(items = messages, key = { it.id }) { message ->
+                    items(
+                        items = filteredMessages(searchQuery, messages),
+                        key = { it.id.toString() }
+                    ) { message ->
                         val isStreamingThis = isStreaming && message.isStreaming
                         val displayContent = if (isStreamingThis) streamingContent else message.content
                         MessageBubble(
                             message = message,
                             displayContent = displayContent,
                             isStreaming = isStreamingThis,
-                            baseUrl = vm.getBaseUrl()
+                            baseUrl = vm.getBaseUrl(),
+                            onEdit = if (message.role == MessageRole.USER && !isStreamingThis) {
+                                {
+                                    editingMessageId = message.id.toString()
+                                    inputText = message.content
+                                    showSearch = false
+                                    searchQuery = ""
+                                }
+                            } else null
                         )
                     }
                     // Tool-execution cards scroll INLINE with the conversation
@@ -737,6 +763,7 @@ fun ChatScreen(
                 // Use ViewModel scope so cancellation doesn't lose messages
                 vm.sendWithAttachment(inputText.trim(), pendingAttachment, context, onAttachComplete = {
                     pendingAttachment = null
+                    editingMessageId = null
                     inputText = ""
                 })
             },
@@ -931,7 +958,8 @@ fun MessageBubble(
     message: Message,
     displayContent: String,
     isStreaming: Boolean,
-    baseUrl: String = ""
+    baseUrl: String = "",
+    onEdit: (() -> Unit)? = null
 ) {
     val isUser = message.role == MessageRole.USER
     val isDark = MaterialTheme.colorScheme.background == DarkBg
@@ -1017,6 +1045,35 @@ fun MessageBubble(
                     if (isStreaming) {
                         Spacer(modifier = Modifier.height(4.dp))
                         StreamingIndicator(color = textColor.copy(alpha = 0.6f))
+                    }
+                    // Edit affordance for finished user messages — loads the
+                    // text back into the input to resend in the SAME session.
+                    if (onEdit != null && !isStreaming && isUser && displayContent.isNotBlank()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Edit",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = textColor.copy(alpha = 0.6f)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            IconButton(
+                                onClick = onEdit,
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Edit,
+                                    contentDescription = "Edit message",
+                                    tint = textColor.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1774,6 +1831,70 @@ fun EmojiPickerGrid(
                     textAlign = TextAlign.Center
                 )
             }
+        }
+    }
+}
+
+// ── Local in-chat search helpers ──
+
+/** Filter the loaded messages by [query] (case-insensitive substring). */
+private fun filteredMessages(query: String, messages: List<Message>): List<Message> {
+    if (query.isBlank()) return messages
+    val q = query.trim()
+    return messages.filter { it.content.contains(q, ignoreCase = true) }
+}
+
+/** Number of loaded messages matching the query. */
+private fun visibleMessagesCount(query: String, messages: List<Message>): Int =
+    filteredMessages(query, messages).size
+
+/** Stripped-down search bar shown when the lens is active. */
+@Composable
+private fun ChatSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    resultCount: Int,
+    onClose: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Search,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        TextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.weight(1f),
+            placeholder = { Text("Search in this chat") },
+            singleLine = true,
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+                focusedIndicatorColor = HermesPrimary,
+                unfocusedIndicatorColor = MaterialTheme.colorScheme.outlineVariant,
+            )
+        )
+        if (query.isNotBlank()) {
+            Text(
+                text = "$resultCount",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 8.dp)
+            )
+        }
+        IconButton(onClick = onClose) {
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = "Close search",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
