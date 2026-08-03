@@ -789,23 +789,37 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
                 ) {
+                    // Prerequisite section FIRST — Tailscale must be up on
+                    // both devices before anything else works.
+                    SetupHelpSection(
+                        title = "✅ 0. Prerequisite — Tailscale (both devices)",
+                        steps = listOf(
+                            "Install the free Tailscale app on BOTH the server machine and this phone",
+                            "Install from tailscale.com/download (Windows / macOS / Linux / Android)",
+                            "Sign in BOTH devices to the SAME Tailscale account and enable the VPN",
+                            "Each device gets a 100.x address — that's the secure P2P link to your bridge",
+                            "Verify both show online in the Tailscale app before continuing"
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
                     SetupHelpSection(
                         title = "🖥 1. Server-side (on the machine with Hermes Agent)",
                         steps = listOf(
-                            "Install the bridge:  python3 install.py  (or: hermes mobile-serve)",
-                            "The server starts and prints a pairing URL in the console",
-                            "Open the URL in a browser:  http://<ip>:9119/setup?token=…",
-                            "Register or log in — the page then shows your sign-in QR",
-                            "Prerequisite: Hermes Agent installed + an internet connection"
+                            "One-line installer (works on Windows/macOS/Linux/Android):",
+                            "   curl -fsSL https://raw.githubusercontent.com/tawaresachin/hermes-mobile-bridge/main/install.py | python3 -",
+                            "Or use the built-in command:  hermes mobile-serve",
+                            "The installer starts the bridge; the console prints a pairing URL",
+                            "On that computer, open the printed URL:  http://100.x.x.x:9119/setup?token=…",
+                            "Register or log in — the page then shows your 15-min sign-in QR"
                         )
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     SetupHelpSection(
                         title = "📱 2. App-side (this phone)",
                         steps = listOf(
-                            "Install the Hermes Mobile APK (v2.18+)",
+                            "Install the Hermes Mobile APK (v2.19+)",
                             "Open Settings → tap 'Scan QR Code'",
-                            "Point the camera at the QR on the setup page",
+                            "Aim the camera at the QR shown on the setup page",
                             "The app auto-configures the server URL + key",
                             "It signs in as your registered account — Chat, Voice & Sessions unlock"
                         )
@@ -816,8 +830,8 @@ fun SettingsScreen(
                         steps = listOf(
                             "The sign-in QR is valid for 15 minutes after you register on the page",
                             "Expired QR? Reopen the setup page, log in again — a fresh QR appears",
-                            "Tailscale (100.x) is the fastest route — both devices on the tailnet",
                             "Connection shows 'Connected via Tailscale' when the P2P link is live",
+                            "Not connecting? Confirm BOTH devices are online in Tailscale",
                             "Log out → Chat/Voice/Sessions lock until you sign in again"
                         )
                     )
