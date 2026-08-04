@@ -1,6 +1,5 @@
 package com.hermes.mobile.ui.screens.chat
 
-import com.hermes.mobile.BuildConfig
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -35,6 +34,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
@@ -597,22 +597,6 @@ fun ChatScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        // Build tag — visible in every screenshot so a stale
-                        // install is immediately obvious (user reports layout
-                        // bugs against builds that weren't actually running).
-                        // Debug: live scroll index/total so we can see exactly
-                        // what the list believes its position is.
-                        val dbgScroll = remember { mutableStateOf("") }
-                        LaunchedEffect(listState) {
-                            snapshotFlow {
-                                listState.firstVisibleItemIndex to listState.layoutInfo.totalItemsCount
-                            }.collect { (idx, total) -> dbgScroll.value = "$idx/$total" }
-                        }
-                        Text(
-                            text = "v${BuildConfig.VERSION_NAME} · ${dbgScroll.value}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                        )
                     }
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
@@ -683,11 +667,16 @@ fun ChatScreen(
             } else {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    // Telegram-style: newest message hugs the input bar,
-                    // history grows UPWARD. With few messages the blank
-                    // space sits ABOVE (not between messages and input).
-                    reverseLayout = true,
+                    // Telegram-style bottom anchoring via the INVERTED LIST
+                    // trick (bulletproof — does not rely on reverseLayout
+                    // semantics): the whole list is flipped vertically so
+                    // item 0 renders at the BOTTOM edge; each item is
+                    // flipped back so content reads normally. Short content
+                    // is mathematically forced to the bottom; history grows
+                    // upward. Blank space sits ABOVE the conversation.
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { scaleY = -1f },
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                     contentPadding = PaddingValues(
                         start = 8.dp,
@@ -696,23 +685,27 @@ fun ChatScreen(
                         bottom = 2.dp
                     )
                 ) {
-                    // Reverse layout renders FIRST declared items at the
-                    // BOTTOM — so declare bottom-most UI first:
+                    // Inverted list: FIRST declared items render at the
+                    // visual BOTTOM — declare bottom-most UI first:
                     // 1. typing pulse (very bottom, above the input)
                     // 2. tool-execution cards (inline, under the newest msg)
                     // 3. messages, newest first
                     if (isStreaming && streamingContent.isBlank()) {
-                        item(key = "typing_indicator") { TypingIndicator() }
+                        item(key = "typing_indicator") {
+                            Box(Modifier.graphicsLayer { scaleY = -1f }) { TypingIndicator() }
+                        }
                     }
                     if (isStreaming && toolCalls.isNotEmpty()) {
                         item(key = "tool_calls") {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 4.dp, vertical = 4.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
+                            Box(Modifier.graphicsLayer { scaleY = -1f }) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
+                                }
                             }
                         }
                     }
@@ -732,20 +725,22 @@ fun ChatScreen(
                     ) { message ->
                         val isStreamingThis = isStreaming && message.isStreaming
                         val displayContent = if (isStreamingThis) streamingContent else message.content
-                        MessageBubble(
-                            message = message,
-                            displayContent = displayContent,
-                            isStreaming = isStreamingThis,
-                            baseUrl = vm.getBaseUrl(),
-                            onEdit = if (message.role == MessageRole.USER && !isStreamingThis) {
-                                {
-                                    editingMessageId = message.id.toString()
-                                    inputText = message.content
-                                    showSearch = false
-                                    searchQuery = ""
-                                }
-                            } else null
-                        )
+                        Box(Modifier.graphicsLayer { scaleY = -1f }) {
+                            MessageBubble(
+                                message = message,
+                                displayContent = displayContent,
+                                isStreaming = isStreamingThis,
+                                baseUrl = vm.getBaseUrl(),
+                                onEdit = if (message.role == MessageRole.USER && !isStreamingThis) {
+                                    {
+                                        editingMessageId = message.id.toString()
+                                        inputText = message.content
+                                        showSearch = false
+                                        searchQuery = ""
+                                    }
+                                } else null
+                            )
+                        }
                     }
                 }
             }
