@@ -32,6 +32,7 @@ import com.hermes.mobile.auth.AuthManager
 import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.ServerConfig
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.theme.*
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -436,6 +437,8 @@ fun SettingsScreen(
     var showSetupHelp by remember { mutableStateOf(false) }
 
     CompositionLocalProvider(LocalDarkTheme provides uiState.isDarkTheme) {
+        Box(modifier = Modifier.fillMaxSize()) {
+        HermesWatermark()
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -952,6 +955,7 @@ fun SettingsScreen(
                     }
                 }
             }
+        }
         }
     }
 }

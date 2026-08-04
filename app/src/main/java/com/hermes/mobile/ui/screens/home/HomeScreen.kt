@@ -84,6 +84,7 @@ import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.Session
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.theme.ErrorRed
 import com.hermes.mobile.ui.theme.HermesAccent
 import com.hermes.mobile.ui.theme.HermesPrimary
@@ -243,6 +244,8 @@ fun HomeScreen(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
     ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+        HermesWatermark()
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -305,6 +308,7 @@ fun HomeScreen(
                     )
                 }
             }
+        }
         }
     }
 }

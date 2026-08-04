@@ -51,6 +51,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ModelInfo
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.components.ModelPickerSheet
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -1014,6 +1015,8 @@ fun JarvisSphere(
             },
         contentAlignment = Alignment.Center
     ) {
+        // ── Faded Hermes watermark (same on every screen) ──
+        HermesWatermark()
         // ── Vignette ──
         Canvas(modifier = Modifier.fillMaxSize()) {
             val cx = center.x

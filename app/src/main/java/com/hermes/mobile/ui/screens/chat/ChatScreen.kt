@@ -62,6 +62,7 @@ import coil.compose.AsyncImage
 import com.hermes.mobile.data.local.AppDatabase
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.components.ModelPickerSheet
 import com.hermes.mobile.R
 import com.hermes.mobile.ui.theme.*
@@ -655,16 +656,8 @@ fun ChatScreen(
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            // Faded Hermes watermark — visible on both light & dark themes
-            Image(
-                painter = painterResource(R.drawable.hermes_watermark),
-                contentDescription = null,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(240.dp)
-                    .alpha(0.10f),
-                contentScale = ContentScale.Fit
-            )
+            // Faded Hermes watermark — same on every screen (shared component)
+            HermesWatermark()
             if (messages.isEmpty() && !isStreaming) {
                 EmptyChatState()
             } else {

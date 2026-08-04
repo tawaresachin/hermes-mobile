@@ -28,6 +28,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.Session
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -215,6 +216,7 @@ fun SessionsScreen(
             )
         }
     ) { innerPadding ->
+        HermesWatermark()
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = viewModel::refresh,
