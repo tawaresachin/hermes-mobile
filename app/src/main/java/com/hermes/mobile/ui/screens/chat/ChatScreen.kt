@@ -563,11 +563,14 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(modifier = Modifier.width(4.dp))
-                // Hermes logo (launcher icon — purple circle + H), not a paper plane
+                // Hermes logo — the girl portrait (circle-clipped), not the
+                // old purple-H monogram
                 Image(
-                    painter = painterResource(R.drawable.ic_launcher_foreground),
+                    painter = painterResource(R.drawable.hermes_girl),
                     contentDescription = "Hermes",
-                    modifier = Modifier.size(30.dp)
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 // Model chip (tappable — opens model picker)

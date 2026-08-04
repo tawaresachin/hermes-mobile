@@ -3,4 +3,5 @@
     <!-- Only hermes_background_dark is referenced (launcher icons).
          App UI colors live in Color.kt (Compose). -->
     <color name="hermes_background_dark">#FF070712</color>
+    <color name="hermes_icon_bg">#FFFFFFFF</color>
 </resources>
