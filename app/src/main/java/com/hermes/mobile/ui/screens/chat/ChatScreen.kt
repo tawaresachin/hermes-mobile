@@ -600,8 +600,16 @@ fun ChatScreen(
                         // Build tag — visible in every screenshot so a stale
                         // install is immediately obvious (user reports layout
                         // bugs against builds that weren't actually running).
+                        // Debug: live scroll index/total so we can see exactly
+                        // what the list believes its position is.
+                        val dbgScroll = remember { mutableStateOf("") }
+                        LaunchedEffect(listState) {
+                            snapshotFlow {
+                                listState.firstVisibleItemIndex to listState.layoutInfo.totalItemsCount
+                            }.collect { (idx, total) -> dbgScroll.value = "$idx/$total" }
+                        }
                         Text(
-                            text = "v${BuildConfig.VERSION_NAME}",
+                            text = "v${BuildConfig.VERSION_NAME} · ${dbgScroll.value}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
