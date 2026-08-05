@@ -1061,17 +1061,13 @@ fun MessageBubble(
             Column(
                 modifier = Modifier
                     .widthIn(max = bubbleMax)
-                    // Snap while streaming (20Hz text updates must not run a
-                    // 200ms size animation per chunk — that's layout churn);
-                    // animate only for non-streaming size changes.
-                    .animateContentSize(
-                        animationSpec = if (isStreaming) snap() else tween(durationMillis = 200)
-                    )
             ) {
             Surface(
                 shape = bubbleShape,
                 color = bubbleColor,
-                shadowElevation = 2.dp
+                // No shadowElevation: per-bubble shadows are the classic
+                // Compose list-scroll jank source (Telegram bubbles are flat).
+                shadowElevation = 0.dp
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                     // ── Image attachment ──
@@ -1216,20 +1212,14 @@ fun StreamingText(
     color: Color,
     modifier: Modifier = Modifier
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "streaming")
-    val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.7f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "streamingAlpha"
-    )
+    // STATIC text — the old infinite alpha pulse animated the whole text
+    // layer at 60fps (every frame re-rendered the bubble → scroll jank
+    // while streaming). The blinking cursor is StreamingIndicator's tiny
+    // separate glyph, which is cheap to animate.
     Text(
-        text = text + " ▊",
+        text = text,
         style = style,
-        color = color.copy(alpha = alpha),
+        color = color,
         modifier = modifier
     )
 }
