@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface SessionDao {
-    @Query("SELECT * FROM sessions ORDER BY updatedAt DESC LIMIT 10")
+    @Query("SELECT * FROM sessions ORDER BY updatedAt DESC")
     fun getAllSessions(): Flow<List<Session>>
 
     @Query("SELECT * FROM sessions WHERE id = :sessionId")
@@ -53,6 +53,12 @@ interface MessageDao {
         )
     """)
     suspend fun updateLastStreamingMessage(sessionId: String, content: String)
+
+    // Process-death cleanup: streaming placeholders left as isStreaming=1
+    // when the app died mid-stream would otherwise render the NEXT stream's
+    // live text into a stale bubble too (two bubbles, same text).
+    @Query("UPDATE messages SET isStreaming = 0 WHERE sessionId = :sessionId AND isStreaming = 1")
+    suspend fun finalizeStaleStreaming(sessionId: String)
 }
 
 @Database(

@@ -85,6 +85,8 @@ class HermesRepository @Inject constructor(
                 attachmentUrl = attachmentUrl,
                 attachType = attachType,
             )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e  // cancelled send must not write a ghost error message
         } catch (e: Exception) {
             val errorMsg = e.message ?: ""
             // Transparent retry on 401 — don't save error, don't show in UI
@@ -106,6 +108,11 @@ class HermesRepository @Inject constructor(
 
     suspend fun resumeSession(sessionId: String): List<Message> {
         return messageDao.getMessagesOnce(sessionId)
+    }
+
+    /** Mark stale isStreaming=1 rows as finalized (process died mid-stream). */
+    suspend fun finalizeStaleStreaming(sessionId: String) {
+        messageDao.finalizeStaleStreaming(sessionId)
     }
 
     suspend fun restoreSession(session: Session) {

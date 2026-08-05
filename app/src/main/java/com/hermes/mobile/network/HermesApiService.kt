@@ -358,7 +358,7 @@ class HermesApiService @Inject constructor(
                     .delete()
                     .build()
                 val response = client.newCall(request).execute()
-                response.isSuccessful
+                response.use { it.isSuccessful }
             } catch (_: Exception) {
                 false
             }

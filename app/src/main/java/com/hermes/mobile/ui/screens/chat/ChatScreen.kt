@@ -197,6 +197,10 @@ class ChatViewModel @Inject constructor(
     private suspend fun resumeSession(sessionId: String) {
         try {
             _sessionId.value = sessionId
+            // Clean stale streaming placeholders (app died mid-stream last
+            // time) BEFORE observing — otherwise the next stream renders its
+            // live text into the orphaned bubble too.
+            repository.finalizeStaleStreaming(sessionId)
             observeMessages(sessionId)
             repository.resumeSession(sessionId) // warm cache
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -267,20 +271,26 @@ class ChatViewModel @Inject constructor(
                         }
                     },
                     onToolCall = { id, name, args ->
-                        val tc = ToolCallInfo(
-                            id = id,
-                            name = name,
-                            arguments = args,
-                            status = ToolCallStatus.RUNNING
-                        )
-                        _toolCalls.value = _toolCalls.value + tc
+                        // Guard: stale callbacks from a superseded stream must
+                        // not inject tool cards into the new stream's UI.
+                        if (gen == streamGeneration) {
+                            val tc = ToolCallInfo(
+                                id = id,
+                                name = name,
+                                arguments = args,
+                                status = ToolCallStatus.RUNNING
+                            )
+                            _toolCalls.value = _toolCalls.value + tc
+                        }
                     },
                     onToolResult = { id, output ->
-                        _toolCalls.value = _toolCalls.value.map {
-                            if (it.id == id) it.copy(
-                                result = output,
-                                status = ToolCallStatus.COMPLETED
-                            ) else it
+                        if (gen == streamGeneration) {
+                            _toolCalls.value = _toolCalls.value.map {
+                                if (it.id == id) it.copy(
+                                    result = output,
+                                    status = ToolCallStatus.COMPLETED
+                                ) else it
+                            }
                         }
                     }
                 )
@@ -290,10 +300,17 @@ class ChatViewModel @Inject constructor(
                 _streamingContent.value = ""
                 // Cancel any prior delayed clear so it can't wipe the NEXT message's tool calls
                 toolClearJob?.cancel()
+                val genAtComplete = streamGeneration
                 toolClearJob = viewModelScope.launch {
                     delay(3000)
-                    _toolCalls.value = emptyList()
+                    // Only clear if no new stream started since (a fast new
+                    // send+complete within 3s must keep its tool cards).
+                    if (genAtComplete == streamGeneration) {
+                        _toolCalls.value = emptyList()
+                    }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e  // never swallow cancellation into a ghost error
             } catch (e: Exception) {
                 _isStreaming.value = false
                 _errorMessage.value = e.message
@@ -372,12 +389,7 @@ class ChatViewModel @Inject constructor(
         suspend fun uploadFile(context: android.content.Context, uri: android.net.Uri, fileName: String, mimeType: String, attachType: String): String? {
             val sid = _sessionId.value ?: return null
             return try {
-                val tempFile = java.io.File(context.cacheDir, fileName)
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    tempFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
+                val tempFile = cacheAttachmentToTemp(context, uri) ?: return null
                 val result = repository.uploadFile(sid, tempFile, fileName, mimeType)
                 tempFile.delete()
                 result
@@ -400,11 +412,11 @@ class ChatViewModel @Inject constructor(
                 var attachType: String? = null
                 if (attachment != null) {
                     try {
-                        val tempFile = java.io.File(context.cacheDir, attachment.fileName)
-                        context.contentResolver.openInputStream(attachment.uri)?.use { input ->
-                            tempFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
+                        val tempFile = cacheAttachmentToTemp(context, attachment.uri)
+                        if (tempFile == null) {
+                            _errorMessage.value = "Attachment too large or unreadable (max 50 MB)"
+                            onAttachComplete()
+                            return@launch
                         }
                         attachUrl = repository.uploadFile(sid, tempFile, attachment.fileName, attachment.mimeType)
                         tempFile.delete()
@@ -417,6 +429,47 @@ class ChatViewModel @Inject constructor(
                     sendMessage(text, attachUrl, attachType)
                 }
                 onAttachComplete()
+            }
+        }
+
+        /**
+         * Copy a content-URI attachment into the app cache under a UUID
+         * temp name. Security: the provider-controlled display name is NEVER
+         * used as a path (a crafted "../" filename could traverse the cache
+         * dir). 50 MB cap enforced while streaming the copy.
+         */
+        private suspend fun cacheAttachmentToTemp(
+            context: android.content.Context,
+            uri: android.net.Uri
+        ): java.io.File? {
+            val tempFile = java.io.File(context.cacheDir, "att_${java.util.UUID.randomUUID()}.tmp")
+            return try {
+                val copied = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val input = context.contentResolver.openInputStream(uri) ?: return@withContext false
+                    input.use { ins ->
+                        tempFile.outputStream().use { out ->
+                            val buf = ByteArray(DEFAULT_BUFFER_SIZE)
+                            var total = 0L
+                            while (true) {
+                                val n = ins.read(buf)
+                                if (n < 0) break
+                                total += n
+                                if (total > 50L * 1024 * 1024) return@use false
+                                out.write(buf, 0, n)
+                            }
+                            true
+                        }
+                    }
+                }
+                if (!copied) {
+                    tempFile.delete()
+                    null
+                } else {
+                    tempFile
+                }
+            } catch (e: Exception) {
+                tempFile.delete()
+                null
             }
         }
     }
@@ -669,6 +722,23 @@ fun ChatScreen(
             if (messages.isEmpty() && !isStreaming) {
                 EmptyChatState()
             } else {
+                // Memoized display list: full O(n) filter+reverse only
+                // re-runs when the message list or search query actually
+                // changes (NOT on every recomposition — streaming emits
+                // ~20Hz of recompositions).
+                val displayMessages = remember(messages, searchQuery) {
+                    filteredMessages(searchQuery, messages)
+                        .asReversed()
+                        .filter {
+                            // Never render blank assistant rows (whitespace-only
+                            // responses / abandoned placeholders) — they show
+                            // as unexplained gaps between messages. Streaming
+                            // placeholders stay (they carry the live text).
+                            it.role != MessageRole.ASSISTANT ||
+                                it.isStreaming ||
+                                it.content.isNotBlank()
+                        }
+                }
                 // Overscroll bounce/glow mirrors oddly on the inverted list —
                 // disable it (clean Telegram feel, no rubber-band at the ends).
                 CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
@@ -716,18 +786,10 @@ fun ChatScreen(
                             }
                         }
                     }
+                    // Memoized display list (computed in the Box scope above —
+                    // LazyListScope is not a composable context).
                     items(
-                        items = filteredMessages(searchQuery, messages)
-                            .asReversed()
-                            .filter {
-                                // Never render blank assistant rows (whitespace-only
-                                // responses / abandoned placeholders) — they show
-                                // as unexplained gaps between messages. Streaming
-                                // placeholders stay (they carry the live text).
-                                it.role != MessageRole.ASSISTANT ||
-                                    it.isStreaming ||
-                                    it.content.isNotBlank()
-                            },
+                        items = displayMessages,
                         key = { it.id.toString() }
                     ) { message ->
                         val isStreamingThis = isStreaming && message.isStreaming
