@@ -431,7 +431,11 @@ data class PendingAttachment(
     val attachType: String  // "image", "video", "audio", "file"
 )
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalAnimationApi::class,
+    ExperimentalFoundationApi::class
+)
 @Composable
 fun ChatScreen(
     paddingValues: PaddingValues
@@ -525,13 +529,17 @@ fun ChatScreen(
         vm.initSession(pending)
     }
 
-    // Auto-scroll to bottom — only when already near the bottom (don't yank users reading history)
-    LaunchedEffect(messages.size, streamingContent) {
+    // Auto-scroll: ONLY when a new message arrives (size change) and the
+    // user is already near the bottom. The inverted layout keeps the newest
+    // item pinned to the bottom edge — growing streaming text pushes UP
+    // naturally, so no per-chunk scrolling is needed. The old effect keyed
+    // on every streaming chunk and force-scrolled, fighting the user's
+    // finger every ~50ms = the "stuck/bouncing" scroll feel.
+    LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
-            // Reverse layout: index 0 is the bottom (newest message).
+            // Inverted list: index 0 is the bottom (newest message).
             val firstVisible = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
-            val nearBottom = firstVisible <= 3
-            if (nearBottom || streamingContent.isNotBlank()) {
+            if (firstVisible <= 3) {
                 listState.scrollToItem(0)
             }
         }
@@ -661,6 +669,9 @@ fun ChatScreen(
             if (messages.isEmpty() && !isStreaming) {
                 EmptyChatState()
             } else {
+                // Overscroll bounce/glow mirrors oddly on the inverted list —
+                // disable it (clean Telegram feel, no rubber-band at the ends).
+                CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
                 LazyColumn(
                     state = listState,
                     // Telegram-style bottom anchoring via the INVERTED LIST
@@ -740,6 +751,7 @@ fun ChatScreen(
                     }
                 }
             }
+            } // CompositionLocalProvider (overscroll off)
         }
 
         InputBar(
@@ -987,8 +999,11 @@ fun MessageBubble(
             Column(
                 modifier = Modifier
                     .widthIn(max = bubbleMax)
+                    // Snap while streaming (20Hz text updates must not run a
+                    // 200ms size animation per chunk — that's layout churn);
+                    // animate only for non-streaming size changes.
                     .animateContentSize(
-                        animationSpec = tween(durationMillis = 200)
+                        animationSpec = if (isStreaming) snap() else tween(durationMillis = 200)
                     )
             ) {
             Surface(
