@@ -91,8 +91,15 @@ fun MainNavigation(
                     currentDestination = currentDestination,
                     onNavigate = { screen ->
                         navController.navigate(screen.route) {
-                            popUpTo(navController.graph.findStartDestination().id)
+                            // saveState/restoreState: each tab's backstack
+                            // entry (and its ViewModels) SURVIVE tab
+                            // switches — an ongoing chat stream keeps
+                            // running while the user visits other tabs.
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
                             launchSingleTop = true
+                            restoreState = true
                         }
                     }
                 )
@@ -108,11 +115,21 @@ fun MainNavigation(
                 HomeScreen(
                     onNavigateToChat = { sessionId -> openChat(navController, sessionId) },
                     onNavigateToSessions = {
-                        navController.navigate(Screen.Sessions.route)
+                        navController.navigate(Screen.Sessions.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     },
                     onNavigateToVoice = {
                         navController.navigate(Screen.Voice.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
                             launchSingleTop = true
+                            restoreState = true
                         }
                     }
                 )
