@@ -782,50 +782,41 @@ fun SettingsScreen(
                 SettingsInfoRow("Device", "${Build.MANUFACTURER} ${Build.MODEL}")
                 SettingsInfoRow("Android", Build.VERSION.RELEASE)
                 Spacer(modifier = Modifier.height(12.dp))
-                // ── Crash logs: share the most recent crash dump so bugs can
-                // be diagnosed from the actual stack trace. ──
-                val crashFiles = remember {
-                    val dir = File(context.filesDir, "crashes")
-                    dir.listFiles()?.filter { it.name.startsWith("crash_") }
-                        ?.sortedByDescending { it.lastModified() } ?: emptyList()
-                }
-                // Always shown — diag.log exists even with zero crashes.
-                SettingsInfoRow(
-                    "Crash logs",
-                    if (crashFiles.isEmpty()) "none recorded · diag.log active"
-                    else "${crashFiles.size} saved · newest ${crashFiles.firstOrNull()?.name?.removePrefix("crash_")?.substringBefore(".txt") ?: ""}"
-                )
+                // On-demand diagnostics: one tap shares the last 24h of
+                // activity (diag.log tail + any crash dump) — debug-ready
+                // without keeping unbounded logs on-device.
                 TextButton(
-                        onClick = {
-                            // Share the newest crash dump + the diagnostics
-                            // log together — one tap, full picture.
-                            try {
-                                val crashText = crashFiles.firstOrNull()?.readText() ?: "(none)"
-                                val diagFile = File(context.filesDir, "diag.log")
-                                val diagText = if (diagFile.exists()) diagFile.readText() else "(no diag.log)"
-                                val combined = buildString {
-                                    appendLine("=== CRASH DUMP ===")
-                                    appendLine(crashText)
-                                    appendLine()
-                                    appendLine("=== DIAG LOG (tail) ===")
-                                    appendLine(diagText.takeLast(12_000))
-                                }
-                                val send = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_SUBJECT, "Hermes diagnostics ${BuildConfig.VERSION_NAME}")
-                                    putExtra(Intent.EXTRA_TEXT, combined)
-                                }
-                                context.startActivity(
-                                    Intent.createChooser(send, "Share crash + diagnostics")
-                                )
-                            } catch (_: Exception) {}
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.BugReport, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Share crash log + diagnostics")
-                    }
+                    onClick = {
+                        try {
+                            val crashText = File(context.filesDir, "crashes").listFiles()
+                                ?.filter { it.name.startsWith("crash_") }
+                                ?.maxByOrNull { it.lastModified() }
+                                ?.readText() ?: "(no crash dumps)"
+                            val diagFile = File(context.filesDir, "diag.log")
+                            val diagText = if (diagFile.exists()) diagFile.readText() else "(no diag.log)"
+                            val combined = buildString {
+                                appendLine("=== DIAG LOG (last 24h, tail) ===")
+                                appendLine(diagText.takeLast(12_000))
+                                appendLine()
+                                appendLine("=== CRASH DUMP (newest) ===")
+                                appendLine(crashText)
+                            }
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, "Hermes log ${BuildConfig.VERSION_NAME}")
+                                putExtra(Intent.EXTRA_TEXT, combined)
+                            }
+                            context.startActivity(
+                                Intent.createChooser(send, "Share log")
+                            )
+                        } catch (_: Exception) {}
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.BugReport, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Share log")
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 TextButton(
                     onClick = {
