@@ -1,5 +1,6 @@
 package com.hermes.mobile.ui.screens.settings
 
+import com.hermes.mobile.BuildConfig
 import android.content.Intent
 import java.io.File
 import android.net.Uri
@@ -795,16 +796,26 @@ fun SettingsScreen(
                     )
                     TextButton(
                         onClick = {
-                            val latest = crashFiles.firstOrNull() ?: return@TextButton
+                            // Share the newest crash dump + the diagnostics
+                            // log together — one tap, full picture.
                             try {
-                                val text = latest.readText()
+                                val crashText = crashFiles.firstOrNull()?.readText() ?: "(none)"
+                                val diagFile = File(context.filesDir, "diag.log")
+                                val diagText = if (diagFile.exists()) diagFile.readText() else "(no diag.log)"
+                                val combined = buildString {
+                                    appendLine("=== CRASH DUMP ===")
+                                    appendLine(crashText)
+                                    appendLine()
+                                    appendLine("=== DIAG LOG (tail) ===")
+                                    appendLine(diagText.takeLast(12_000))
+                                }
                                 val send = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
-                                    putExtra(Intent.EXTRA_SUBJECT, "Hermes crash log ${latest.name}")
-                                    putExtra(Intent.EXTRA_TEXT, text)
+                                    putExtra(Intent.EXTRA_SUBJECT, "Hermes diagnostics ${BuildConfig.VERSION_NAME}")
+                                    putExtra(Intent.EXTRA_TEXT, combined)
                                 }
                                 context.startActivity(
-                                    Intent.createChooser(send, "Share crash log")
+                                    Intent.createChooser(send, "Share crash + diagnostics")
                                 )
                             } catch (_: Exception) {}
                         },
@@ -812,7 +823,7 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Filled.BugReport, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Share newest crash log")
+                        Text("Share crash log + diagnostics")
                     }
                 }
                 Spacer(modifier = Modifier.height(12.dp))

@@ -50,6 +50,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.hermes.mobile.DiagLog
 import com.hermes.mobile.data.model.ModelInfo
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.components.HermesWatermark
@@ -237,6 +238,7 @@ class VoiceViewModel @Inject constructor(
                     // Send to server & stream response (60s cap — a stalled
                     // SSE stream must not freeze the voice loop for minutes).
                     val pending = StringBuilder()
+                    DiagLog.log("VOICE", "stream start session=$session q='${recognized.take(40)}'")
                     try {
                         withTimeout(60_000) {
                             repository.sendMessage(
@@ -269,6 +271,7 @@ class VoiceViewModel @Inject constructor(
                     } catch (e: TimeoutCancellationException) {
                         // Reply stream stalled — speak what we got and keep
                         // the loop alive instead of dying.
+                        DiagLog.log("VOICE", "stream TIMED OUT after 60s, got ${pending.length} chars")
                         Log.w("VoiceScreen", "Reply stream timed out")
                     } finally {
                         // Always flush the trailing partial + close, even if
@@ -390,6 +393,9 @@ class VoiceViewModel @Inject constructor(
     }
 
     private fun setVoiceModeState(state: SphereState) {
+        if (_voiceModeState.value != state) {
+            DiagLog.log("VOICE", "state ${_voiceModeState.value} -> $state")
+        }
         _voiceModeState.value = state
     }
 
@@ -508,6 +514,7 @@ class VoiceViewModel @Inject constructor(
     private suspend fun triggerBargeIn() {
         if (!bargeInTriggered.compareAndSet(false, true)) return
         if (_voiceModeState.value != SphereState.SPEAKING || ttsPlaybackJob?.isActive != true) return
+        DiagLog.log("VOICE", "BARGE-IN triggered")
         ttsPlaybackJob?.cancel()
         bargeInJob?.cancelAndJoin()
         bargeInJob = null
@@ -1074,11 +1081,14 @@ private class SphereFrameDriver(
         if (running) return
         running = true
         lastFrameNanos = 0L
+        DiagLog.log("GL", "driver start")
         choreographer.postFrameCallback(frameCallback)
     }
 
     fun stop() {
+        if (!running) return
         running = false
+        DiagLog.log("GL", "driver stop")
         choreographer.removeFrameCallback(frameCallback)
     }
 
