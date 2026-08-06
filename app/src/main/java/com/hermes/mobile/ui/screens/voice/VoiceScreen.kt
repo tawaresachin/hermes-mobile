@@ -442,7 +442,11 @@ class VoiceViewModel @Inject constructor(
      */
     private fun armBargeInMonitor() {
         val previous = bargeInJob
-        bargeInJob = viewModelScope.launch {
+        // CRITICAL: must run on IO — the tight blocking AudioRecord.read
+        // loop on the Main dispatcher (viewModelScope default) starved the
+        // main thread for the whole TTS playback -> ANR -> the system
+        // killed the app ('crash after some time', no Java crash file).
+        bargeInJob = viewModelScope.launch(Dispatchers.IO) {
             // Never overlap recorders — join the previous monitor first.
             previous?.cancelAndJoin()
             val sampleRate = 16_000
@@ -813,14 +817,19 @@ class VoiceViewModel @Inject constructor(
             // so error paths (prepare/start throws) can't leak mp3s.
             val tempFile = java.io.File(context.cacheDir, "tts_${System.currentTimeMillis()}.mp3")
             var player: android.media.MediaPlayer? = null
-            try {
-                tempFile.writeBytes(audioBytes)
 
+            // writeBytes + MediaPlayer.prepare() are BLOCKING — running them
+            // on the Main dispatcher (viewModelScope default) janked/ANR'd
+            // the app during speech. prepare() parses the whole mp3.
+            withContext(Dispatchers.IO) {
+                tempFile.writeBytes(audioBytes)
                 player = android.media.MediaPlayer().apply {
                     setDataSource(tempFile.absolutePath)
                     prepare()
-                    start()
                 }
+            }
+            player?.start()
+            try {
                 // Echo-safety (a): deafen the barge-in mic right after
                 // playback starts — the speaker's own audio is still
                 // hitting the mic at full volume.

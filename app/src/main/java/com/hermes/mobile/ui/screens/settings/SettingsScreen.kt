@@ -789,12 +789,13 @@ fun SettingsScreen(
                     dir.listFiles()?.filter { it.name.startsWith("crash_") }
                         ?.sortedByDescending { it.lastModified() } ?: emptyList()
                 }
-                if (crashFiles.isNotEmpty()) {
-                    SettingsInfoRow(
-                        "Crash logs",
-                        "${crashFiles.size} saved · newest ${crashFiles.firstOrNull()?.name?.removePrefix("crash_")?.substringBefore(".txt") ?: ""}"
-                    )
-                    TextButton(
+                // Always shown — diag.log exists even with zero crashes.
+                SettingsInfoRow(
+                    "Crash logs",
+                    if (crashFiles.isEmpty()) "none recorded · diag.log active"
+                    else "${crashFiles.size} saved · newest ${crashFiles.firstOrNull()?.name?.removePrefix("crash_")?.substringBefore(".txt") ?: ""}"
+                )
+                TextButton(
                         onClick = {
                             // Share the newest crash dump + the diagnostics
                             // log together — one tap, full picture.
@@ -825,7 +826,6 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Share crash log + diagnostics")
                     }
-                }
                 Spacer(modifier = Modifier.height(12.dp))
                 TextButton(
                     onClick = {
