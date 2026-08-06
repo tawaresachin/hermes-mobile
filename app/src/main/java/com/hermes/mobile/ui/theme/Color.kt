@@ -42,6 +42,17 @@ val OtherBubbleDark    = Color(0xFF1E2B39)   // dark navy
 // ── Code blocks ──
 
 // ═══════════════════════════════════════════════════════════
+// Voice sphere — FRIDAY/Siri neon palette
+// (drives SphereGLRenderer uniforms + VoiceScreen chrome)
+// ═══════════════════════════════════════════════════════════
+val VoiceNeonCyan      = Color(0xFF69E5E5)
+val VoiceNeonBlue      = Color(0xFF3D8BFF)
+val VoiceNeonViolet    = Color(0xFF8A3BFF)
+val VoiceNeonMagenta   = Color(0xFFFF4DD2)
+val VoiceNeonRed       = Color(0xFFFF4D4D)
+val VoiceCoreWhite     = Color(0xFFF2F7FF)
+
+// ═══════════════════════════════════════════════════════════
 // BACKWARD-COMPATIBLE ALIASES
 // ═══════════════════════════════════════════════════════════
 

@@ -14,7 +14,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import com.hermes.mobile.ui.theme.LocalDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -28,7 +27,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -53,6 +54,11 @@ import com.hermes.mobile.data.model.ModelInfo
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.components.ModelPickerSheet
+import com.hermes.mobile.ui.theme.LocalDarkTheme
+import com.hermes.mobile.ui.theme.VoiceNeonBlue
+import com.hermes.mobile.ui.theme.VoiceNeonCyan
+import com.hermes.mobile.ui.theme.VoiceNeonRed
+import com.hermes.mobile.ui.theme.VoiceNeonViolet
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
@@ -65,6 +71,13 @@ import kotlin.math.sin
 import kotlin.coroutines.resume
 import javax.inject.Inject
 import androidx.compose.foundation.gestures.detectTapGestures
+import android.os.SystemClock
+import android.view.Choreographer
+import com.hermes.mobile.voice.AdaptiveEndpointing
+import com.hermes.mobile.voice.BargeInDetector
+import com.hermes.mobile.voice.EchoRejection
+import com.hermes.mobile.voice.VoiceTuning
+import java.util.concurrent.atomic.AtomicBoolean
 
 // ═══════════════════════════════════════════════════════════════
 // VoiceViewModel — JARVIS Sphere voice loop
@@ -126,6 +139,11 @@ class VoiceViewModel @Inject constructor(
 
     private var voiceModeJob: Job? = null
     private var ttsPlaybackJob: Job? = null
+    private var bargeInJob: Job? = null
+    private var errorRevertJob: Job? = null
+    private val bargeInTriggered = AtomicBoolean(false)
+    @Volatile private var vadDeafenUntilMs = 0L
+    @Volatile private var ttsPlayingNow = false
     private var initJob: Job? = null
     @Volatile private var lastSpokenSentence: String = ""
     @Volatile private var lastSpokenAt: Long = 0L
@@ -167,6 +185,9 @@ class VoiceViewModel @Inject constructor(
             try {
                 while (isActive) {
                     // ── LISTENING ──
+                    // Fresh barge-in latch per cycle — a stale trigger must
+                    // not suppress this turn's recognition/enqueues.
+                    bargeInTriggered.set(false)
                     setVoiceModeState(SphereState.LISTENING)
                     _voiceTranscript.value = "Listening…"
                     val recognized = listenOnce()
@@ -182,7 +203,7 @@ class VoiceViewModel @Inject constructor(
                     // salvage just their part. Only applies within 4s of TTS —
                     // a stale match later would wrongly eat a real question.
                     val cleaned = if (System.currentTimeMillis() - lastSpokenAt < 4000L) {
-                        stripEchoPrefix(recognized, lastSpokenSentence)
+                        EchoRejection.stripEchoPrefix(recognized, lastSpokenSentence)
                     } else {
                         recognized
                     }
@@ -203,6 +224,11 @@ class VoiceViewModel @Inject constructor(
                             if (first) {
                                 first = false
                                 setVoiceModeState(SphereState.SPEAKING)
+                                // Arm the barge-in monitor for the whole
+                                // SPEAKING cycle (fresh AudioRecord per
+                                // reply; the deafen window refreshes per
+                                // sentence inside playTtsSentenceBlocking).
+                                armBargeInMonitor()
                             }
                             playTtsSentenceBlocking(sentence)
                         }
@@ -229,7 +255,7 @@ class VoiceViewModel @Inject constructor(
                                     // to the TTS queue as they arrive. Full
                                     // mode keeps accumulating — the whole
                                     // reply is chunked once, at stream end.
-                                    if (!_fullResponseMode.value) {
+                                    if (!_fullResponseMode.value && !bargeInTriggered.get()) {
                                         val (done, rest) = splitSentences(pending.toString())
                                         if (done.isNotEmpty()) {
                                             done.forEach { ttsQueue.trySend(it) }
@@ -249,7 +275,7 @@ class VoiceViewModel @Inject constructor(
                         // sendMessage throws — otherwise the queue consumer
                         // would block on the open channel forever.
                         val finalText = pending.toString().trim()
-                        if (finalText.isNotBlank()) {
+                        if (finalText.isNotBlank() && !bargeInTriggered.get()) {
                             if (_fullResponseMode.value) {
                                 // Speak the COMPLETE reply as a few large
                                 // chunks (≤3500 chars each, sentence-aligned)
@@ -267,6 +293,7 @@ class VoiceViewModel @Inject constructor(
                     // ── AWAITING (brief pause before re-arming; skip if the
                     // user already interrupted playback to speak) ──
                     if (_voiceModeState.value != SphereState.LISTENING) {
+                        disarmBargeInMonitor()
                         setVoiceModeState(SphereState.AWAITING)
                         _voiceTranscript.value = "Awaiting…"
                         delay(500) // brief pause before re-arming
@@ -275,8 +302,9 @@ class VoiceViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _voiceTranscript.value = "Error: ${e.message}"
-                setVoiceModeState(SphereState.AWAITING)
+                disarmBargeInMonitor()
+                // Transient ERROR state — auto-reverts to IDLE in ~2.5s.
+                showVoiceError("Error: ${e.message}")
             }
         }
     }
@@ -286,6 +314,7 @@ class VoiceViewModel @Inject constructor(
         voicePaused = false
         voiceModeJob?.cancel()
         ttsPlaybackJob?.cancel()
+        disarmBargeInMonitor()
         _voiceModeState.value = SphereState.IDLE
         _voiceAmplitude.value = 0f
         _ttsProgress.value = 0f
@@ -301,6 +330,7 @@ class VoiceViewModel @Inject constructor(
         voicePaused = true
         voiceModeJob?.cancel()
         ttsPlaybackJob?.cancel()
+        disarmBargeInMonitor()
         _voiceModeState.value = SphereState.IDLE
         _voiceAmplitude.value = 0f
     }
@@ -322,6 +352,7 @@ class VoiceViewModel @Inject constructor(
             // recognition (interrupts any ongoing listen/playback cleanly).
             voiceModeJob?.cancel()
             ttsPlaybackJob?.cancel()
+            disarmBargeInMonitor()
             _voiceTranscript.value = "Listening… (${lang.label})"
             startVoiceLoop()
         }
@@ -362,17 +393,128 @@ class VoiceViewModel @Inject constructor(
         _voiceModeState.value = state
     }
 
+    /**
+     * Transient ERROR state (visual-only): shows the failure message, flips
+     * the sphere to ERROR, and auto-reverts to IDLE after ~2.5s. Does NOT
+     * touch barge-in/VAD state — the caller owns disarm/arm decisions.
+     */
+    private fun showVoiceError(message: String) {
+        _errorMessage.value = message
+        _voiceTranscript.value = message
+        setVoiceModeState(SphereState.ERROR)
+        errorRevertJob?.cancel()
+        errorRevertJob = viewModelScope.launch {
+            delay(2500)
+            // Only revert if nothing else moved the state meanwhile
+            // (pause/stop/barge-in all land on IDLE/LISTENING already).
+            if (_voiceModeState.value == SphereState.ERROR) {
+                _errorMessage.value = null
+                setVoiceModeState(SphereState.IDLE)
+            }
+        }
+    }
+
     private fun appendVoiceTranscript(text: String) {
         _voiceTranscript.value = if (_voiceTranscript.value.isBlank()) text else "${_voiceTranscript.value}\n$text"
     }
 
     fun interruptTts() {
         ttsPlaybackJob?.cancel()
+        disarmBargeInMonitor()
         _ttsProgress.value = 0f
         // Immediately re-arm listening
         if (_voiceModeState.value == SphereState.SPEAKING) {
             setVoiceModeState(SphereState.LISTENING)
         }
+    }
+
+    /**
+     * Barge-in monitor: while TTS is speaking, a second AudioRecord listens
+     * for the user's voice. On 2 consecutive loud blocks (past the deafen
+     * window, playback active) it fires triggerBargeIn(), which kills
+     * playback and re-arms listening. One monitor per SPEAKING cycle.
+     */
+    private fun armBargeInMonitor() {
+        val previous = bargeInJob
+        bargeInJob = viewModelScope.launch {
+            // Never overlap recorders — join the previous monitor first.
+            previous?.cancelAndJoin()
+            val sampleRate = 16_000
+            val minBuf = android.media.AudioRecord.getMinBufferSize(
+                sampleRate,
+                android.media.AudioFormat.CHANNEL_IN_MONO,
+                android.media.AudioFormat.ENCODING_PCM_16BIT
+            )
+            val bufSize = max(minBuf * 2, sampleRate / 2) // ≥0.5s of buffer
+            var record: android.media.AudioRecord? = null
+            var aec: android.media.audiofx.AcousticEchoCanceler? = null
+            val detector = BargeInDetector()
+            try {
+                record = android.media.AudioRecord(
+                    android.media.MediaRecorder.AudioSource.MIC,
+                    sampleRate,
+                    android.media.AudioFormat.CHANNEL_IN_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT,
+                    bufSize
+                )
+                record.startRecording()
+                // Echo-safety (c): best-effort acoustic echo cancellation on
+                // the monitor's audio session.
+                try {
+                    if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
+                        aec = android.media.audiofx.AcousticEchoCanceler.create(record.audioSessionId)
+                        aec?.setEnabled(true)
+                    }
+                } catch (_: Exception) {}
+                val buf = ShortArray(1024)
+                while (isActive) {
+                    val n = record.read(buf, 0, buf.size)
+                    if (n <= 0) continue
+                    val nowMs = SystemClock.elapsedRealtime()
+                    var sumSq = 0.0
+                    for (i in 0 until n) sumSq += buf[i].toDouble() * buf[i]
+                    val rms = kotlin.math.sqrt(sumSq / n).toFloat()
+                    if (detector.feed(rms, nowMs, ttsPlayingNow, vadDeafenUntilMs)) {
+                        // Run the trigger OUTSIDE this job so the
+                        // cancelAndJoin inside triggerBargeIn can't cancel
+                        // the trigger mid-flight.
+                        viewModelScope.launch { triggerBargeIn() }
+                        break
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("VoiceScreen", "Barge-in monitor failed: ${e.message}")
+            } finally {
+                try { aec?.release() } catch (_: Exception) {}
+                try { record?.stop() } catch (_: Exception) {}
+                try { record?.release() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    private fun disarmBargeInMonitor() {
+        bargeInJob?.cancel()
+        bargeInJob = null
+    }
+
+    /**
+     * Barge-in: the user spoke over TTS. Kill playback + the monitor,
+     * settle briefly (so the speaker's audio stops ringing), then re-arm
+     * LISTENING. The loop's AWAITING block is skipped because the state
+     * is already LISTENING when it checks.
+     */
+    private suspend fun triggerBargeIn() {
+        if (!bargeInTriggered.compareAndSet(false, true)) return
+        if (_voiceModeState.value != SphereState.SPEAKING || ttsPlaybackJob?.isActive != true) return
+        ttsPlaybackJob?.cancel()
+        bargeInJob?.cancelAndJoin()
+        bargeInJob = null
+        delay(VoiceTuning.BARGE_IN_SETTLE_MS)
+        setVoiceModeState(SphereState.LISTENING)
+        _voiceTranscript.value = "Listening…"
+        _ttsProgress.value = 0f
     }
 
     /**
@@ -422,19 +564,51 @@ class VoiceViewModel @Inject constructor(
             val buf = ShortArray(1024)
             var speechStarted = false
             var lastSpeechMs = 0L
-            val deadline = System.currentTimeMillis() + 15_000
+            var lastSpeechBlockAt = -1L
+            var utteranceStartMs = -1L
+            var burstStartMs = -1L
+            var utteranceMs = 0L
+            var burstMs = 0L
+            var peakRms = 0f
+            val startMs = System.currentTimeMillis()
+            val deadline = startMs + VoiceTuning.MAX_UTTERANCE_MS
             var wroteBytes = 0
+            // Adaptive VAD: sample the room's noise floor for the first
+            // ~500ms, then adapt the speech gate, silence timeout and
+            // amplitude scaling to it (quiet/loud rooms need no retuning).
+            val noiseFloor = AdaptiveEndpointing.NoiseFloor()
             while (System.currentTimeMillis() < deadline) {
                 val n = record.read(buf, 0, buf.size)
                 if (n <= 0) continue
                 val now = System.currentTimeMillis()
                 var sumSq = 0.0
                 for (i in 0 until n) sumSq += buf[i].toDouble() * buf[i]
-                val rms = kotlin.math.sqrt(sumSq / n)
-                setVoiceAmplitude((rms / 6000.0).coerceIn(0.0, 1.0).toFloat())
-                if (rms > 700.0) {
+                val rms = kotlin.math.sqrt(sumSq / n).toFloat()
+                if (now - startMs < 500) noiseFloor.feed(rms)
+                val floor = noiseFloor.estimate()
+                peakRms = max(peakRms, rms)
+                // Normalized 0..1 amplitude (ref grows with the loudest
+                // peak so quiet speech still registers on the sphere).
+                setVoiceAmplitude(
+                    AdaptiveEndpointing.normalize(rms, floor, max(VoiceTuning.AMPLITUDE_REF, peakRms))
+                )
+                val speechGate = max(VoiceTuning.SPEECH_RMS_BASE, floor * 3 + 150)
+                if (rms > speechGate) {
                     lastSpeechMs = now
-                    if (!speechStarted) speechStarted = true
+                    if (utteranceStartMs < 0) utteranceStartMs = now
+                    utteranceMs = now - utteranceStartMs
+                    if (!speechStarted) {
+                        speechStarted = true
+                        burstStartMs = now
+                        burstMs = 0L
+                    } else if (now - lastSpeechBlockAt > 300) {
+                        // Long pause → a fresh burst (cadence tracking).
+                        burstStartMs = now
+                        burstMs = 0L
+                    } else {
+                        burstMs = now - burstStartMs
+                    }
+                    lastSpeechBlockAt = now
                 }
                 if (speechStarted) {
                     // Write PCM little-endian into the growing WAV payload.
@@ -443,10 +617,18 @@ class VoiceViewModel @Inject constructor(
                     for (i in 0 until n) bytes.putShort(buf[i])
                     pcm.write(bytes.array())
                     wroteBytes += n * 2
-                    if (now - lastSpeechMs > 1200) break // silence → auto-stop
+                    // Adaptive end-of-speech: short bursts end fast, long
+                    // utterances get a generous pause before finalizing.
+                    val silenceMs = now - lastSpeechMs
+                    val timeout = if (AdaptiveEndpointing.shouldEarlyFinalize(utteranceMs, silenceMs)) {
+                        VoiceTuning.EARLY_FINALIZE_SILENCE_MS
+                    } else {
+                        AdaptiveEndpointing.silenceMs(burstMs, utteranceMs)
+                    }
+                    if (silenceMs > timeout) break // silence → auto-stop
                 }
             }
-            if (!speechStarted || wroteBytes < 3200) return@withContext null // <0.1s speech
+            if (!speechStarted || wroteBytes < VoiceTuning.MIN_SPEECH_BYTES) return@withContext null // <0.1s speech
             val langHint = _language.value.speechLocale.substringBefore('-').lowercase()
             repository.transcribeAudio(buildWavHeader(pcm.size()) + pcm.toByteArray(), langHint)
         } catch (e: CancellationException) {
@@ -603,72 +785,6 @@ class VoiceViewModel @Inject constructor(
         return chunks
     }
 
-    /**
-     * JARVIS-style echo rejection/salvage with FUZZY matching.
-     * Echo survives STT mis-transcription (e.g. "explores"→"laws") because
-     * words are matched by Levenshtein similarity, not exact equality.
-     * - Pure echo (≥70% of reference words matched) → returns "" (skip).
-     * - Echo prefix + user speech appended → returns the user's tail.
-     * - No match → returns the input unchanged.
-     */
-    private fun stripEchoPrefix(text: String, ttsText: String): String {
-        if (ttsText.isBlank() || text.isBlank()) return text
-        val tWords = cleanWords(text)
-        val rWords = cleanWords(ttsText)
-        if (rWords.isEmpty() || tWords.isEmpty()) return text
-
-        // Walk both lists; count reference words matched within tolerance.
-        // Allow skipping reference words so a dropped/inserted word doesn't
-        // kill the whole match.
-        var matched = 0
-        var i = 0          // index into tWords
-        var j = 0          // index into rWords
-        var consumed = 0   // transcript words eaten by the echo
-        while (i < tWords.size && j < rWords.size) {
-            if (wordSimilarity(tWords[i], rWords[j]) >= 0.8f) {
-                matched++
-                consumed = i + 1
-                i++
-                j++
-            } else {
-                j++   // skip one reference word (transcription drift)
-            }
-        }
-        if (matched == 0) return text
-
-        val overlap = matched.toFloat() / rWords.size
-        if (overlap >= 0.7f) {
-            val tail = tWords.drop(consumed).joinToString(" ").trim()
-            return if (tail.length >= 3) tail else ""   // salvage or reject
-        }
-        return text
-    }
-
-    /** Lowercase + strip punctuation for comparison. */
-    private fun cleanWords(text: String): List<String> =
-        text.lowercase()
-            .replace(Regex("[^a-z0-9\\s\u0900-\u097F\u0C80-\u0CFF\u0B80-\u0BFF\u0D00-\u0DFF\u0A00-\u0A7F\u0B00-\u0B7F\u0C00-\u0C7F\u0D00-\u0D7F\u0B80-\u0BFF]"), " ")
-            .split(Regex("\\s+"))
-            .filter { it.isNotBlank() }
-
-    /** Levenshtein-based similarity in [0,1]. */
-    private fun wordSimilarity(a: String, b: String): Float {
-        if (a == b) return 1f
-        if (a.isEmpty() || b.isEmpty()) return 0f
-        val maxLen = maxOf(a.length, b.length)
-        var prev = IntArray(b.length + 1) { it }
-        var curr = IntArray(b.length + 1)
-        for (i in 1..a.length) {
-            curr[0] = i
-            for (j in 1..b.length) {
-                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                curr[j] = minOf(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
-            }
-            val tmp = prev; prev = curr; curr = tmp
-        }
-        return 1f - prev[b.length].toFloat() / maxLen
-    }
-
     /** Fetch TTS audio for ONE sentence and play it to completion (cancellable). */
     private suspend fun playTtsSentenceBlocking(sentence: String) {
         if (sentence.isBlank()) return
@@ -698,6 +814,11 @@ class VoiceViewModel @Inject constructor(
                     prepare()
                     start()
                 }
+                // Echo-safety (a): deafen the barge-in mic right after
+                // playback starts — the speaker's own audio is still
+                // hitting the mic at full volume.
+                vadDeafenUntilMs = SystemClock.elapsedRealtime() + VoiceTuning.DEAFEN_MS
+                ttsPlayingNow = true
 
                 val duration = player?.duration?.toFloat() ?: 0f
                 val progressJob = viewModelScope.launch {
@@ -725,6 +846,10 @@ class VoiceViewModel @Inject constructor(
                     Log.w("VoiceScreen", "TTS playback stuck, skipping sentence")
                 } finally {
                     progressJob.cancel()
+                    ttsPlayingNow = false
+                    // Stop BEFORE release so audio halts within the 200ms
+                    // poll tick (release alone can leave the tail playing).
+                    try { player?.stop() } catch (_: Exception) {}
                     player?.release()
                 }
             } finally {
@@ -858,7 +983,8 @@ enum class SphereState {
     LISTENING,  // Reacting to voice amplitude
     THINKING,   // Processing, orbiting particles
     SPEAKING,   // TTS playing, waveform + progress
-    AWAITING    // Response done, auto-re-arming
+    AWAITING,   // Response done, auto-re-arming
+    ERROR       // Voice error — transient, auto-reverts to IDLE (~2.5s)
 }
 
 // ── Plasma filament descriptors (module-level: allocated once, not per frame) ──
@@ -907,6 +1033,87 @@ private data class Vortex(
     val cB: Long
 )
 
+/**
+ * Capped-rate frame driver for the sphere's GLSurfaceView
+ * (RENDERMODE_WHEN_DIRTY). Choreographer-driven: fires on every vsync but
+ * only calls requestRender() once the per-state frame interval has elapsed
+ * (elapsed-time gate = ratio-based skip, so a 120Hz display naturally
+ * renders the capped 10/30fps without extra bookkeeping). Each rendered
+ * frame advances the renderer's sim clock and uploads the current state
+ * uniforms via setVisualState. Start/stop is tied to the lifecycle observer
+ * so privacy-pause freezes rendering entirely (zero GL work in background).
+ */
+private class SphereFrameDriver(
+    private val renderer: SphereGLRenderer,
+    private val glViewProvider: () -> GLSurfaceView?,
+    private val stateProvider: () -> SphereState,
+    private val amplitudeProvider: () -> Float,
+    private val progressProvider: () -> Float,
+    private val phaseProvider: () -> Float
+) {
+    private val choreographer = Choreographer.getInstance()
+    private val frameCallback = Choreographer.FrameCallback { onFrame(it) }
+    @Volatile private var running = false
+    private var lastFrameNanos = 0L
+
+    fun start() {
+        if (running) return
+        running = true
+        lastFrameNanos = 0L
+        choreographer.postFrameCallback(frameCallback)
+    }
+
+    fun stop() {
+        running = false
+        choreographer.removeFrameCallback(frameCallback)
+    }
+
+    private fun onFrame(frameTimeNanos: Long) {
+        if (!running) return
+        // Always re-arm; the elapsed-time gate below decides whether this
+        // vsync actually renders (ratio-based skip at high refresh rates).
+        choreographer.postFrameCallback(frameCallback)
+        val state = stateProvider()
+        val intervalNs = frameIntervalNs(state)
+        if (lastFrameNanos == 0L || frameTimeNanos - lastFrameNanos >= intervalNs) {
+            lastFrameNanos = frameTimeNanos
+            val vol = when (state) {
+                SphereState.LISTENING -> amplitudeProvider()
+                // SPEAKING: same synthetic amplitude the old per-volume
+                // effect used — blue + white-hot core pulses with TTS.
+                SphereState.SPEAKING -> 0.35f + 0.55f * abs(sin(phaseProvider())).toFloat()
+                else -> 0f
+            }
+            renderer.advanceTime(intervalNs / 1_000_000_000f)
+            renderer.setVisualState(
+                state = when (state) {
+                    SphereState.IDLE -> SphereGLRenderer.STATE_IDLE
+                    SphereState.LISTENING -> SphereGLRenderer.STATE_LISTENING
+                    SphereState.THINKING -> SphereGLRenderer.STATE_THINKING
+                    SphereState.SPEAKING -> SphereGLRenderer.STATE_SPEAKING
+                    SphereState.AWAITING -> SphereGLRenderer.STATE_AWAITING
+                    SphereState.ERROR -> SphereGLRenderer.STATE_ERROR
+                },
+                volume = vol,
+                progress = progressProvider(),
+                hueShift = 0f
+            )
+            glViewProvider()?.requestRender()
+        }
+    }
+
+    /** Per-state frame caps: idle 10fps (8-12 band), error 20fps (flash
+     * needs more frames), active (LISTENING/THINKING/SPEAKING) ~30fps. */
+    private fun frameIntervalNs(state: SphereState): Long {
+        val fps = when (state) {
+            SphereState.IDLE, SphereState.AWAITING -> 10f
+            SphereState.ERROR -> 20f
+            else -> 30f
+        }
+        return (1_000_000_000L / fps).toLong()
+    }
+}
+
 // ─── Voice languages: STT locale (Android SpeechRecognizer) + TTS voice (edge-tts) ───
 
 enum class VoiceLanguage(
@@ -942,7 +1149,6 @@ fun JarvisSphere(
     onExit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val scope = rememberCoroutineScope()
     val isDark = LocalDarkTheme.current
 
     // Light/dark UI chrome
@@ -989,20 +1195,20 @@ fun JarvisSphere(
             SphereColors(Color(0xFF8A3BFF), Color(0xFFB44DFF), Color(0xFFFF4DD2), screenBg)
         SphereState.SPEAKING ->
             SphereColors(Color(0xFF3D8BFF), Color(0xFF2A3FD6), Color(0xFF8A3BFF), screenBg)
+        SphereState.ERROR ->
+            SphereColors(Color(0xFFFF4D4D), Color(0xFFFF4D4D), Color(0xFFFF4D4D), screenBg)
     }
 
     // Speaking waveform phase — keyed on STATE only (ttsProgress changes
     // ~10x/sec while speaking; re-keying there cancelled the wave loop
-    // every ~100ms so the animation barely advanced).
+    // every ~100ms so the animation barely advanced). Also advances during
+    // LISTENING so the FRIDAY-style waveform bars animate on mic input.
     LaunchedEffect(state) {
-        if (state == SphereState.SPEAKING) {
-            val job = scope.launch {
-                while (state == SphereState.SPEAKING) {
-                    speakingWavePhase.value = (speakingWavePhase.value + 0.15f) % (2 * 3.14159f)
-                    delay(50)
-                }
+        if (state == SphereState.SPEAKING || state == SphereState.LISTENING) {
+            while (isActive) {
+                speakingWavePhase.value = (speakingWavePhase.value + 0.15f) % (2 * 3.14159f)
+                delay(50)
             }
-            job.invokeOnCompletion { }
         }
     }
 
@@ -1066,15 +1272,33 @@ fun JarvisSphere(
                 .background(Color.Black)
                 .clickable { onTap() }
         ) {
-            // ── GPU shader sphere — exact validated GLSL (GLSurfaceView),
-            // verbatim from the user's fragment shader. Voice reactivity is
-            // drawn as a separate Compose overlay below (wave flares) so the
-            // shader itself stays pure.
+            // ── GPU shader sphere (GLSurfaceView). RENDERMODE_WHEN_DIRTY +
+            // capped frame driver: the sphere only renders when the driver
+            // calls requestRender() (idle ~10fps, active ~30fps) — no more
+            // full-FPS-forever battery drain. The driver also feeds the
+            // state uniforms (uState/palette/volume/progress) each frame.
             val glRenderer = remember { SphereGLRenderer() }
-            // Pause GL when the app is backgrounded — RENDERMODE_CONTINUOUSLY
-            // otherwise renders full-FPS forever (battery drain).
             val glLifecycleOwner = LocalLifecycleOwner.current
             var glView by remember { mutableStateOf<GLSurfaceView?>(null) }
+
+            // Frame-driver value providers — rememberUpdatedState so the
+            // driver always reads the LATEST values without re-keying any
+            // LaunchedEffect (ttsProgress/amplitude change many times/sec).
+            val driverState by rememberUpdatedState(state)
+            val driverAmp by rememberUpdatedState(amplitude)
+            val driverProgress by rememberUpdatedState(ttsProgress)
+            val driverPhase by rememberUpdatedState(speakingWavePhase.value)
+            val frameDriver = remember {
+                SphereFrameDriver(
+                    renderer = glRenderer,
+                    glViewProvider = { glView },
+                    stateProvider = { driverState },
+                    amplitudeProvider = { driverAmp },
+                    progressProvider = { driverProgress },
+                    phaseProvider = { driverPhase }
+                )
+            }
+
             AndroidView(
                 factory = { ctx ->
                     GLSurfaceView(ctx).apply {
@@ -1082,38 +1306,142 @@ fun JarvisSphere(
                         setEGLConfigChooser(8, 8, 8, 8, 16, 0)
                         holder.setFormat(PixelFormat.TRANSLUCENT)
                         setRenderer(glRenderer)
-                        renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+                        // Capped by the frame driver — renders only on
+                        // requestRender() at per-state fps caps.
+                        renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
                         setOnClickListener { onTap() }
                     }
                 },
                 modifier = Modifier.fillMaxSize(),
                 update = { glView = it }
             )
+            // Tie the frame driver to the existing lifecycle handling:
+            // privacy-pause stops the driver + GLSurfaceView (zero frames),
+            // resume restarts both.
             DisposableEffect(glLifecycleOwner) {
                 val observer = LifecycleEventObserver { _, event ->
                     when (event) {
-                        Lifecycle.Event.ON_PAUSE -> glView?.onPause()
-                        Lifecycle.Event.ON_RESUME -> glView?.onResume()
+                        Lifecycle.Event.ON_PAUSE -> {
+                            frameDriver.stop()
+                            glView?.onPause()
+                        }
+                        Lifecycle.Event.ON_RESUME -> {
+                            glView?.onResume()
+                            frameDriver.start()
+                        }
                         else -> {}
                     }
                 }
                 glLifecycleOwner.lifecycle.addObserver(observer)
                 onDispose {
                     glLifecycleOwner.lifecycle.removeObserver(observer)
+                    frameDriver.stop()
                 }
             }
+        }
 
-            // ── Send real-time audio volume to the shader (like the user's
-            // glUniform1f(u_audio_volume_loc, normalized_volume)) ──
-            val audioVolume = when (state) {
-                SphereState.LISTENING -> amplitude
-                SphereState.SPEAKING -> 0.35f + 0.55f * abs(sin(speakingWavePhase.value)).toFloat()
-                else -> 0f
+        // ── Status pill: accent dot + label per state (never color-only) ──
+        val pillColor = when (state) {
+            SphereState.IDLE, SphereState.AWAITING, SphereState.LISTENING -> VoiceNeonCyan
+            SphereState.THINKING -> VoiceNeonViolet
+            SphereState.SPEAKING -> VoiceNeonBlue
+            SphereState.ERROR -> VoiceNeonRed
+        }
+        val pillLabel = when (state) {
+            SphereState.IDLE -> "Idle"
+            SphereState.LISTENING -> "Listening"
+            SphereState.THINKING -> "Thinking"
+            SphereState.SPEAKING -> "Speaking"
+            SphereState.AWAITING -> "Awaiting"
+            SphereState.ERROR -> "Error"
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 52.dp)
+                .clip(RoundedCornerShape(50))
+                .background(chipBg)
+                .border(1.dp, pillColor.copy(alpha = 0.55f), RoundedCornerShape(50))
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(pillColor)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = pillLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = chipText
+                )
             }
-            LaunchedEffect(audioVolume) {
-                glRenderer.setAudioVolume(audioVolume)
-            }
+        }
 
+        // ── TTS progress arc hugging the sphere rim (SPEAKING only) ──
+        if (state == SphereState.SPEAKING) {
+            Canvas(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(306.dp)
+            ) {
+                val stroke = 3.dp.toPx()
+                val inset = stroke / 2f
+                val arcSize = size.width - stroke
+                drawArc(
+                    color = VoiceNeonBlue.copy(alpha = 0.15f),
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = Offset(inset, inset),
+                    size = Size(arcSize, arcSize),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+                drawArc(
+                    color = VoiceNeonBlue,
+                    startAngle = -90f,
+                    sweepAngle = 360f * ttsProgress.coerceIn(0f, 1f),
+                    useCenter = false,
+                    topLeft = Offset(inset, inset),
+                    size = Size(arcSize, arcSize),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+            }
+        }
+
+        // ── FRIDAY-style 8-bar voice waveform (LISTENING/SPEAKING) ──
+        if (state == SphereState.LISTENING || state == SphereState.SPEAKING) {
+            val barColor = if (state == SphereState.LISTENING) VoiceNeonCyan else VoiceNeonBlue
+            Canvas(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 168.dp)
+                    .size(width = 150.dp, height = 46.dp)
+            ) {
+                val barW = 3.dp.toPx()
+                val gap = 9.dp.toPx()
+                val totalW = 8 * barW + 7 * gap
+                val startX = (size.width - totalW) / 2f
+                val phase = speakingWavePhase.value
+                val amp = amplitude.coerceIn(0f, 1f)
+                for (i in 0 until 8) {
+                    // staggered delays 0 → 0.8s across the 8 bars
+                    val delay = i * (0.8f / 7f)
+                    val wave = 0.5f + 0.5f * sin(phase * 2f + delay * 4f)
+                    // LISTENING: bars ride the mic level; SPEAKING: full swing
+                    val ampFactor = if (state == SphereState.LISTENING) (0.25f + 0.75f * amp) else 1f
+                    val h = ((10f + wave * 20f) * ampFactor).dp.toPx() // 10 → 30dp
+                    drawRoundRect(
+                        color = barColor.copy(alpha = 0.9f),
+                        topLeft = Offset(startX + i * (barW + gap), size.height - h),
+                        size = Size(barW, h),
+                        cornerRadius = CornerRadius(barW / 2f, barW / 2f)
+                    )
+                }
+            }
         }
 
         // ── Top-left controls: reply-mode toggle + model chip ──
@@ -1187,7 +1515,8 @@ fun JarvisSphere(
         } // Row (top-left controls)
 
         // ── Top transcript bar (below the model chip — no overlap) ──
-        if (transcript.isNotBlank()) {
+        // Hidden during ERROR — the red error banner replaces it.
+        if (transcript.isNotBlank() && state != SphereState.ERROR) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -1246,6 +1575,7 @@ fun JarvisSphere(
                     SphereState.THINKING -> "Thinking…"
                     SphereState.SPEAKING -> "Speaking — tap to interrupt"
                     SphereState.AWAITING -> "Awaiting… speak or tap the handle to exit"
+                    SphereState.ERROR -> "Something went wrong — exit and reopen"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = chipText
@@ -1292,6 +1622,61 @@ fun JarvisSphere(
                             color = if (selected) Color.White else chipText
                         )
                     }
+                }
+            }
+        }
+
+        // ── ERROR: red banner + red vignette flash (transient, auto-reverts
+        // in the ViewModel after ~2.5s; the state never lingers) ──
+        if (state == SphereState.ERROR) {
+            val errTransition = rememberInfiniteTransition(label = "errorFlash")
+            val vignetteAlpha by errTransition.animateFloat(
+                initialValue = 0.10f,
+                targetValue = 0.30f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(420, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "vignette"
+            )
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            VoiceNeonRed.copy(alpha = vignetteAlpha)
+                        ),
+                        center = center,
+                        radius = size.minDimension * 0.55f
+                    )
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 96.dp, start = 24.dp, end = 24.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(VoiceNeonRed.copy(alpha = 0.16f))
+                    .border(1.dp, VoiceNeonRed.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(VoiceNeonRed)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        // During ERROR the transcript param carries the VM's
+                        // error message (VoiceScreen passes errorMessage ?: transcript).
+                        text = transcript.take(120),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFFFD9D9),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }

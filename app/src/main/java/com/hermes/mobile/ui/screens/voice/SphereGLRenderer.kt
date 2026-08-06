@@ -10,24 +10,113 @@ import javax.microedition.khronos.opengles.GL10
 
 /**
  * GPU voice-sphere renderer — thin wispy filament interior (noise
- * zero-crossings, curl-warped, dashed), dark blue body, luminous
- * blue/cyan -> magenta rim, soft blue core. Tones matched to the user's
- * reference; no white clipping.
- *   - uAudioVolume brightens filaments (capped, 0 at silence -> base intact)
+ * zero-crossings, curl-warped, dashed), state-driven neon palette,
+ * Siri-style concentric rings, white-hot core.
+ *   - State comes in as uniforms every rendered frame via
+ *     [setVisualState]: uState/uColorA/uColorB/uHueShift/uRingCount/uPulseSpeed
+ *   - uAudioVolume brightens filaments + core (capped, 0 at silence ->
+ *     base intact) — consumed by the GLSL, no longer dead
+ *   - ERROR state: red flash sin(t*10)^3 then a slow pulse
+ *   - sim clock advanced by the frame driver (advanceTime) — rendering
+ *     freezes exactly where it was when paused (privacy pause = zero work)
  *   - hardened: shader failure falls back to a solid dark disc (no crash)
  */
 class SphereGLRenderer : GLSurfaceView.Renderer {
 
+    companion object {
+        // Must match SphereState ordinals in VoiceScreen.kt.
+        const val STATE_IDLE = 0
+        const val STATE_LISTENING = 1
+        const val STATE_THINKING = 2
+        const val STATE_SPEAKING = 3
+        const val STATE_AWAITING = 4
+        const val STATE_ERROR = 5
+    }
+
+    // ── Per-state palette (RGB 0..1, FRIDAY/Siri neon tokens) ──
+    private val NEON_CYAN = floatArrayOf(0.412f, 0.898f, 0.898f)      // #69E5E5
+    private val NEON_BLUE = floatArrayOf(0.239f, 0.545f, 1.0f)        // #3D8BFF
+    private val NEON_VIOLET = floatArrayOf(0.541f, 0.231f, 1.0f)      // #8A3BFF
+    private val NEON_MAGENTA = floatArrayOf(1.0f, 0.302f, 0.824f)     // #FF4DD2
+    private val NEON_RED = floatArrayOf(1.0f, 0.302f, 0.302f)         // #FF4D4D
+    private val CORE_WHITE = floatArrayOf(0.949f, 0.969f, 1.0f)       // #F2F7FF
+
+    // Written from the UI/main thread, read on the GL thread (same pattern
+    // as the original uAudioVolume). Volatile fields → no torn reads.
     @Volatile private var uAudioVolume = 0f
+    @Volatile private var uProgress = 0f
+    @Volatile private var uState = STATE_IDLE
+    @Volatile private var uHueShift = 0f
+    @Volatile private var colorA = NEON_CYAN
+    @Volatile private var colorB = NEON_BLUE
+    @Volatile private var ringCount = 2f
+    @Volatile private var pulseSpeed = 0.5f
+    @Volatile private var simTime = 0f
 
     private var program = 0
     private var uTimeLoc = -1
     private var uVolumeLoc = -1
+    private var uStateLoc = -1
+    private var uColorALoc = -1
+    private var uColorBLoc = -1
+    private var uHueShiftLoc = -1
+    private var uRingCountLoc = -1
+    private var uPulseSpeedLoc = -1
     private var quadBuffer: FloatBuffer? = null
-    private var startNanos = 0L
 
     fun setAudioVolume(volume: Float) {
         uAudioVolume = volume.coerceIn(0f, 1f)
+    }
+
+    /** Advance the renderer's simulation clock (called by the frame driver). */
+    fun advanceTime(dt: Float) {
+        if (dt > 0f) simTime += dt
+    }
+
+    /**
+     * Upload the full visual state. Called by the frame driver each rendered
+     * frame; palette + ring motion are derived from the state here and
+     * consumed by the GLSL uniforms. [progress] drives ring speed during
+     * SPEAKING (0..1); [hueShift] is an extra palette offset (THINKING adds
+     * its own t*0.15 sweep inside onDrawFrame).
+     */
+    fun setVisualState(state: Int, volume: Float, progress: Float, hueShift: Float) {
+        uState = state
+        uAudioVolume = volume.coerceIn(0f, 1f)
+        uProgress = progress.coerceIn(0f, 1f)
+        uHueShift = hueShift
+        when (state) {
+            STATE_LISTENING -> { // cyan rings, brightness ← mic amplitude
+                colorA = NEON_CYAN
+                colorB = NEON_BLUE
+                ringCount = 4f
+                pulseSpeed = 1.3f
+            }
+            STATE_THINKING -> { // violet → magenta hue sweep
+                colorA = NEON_VIOLET
+                colorB = NEON_MAGENTA
+                ringCount = 3f
+                pulseSpeed = 0.8f
+            }
+            STATE_SPEAKING -> { // blue + white-hot core
+                colorA = NEON_BLUE
+                colorB = CORE_WHITE
+                ringCount = 3f
+                pulseSpeed = 1.0f
+            }
+            STATE_ERROR -> { // red flash
+                colorA = NEON_RED
+                colorB = NEON_RED
+                ringCount = 5f
+                pulseSpeed = 3.2f
+            }
+            else -> { // IDLE / AWAITING: cyan dim, slow pulse
+                colorA = NEON_CYAN
+                colorB = NEON_BLUE
+                ringCount = 2f
+                pulseSpeed = 0.5f
+            }
+        }
     }
 
     private val VERTEX_SHADER = """
@@ -48,6 +137,12 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         varying vec2 vTexCoord;
         uniform float uTime;
         uniform float uAudioVolume;
+        uniform int uState;        // 0 idle, 1 listening, 2 thinking, 3 speaking, 4 awaiting, 5 error
+        uniform vec3 uColorA;      // state palette (left/outer)
+        uniform vec3 uColorB;      // state palette (right/inner)
+        uniform float uHueShift;   // palette sweep (THINKING: t*0.15)
+        uniform float uRingCount;  // Siri ring layer density
+        uniform float uPulseSpeed; // Siri ring travel speed
 
         vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}
         vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
@@ -102,6 +197,8 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
             float y = vTexCoord.y;
             float a = atan(y, x);
             float tm = uTime;
+            float state = float(uState);
+            float vol = clamp(uAudioVolume, 0.0, 1.0);
 
             // thin wispy filaments: noise zero-crossings, curl-warped, dashed
             float warp = snoise(vec3(x * 1.4, y * 1.4, tm * 0.10));
@@ -119,23 +216,53 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
             filament *= (0.75 + 0.25 * sin(tm * 0.6));
             filament = clamp(filament, 0.0, 1.0);
 
-            // blue-left -> magenta-right hue
-            float hue = 0.5 + 0.5 * x;
-            vec3 leftC = vec3(0.16, 0.32, 1.00);
-            vec3 rightC = vec3(0.45, 0.14, 0.95);
-            float flu = clamp(hue + 0.1 * sin(-tm * 0.2), 0.0, 1.0);
-            vec3 filaments = mix(leftC, rightC, flu) * filament * 2.6;
+            // uniform-driven palette (replaces hardcoded leftC/rightC)
+            float hue = clamp(0.5 + 0.5 * x + uHueShift, 0.0, 1.0);
+            vec3 palette = mix(uColorA, uColorB, hue);
 
             // dark blue body + radial haze
             vec3 body = vec3(0.02, 0.02, 0.05)
                       + vec3(0.12, 0.16, 0.30) * (0.34 * smoothstep(0.18, 0.85, d));
 
-            // luminous rim + soft blue core
-            vec3 rim_c = mix(leftC, rightC, hue);
-            vec3 rim_glow = rim_c * smoothstep(0.68, 0.99, d) * 2.2;
-            vec3 central = vec3(0.03, 0.04, 0.08) * clamp(1.0 - 2.4 * d, 0.0, 1.0) * 1.3;
+            // luminous rim
+            vec3 rim_glow = palette * smoothstep(0.68, 0.99, d) * 2.2;
 
-            vec3 finalColor = body + filaments + rim_glow + central;
+            // Siri-style concentric rings: cheap additive arcs sweeping
+            // outward (fract(d * uRingCount - tm * uPulseSpeed))
+            float ringPhase = fract(d * uRingCount - tm * uPulseSpeed);
+            float ring = pow(ringPhase, 14.0);
+            ring *= 0.6 + 0.4 * sin(tm * 1.8 - d * 6.0);
+            ring *= smoothstep(0.06, 0.22, d) * (1.0 - smoothstep(0.90, 0.99, d));
+            vec3 ringColor = mix(uColorB, vec3(1.0), 0.3) * ring * (1.1 + vol * 2.4);
+
+            // white-hot core (vol pushes it hotter)
+            float coreMask = exp(-d * 5.0);
+            vec3 core = mix(palette, vec3(1.0), 0.9) * coreMask * (1.0 + vol * 1.8);
+
+            // state-driven motion
+            float statePulse = 1.0;
+            float errFlash = 0.0;
+            if (state < 1.5) {            // IDLE: cyan dim, slow pulse
+                statePulse = 0.45 + 0.35 * (0.5 + 0.5 * sin(tm * 0.8));
+            } else if (state < 2.5) {     // LISTENING: rings, brightness ← volume
+                statePulse = 0.75 + 0.55 * vol;
+            } else if (state < 3.5) {     // THINKING: hue sweep via uHueShift
+                statePulse = 0.85 + 0.15 * sin(tm * 2.4);
+            } else if (state < 4.5) {     // SPEAKING: bright blue + white-hot core
+                statePulse = 0.9 + 0.35 * vol;
+            } else if (state < 5.5) {     // AWAITING: same as IDLE
+                statePulse = 0.45 + 0.35 * (0.5 + 0.5 * sin(tm * 0.8));
+            } else {                      // ERROR: red flash sin(t*10)^3, then slow pulse
+                float s = sin(tm * 10.0);
+                errFlash = max(s * s * s, 0.0);
+                statePulse = 0.45 + 0.3 * (0.5 + 0.5 * sin(tm * 1.2));
+            }
+
+            vec3 finalColor = (body + filaments * (0.55 + 0.9 * vol)) * statePulse
+                            + rim_glow * statePulse
+                            + ringColor * statePulse
+                            + core * statePulse
+                            + vec3(1.0, 0.12, 0.08) * errFlash * 2.0;
             float opacity = 1.0 - smoothstep(0.985, 0.99, d);
             gl_FragColor = vec4(finalColor, opacity);
         }
@@ -150,7 +277,13 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         }
         uTimeLoc = GLES20.glGetUniformLocation(program, "uTime")
         uVolumeLoc = GLES20.glGetUniformLocation(program, "uAudioVolume")
-        startNanos = System.nanoTime()
+        uStateLoc = GLES20.glGetUniformLocation(program, "uState")
+        uColorALoc = GLES20.glGetUniformLocation(program, "uColorA")
+        uColorBLoc = GLES20.glGetUniformLocation(program, "uColorB")
+        uHueShiftLoc = GLES20.glGetUniformLocation(program, "uHueShift")
+        uRingCountLoc = GLES20.glGetUniformLocation(program, "uRingCount")
+        uPulseSpeedLoc = GLES20.glGetUniformLocation(program, "uPulseSpeed")
+        simTime = 0f
         GLES20.glClearColor(0f, 0f, 0f, 0f)
     }
 
@@ -167,9 +300,20 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         }
         GLES20.glUseProgram(program)
 
-        val t = (System.nanoTime() - startNanos) / 1_000_000_000f
+        val t = simTime
         GLES20.glUniform1f(uTimeLoc, t)
         GLES20.glUniform1f(uVolumeLoc, uAudioVolume)
+        GLES20.glUniform1i(uStateLoc, uState)
+        GLES20.glUniform3f(uColorALoc, colorA[0], colorA[1], colorA[2])
+        GLES20.glUniform3f(uColorBLoc, colorB[0], colorB[1], colorB[2])
+        // THINKING: violet → magenta hue sweep (bounded so the sweep cycles
+        // forever instead of clamping to magenta after a few seconds).
+        val hueShift = uHueShift + if (uState == STATE_THINKING) (t * 0.15f) % 1f else 0f
+        GLES20.glUniform1f(uHueShiftLoc, hueShift)
+        var speed = pulseSpeed
+        if (uState == STATE_SPEAKING) speed += uProgress * 1.4f // rings accelerate with speech
+        GLES20.glUniform1f(uRingCountLoc, ringCount)
+        GLES20.glUniform1f(uPulseSpeedLoc, speed)
 
         var buf = quadBuffer
         if (buf == null) {
