@@ -81,6 +81,33 @@ class SettingsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
+    // Diag-log upload result: null = idle, "ok" = uploaded, else error text
+    private val _diagUploadResult = MutableStateFlow<String?>(null)
+    val diagUploadResult: StateFlow<String?> = _diagUploadResult.asStateFlow()
+    @Volatile private var diagUploading = false
+
+    fun uploadDiagLog(device: String, version: String, log: String) {
+        if (diagUploading) return
+        diagUploading = true
+        _diagUploadResult.value = "Uploading…"
+        viewModelScope.launch {
+            try {
+                val ok = repository.uploadDiagLog(device, version, log)
+                _diagUploadResult.value = if (ok) "Uploaded to server ✓" else "Upload failed — check connection"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _diagUploadResult.value = "Upload failed: ${e.message}"
+            } finally {
+                diagUploading = false
+            }
+        }
+    }
+
+    fun clearDiagUploadResult() {
+        _diagUploadResult.value = null
+    }
+
     init {
         // Load saved config
         val saved = repository.getSavedConfig()
@@ -782,9 +809,9 @@ fun SettingsScreen(
                 SettingsInfoRow("Device", "${Build.MANUFACTURER} ${Build.MODEL}")
                 SettingsInfoRow("Android", Build.VERSION.RELEASE)
                 Spacer(modifier = Modifier.height(12.dp))
-                // On-demand diagnostics: one tap shares the last 24h of
-                // activity (diag.log tail + any crash dump) — debug-ready
-                // without keeping unbounded logs on-device.
+                // On-demand diagnostics: share the last 24h of activity
+                // (diag.log tail + any crash dump) or upload it to the
+                // bridge server (STORE_PATH/logs/) for the maintainer.
                 TextButton(
                     onClick = {
                         try {
@@ -816,6 +843,26 @@ fun SettingsScreen(
                     Icon(Icons.Filled.BugReport, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Share log")
+                }
+                // Upload the diag log to the bridge server (STORE_PATH/logs/)
+                val diagUploadResult by viewModel.diagUploadResult.collectAsState()
+                TextButton(
+                    onClick = {
+                        val diagFile = File(context.filesDir, "diag.log")
+                        val logText = if (diagFile.exists()) diagFile.readText() else "(no diag.log)"
+                        viewModel.uploadDiagLog(
+                            device = "${Build.MANUFACTURER} ${Build.MODEL}",
+                            version = try {
+                                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
+                            } catch (_: Exception) { "?" },
+                            log = logText
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(diagUploadResult ?: "Upload log to server")
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 TextButton(

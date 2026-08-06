@@ -365,6 +365,29 @@ class HermesApiService @Inject constructor(
         }
     }
 
+    // ─── Diag log upload (production support) ───
+    // Ships the on-device diag.log to the bridge, which stores it under
+    // STORE_PATH/logs/ for the user/maintainer to pull for analysis.
+    suspend fun uploadDiagLog(device: String, version: String, log: String): Boolean {
+        val baseUrl = config?.baseUrl ?: return false
+        return withContext(Dispatchers.IO) {
+            try {
+                val body = JSONObject().apply {
+                    put("device", device)
+                    put("version", version)
+                    put("log", log)
+                }.toString()
+                val request = Request.Builder()
+                    .url("$baseUrl/api/diag/log")
+                    .post(body.toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(request).execute().use { it.isSuccessful }
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
     // ─── Text-to-Speech ───
     // Default: Indian English female voice (edge-tts). Pass a different
     // voice (e.g. "en-IN-PrabhatNeural" male) for variety.

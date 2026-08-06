@@ -140,6 +140,11 @@ class HermesRepository @Inject constructor(
         return apiService.uploadFile(file, fileName, mimeType)
     }
 
+    /** Upload the on-device diag log to the bridge (stored under STORE_PATH/logs/). */
+    suspend fun uploadDiagLog(device: String, version: String, log: String): Boolean {
+        return apiService.uploadDiagLog(device, version, log)
+    }
+
     suspend fun sendMessageWithAttachment(sessionId: String, text: String, url: String, type: String) {
         val msg = Message(
             sessionId = sessionId,
