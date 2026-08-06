@@ -137,7 +137,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         varying vec2 vTexCoord;
         uniform float uTime;
         uniform float uAudioVolume;
-        uniform int uState;        // 0 idle, 1 listening, 2 thinking, 3 speaking, 4 awaiting, 5 error
+        uniform float uState;      // 0 idle, 1 listening, 2 thinking, 3 speaking, 4 awaiting, 5 error
         uniform vec3 uColorA;      // state palette (left/outer)
         uniform vec3 uColorB;      // state palette (right/inner)
         uniform float uHueShift;   // palette sweep (THINKING: t*0.15)
@@ -197,7 +197,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
             float y = vTexCoord.y;
             float a = atan(y, x);
             float tm = uTime;
-            float state = float(uState);
+            float state = uState;
             float vol = clamp(uAudioVolume, 0.0, 1.0);
 
             // thin wispy filaments: noise zero-crossings, curl-warped, dashed
@@ -294,7 +294,9 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
     override fun onDrawFrame(gl: GL10?) {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         if (program == 0) {
-            GLES20.glClearColor(0.02f, 0.012f, 0.05f, 1f)
+            // Shader failed to compile — clear TRANSPARENT so the Compose
+            // neon disc behind the GL view shows through (never a black hole).
+            GLES20.glClearColor(0f, 0f, 0f, 0f)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
             return
         }
@@ -303,7 +305,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         val t = simTime
         GLES20.glUniform1f(uTimeLoc, t)
         GLES20.glUniform1f(uVolumeLoc, uAudioVolume)
-        GLES20.glUniform1i(uStateLoc, uState)
+        GLES20.glUniform1f(uStateLoc, uState.toFloat())
         GLES20.glUniform3f(uColorALoc, colorA[0], colorA[1], colorA[2])
         GLES20.glUniform3f(uColorBLoc, colorB[0], colorB[1], colorB[2])
         // THINKING: violet → magenta hue sweep (bounded so the sweep cycles

@@ -1,6 +1,7 @@
 package com.hermes.mobile.ui.screens.settings
 
 import android.content.Intent
+import java.io.File
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -779,6 +780,41 @@ fun SettingsScreen(
                 })
                 SettingsInfoRow("Device", "${Build.MANUFACTURER} ${Build.MODEL}")
                 SettingsInfoRow("Android", Build.VERSION.RELEASE)
+                Spacer(modifier = Modifier.height(12.dp))
+                // ── Crash logs: share the most recent crash dump so bugs can
+                // be diagnosed from the actual stack trace. ──
+                val crashFiles = remember {
+                    val dir = File(context.filesDir, "crashes")
+                    dir.listFiles()?.filter { it.name.startsWith("crash_") }
+                        ?.sortedByDescending { it.lastModified() } ?: emptyList()
+                }
+                if (crashFiles.isNotEmpty()) {
+                    SettingsInfoRow(
+                        "Crash logs",
+                        "${crashFiles.size} saved · newest ${crashFiles.firstOrNull()?.name?.removePrefix("crash_")?.substringBefore(".txt") ?: ""}"
+                    )
+                    TextButton(
+                        onClick = {
+                            val latest = crashFiles.firstOrNull() ?: return@TextButton
+                            try {
+                                val text = latest.readText()
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_SUBJECT, "Hermes crash log ${latest.name}")
+                                    putExtra(Intent.EXTRA_TEXT, text)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(send, "Share crash log")
+                                )
+                            } catch (_: Exception) {}
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.BugReport, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Share newest crash log")
+                    }
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 TextButton(
                     onClick = {

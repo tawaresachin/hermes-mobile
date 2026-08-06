@@ -1286,6 +1286,23 @@ fun JarvisSphere(
                 .background(Color.Black)
                 .clickable { onTap() }
         ) {
+            // ── Compose neon disc BEHIND the GL view: if the shader fails to
+            // compile or the GL thread is dead, the surface clears
+            // TRANSPARENT and this disc shows through — never a black hole.
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            ringColor.copy(alpha = 0.55f),
+                            coreColor.copy(alpha = 0.25f),
+                            Color.Transparent
+                        ),
+                        center = center,
+                        radius = size.minDimension * 0.5f
+                    ),
+                    radius = size.minDimension * 0.5f
+                )
+            }
             // ── GPU shader sphere (GLSurfaceView). RENDERMODE_WHEN_DIRTY +
             // capped frame driver: the sphere only renders when the driver
             // calls requestRender() (idle ~10fps, active ~30fps) — no more
@@ -1312,6 +1329,11 @@ fun JarvisSphere(
                     phaseProvider = { driverPhase }
                 )
             }
+            // Belt & braces: unconditional start on composition. The
+            // lifecycle effect below also starts it when RESUMED — start()
+            // is idempotent, and this covers any path where no lifecycle
+            // event arrives after the observer is attached.
+            LaunchedEffect(Unit) { frameDriver.start() }
 
             AndroidView(
                 factory = { ctx ->
