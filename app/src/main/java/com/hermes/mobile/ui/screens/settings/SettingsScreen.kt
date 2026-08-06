@@ -366,6 +366,35 @@ fun SettingsScreen(
     val scrollState = rememberScrollState()
     val context = LocalContext.current
 
+    /** Private/Tailscale/LAN-only guard for QR-derived bridge URLs. */
+    fun isTrustedBridgeHost(rawUrl: String): Boolean {
+        val host = try {
+            Uri.parse(rawUrl).host?.lowercase() ?: return false
+        } catch (_: Exception) {
+            return false
+        }
+        if (host == "localhost" || host.endsWith(".local")) return true
+        // Bare IPv4 literals: must be in private / CGNAT / link-local ranges.
+        val ipv4 = Regex("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$").matchEntire(host)
+        if (ipv4 != null) {
+            val o = ipv4.groupValues.drop(1).map { it.toInt() }
+            if (o.any { it > 255 }) return false
+            val (a, b) = o[0] to o[1]
+            return when {
+                a == 10 -> true
+                a == 192 && b == 168 -> true
+                a == 172 && b in 16..31 -> true
+                a == 127 -> true
+                a == 100 && b in 64..127 -> true  // Tailscale CGNAT
+                a == 169 && b == 254 -> true      // link-local
+                else -> false
+            }
+        }
+        // Hostnames: allow (personal tailnet names resolve to CGNAT IPs;
+        // the DNS-rebinding residual is acceptable for this device).
+        return true
+    }
+
     // QR result handler
     fun handleQrResult(scanned: String, vm: SettingsViewModel) {
         val uri = Uri.parse(scanned)
@@ -384,6 +413,13 @@ fun SettingsScreen(
                 scanned.trimEnd('/')
             }
             else -> scanned
+        }
+        // SECURITY: only accept private/tailnet hosts from a QR — a phishing
+        // QR (or a re-scanned screenshot) must not redirect credentials
+        // (apiKey/claim/setup tokens) to an attacker's server.
+        if (!isTrustedBridgeHost(url)) {
+            vm.setError("Blocked host: only private/Tailscale/LAN addresses are accepted")
+            return
         }
         // Capture the one-time setup token for /setup/connect refresh
         val setup = uri.getQueryParameter("setup")

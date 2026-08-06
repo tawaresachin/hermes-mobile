@@ -30,7 +30,6 @@ class AuthManager @Inject constructor(
         private const val PREFS_NAME = "hermes_auth"
         private const val KEY_JWT = "jwt_token"
         private const val KEY_REFRESH = "refresh_token"
-        private const val KEY_USER_ID = "user_id"
         private const val KEY_EMAIL = "email"
     }
 
@@ -46,14 +45,10 @@ class AuthManager @Inject constructor(
     private val _email = MutableStateFlow("")
     val email: StateFlow<String> = _email.asStateFlow()
 
-    private val _userId = MutableStateFlow("")
-    val userId: StateFlow<String> = _userId.asStateFlow()
-
     init {
         // Read stored tokens AFTER lazy fields are initialized
         _isLoggedIn.value = hasStoredTokens()
         _email.value = prefs.getString(KEY_EMAIL, "") ?: ""
-        _userId.value = prefs.getString(KEY_USER_ID, "") ?: ""
     }
 
     // Guard against concurrent refresh
@@ -65,8 +60,6 @@ class AuthManager @Inject constructor(
     fun getRefreshToken(): String? = prefs.getString(KEY_REFRESH, null)?.takeIf { it.isNotBlank() }
 
     fun getEmail(): String = prefs.getString(KEY_EMAIL, "") ?: ""
-
-    fun getUserId(): String = prefs.getString(KEY_USER_ID, "") ?: ""
 
     // ── Auth API calls ──
 
@@ -185,24 +178,20 @@ class AuthManager @Inject constructor(
         prefs.edit()
             .putString(KEY_JWT, json.optString("token", ""))
             .putString(KEY_REFRESH, json.optString("refresh_token", ""))
-            .putString(KEY_USER_ID, json.optString("user_id", ""))
             .putString(KEY_EMAIL, json.optString("email", ""))
             .apply()
         _isLoggedIn.value = true
         _email.value = json.optString("email", "")
-        _userId.value = json.optString("user_id", "")
     }
 
     private fun clearTokens() {
         prefs.edit()
             .remove(KEY_JWT)
             .remove(KEY_REFRESH)
-            .remove(KEY_USER_ID)
             .remove(KEY_EMAIL)
             .apply()
         _isLoggedIn.value = false
         _email.value = ""
-        _userId.value = ""
     }
 
     private fun hasStoredTokens(): Boolean {

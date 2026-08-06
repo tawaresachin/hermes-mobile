@@ -33,9 +33,6 @@ object VoiceTuning {
     /** Silence length that triggers an early finalize (ms). */
     const val EARLY_FINALIZE_SILENCE_MS = 2000L
 
-    /** Extra audio kept before VAD onset (samples) — reserved for pre-roll. */
-    const val PRE_ROLL_SAMPLES = 4096
-
     /** Mic deafen right after TTS starts (ms) — the speaker's own audio. */
     const val DEAFEN_MS = 250L
 

@@ -19,8 +19,6 @@ class HermesRepository @Inject constructor(
 
     val allSessions: Flow<List<Session>> = sessionDao.getAllSessions()
 
-    suspend fun getSession(sessionId: String): Session? = sessionDao.getSession(sessionId)
-
     suspend fun createSession(): Session {
         val session = Session(id = UUID.randomUUID().toString())
         sessionDao.upsertSession(session)
@@ -136,26 +134,13 @@ class HermesRepository @Inject constructor(
 
     // ─── File Upload ───
 
-    suspend fun uploadFile(sessionId: String, file: java.io.File, fileName: String, mimeType: String): String? {
+    suspend fun uploadFile(file: java.io.File, fileName: String, mimeType: String): String? {
         return apiService.uploadFile(file, fileName, mimeType)
     }
 
     /** Upload the on-device diag log to the bridge (stored under STORE_PATH/logs/). */
     suspend fun uploadDiagLog(device: String, version: String, log: String): Boolean {
         return apiService.uploadDiagLog(device, version, log)
-    }
-
-    suspend fun sendMessageWithAttachment(sessionId: String, text: String, url: String, type: String) {
-        val msg = Message(
-            sessionId = sessionId,
-            role = MessageRole.USER,
-            content = text,
-            attachmentUrl = url,
-            attachmentType = type,
-            attachmentName = url.substringAfterLast("/")
-        )
-        messageDao.insertMessage(msg)
-        sessionDao.incrementMessageCount(sessionId)
     }
 
     // ─── Server Connection ───

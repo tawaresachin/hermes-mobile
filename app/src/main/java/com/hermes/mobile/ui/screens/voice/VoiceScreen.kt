@@ -823,13 +823,19 @@ class VoiceViewModel @Inject constructor(
             // the app during speech. prepare() parses the whole mp3.
             withContext(Dispatchers.IO) {
                 tempFile.writeBytes(audioBytes)
-                player = android.media.MediaPlayer().apply {
-                    setDataSource(tempFile.absolutePath)
-                    prepare()
+                val p = android.media.MediaPlayer()
+                try {
+                    p.setDataSource(tempFile.absolutePath)
+                    p.prepare()
+                    player = p
+                } catch (t: Throwable) {
+                    // Never leak the half-built player (it's not assigned yet)
+                    try { p.release() } catch (_: Exception) {}
+                    throw t
                 }
             }
-            player?.start()
             try {
+                player?.start()
                 // Echo-safety (a): deafen the barge-in mic right after
                 // playback starts — the speaker's own audio is still
                 // hitting the mic at full volume.
@@ -1017,50 +1023,11 @@ enum class SphereState {
     ERROR       // Voice error — transient, auto-reverts to IDLE (~2.5s)
 }
 
-// ── Plasma filament descriptors (module-level: allocated once, not per frame) ──
+// ── Voice state + regexes (module-level: allocated once, not per frame) ──
 
 private val TOOL_CALL_BLOCK = Regex(
     "```tool_call\\s*\\n?\\{.*?\\}\\n?```",
     RegexOption.DOT_MATCHES_ALL
-)
-
-/** A shell-hugging smoke tendril: an arc near the rim with a wavy wobble. */
-private data class Tendril(
-    val arcStart: Double,
-    val arcLen: Double,
-    val rMin: Float,
-    val rMax: Float,
-    val cA: Long,
-    val cB: Long
-)
-
-/** A thin bright web-filament threading the shell (no blur). */
-private data class Filament(
-    val arcStart: Double,
-    val arcLen: Double,
-    val rMin: Float,
-    val rMax: Float,
-    val c: Long
-)
-
-/** A voice-reactive wave flare: an arc band that pulses with amplitude. */
-private data class WaveFlare(
-    val arcStart: Double,
-    val arcLen: Double,
-    val r: Float,
-    val cA: Color,
-    val cB: Color
-)
-
-/** A large spiral swirl sweeping through the interior (reference: defined
- * vortex arms moving across the surface and through the volume). */
-private data class Vortex(
-    val arcStart: Double,
-    val arcLen: Double,
-    val rFrom: Float,
-    val rTo: Float,
-    val cA: Long,
-    val cB: Long
 )
 
 /**
@@ -1203,15 +1170,6 @@ fun JarvisSphere(
             repeatMode = RepeatMode.Reverse
         ),
         label = "breath"
-    )
-    val rotationAnim = transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(8000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rotation"
     )
     val speakingWavePhase = remember { mutableStateOf(0f) }
 

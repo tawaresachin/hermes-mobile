@@ -85,7 +85,7 @@ data class ToolCallInfo(
     val status: ToolCallStatus = ToolCallStatus.RUNNING
 )
 
-enum class ToolCallStatus { PENDING, RUNNING, COMPLETED, FAILED }
+enum class ToolCallStatus { RUNNING, COMPLETED, FAILED }
 
 // ═══════════════════════════════════════════════════════════════
 // ViewModel  —  uses @HiltViewModel so hiltViewModel() works
@@ -145,7 +145,6 @@ class ChatViewModel @Inject constructor(
 
     // ── Initialisation ──
     private var messageJob: Job? = null
-    private var _connectionJob: Job? = null
     private var initJob: Job? = null
 
     /**
@@ -385,21 +384,7 @@ class ChatViewModel @Inject constructor(
         _errorMessage.value = msg
     }
 
-    // ── Upload file (called on send click) ──
-        suspend fun uploadFile(context: android.content.Context, uri: android.net.Uri, fileName: String, mimeType: String, attachType: String): String? {
-            val sid = _sessionId.value ?: return null
-            return try {
-                val tempFile = cacheAttachmentToTemp(context, uri) ?: return null
-                val result = repository.uploadFile(sid, tempFile, fileName, mimeType)
-                tempFile.delete()
-                result
-            } catch (e: Exception) {
-                _errorMessage.value = "Upload failed: ${e.message}"
-                null
-            }
-        }
-
-        // ── Send with attachment (ViewModel scope — survives recomposition cancellation) ──
+    // ── Send with attachment (ViewModel scope — survives recomposition cancellation) ──
         fun sendWithAttachment(
             text: String,
             attachment: PendingAttachment?,
@@ -418,7 +403,7 @@ class ChatViewModel @Inject constructor(
                             onAttachComplete()
                             return@launch
                         }
-                        attachUrl = repository.uploadFile(sid, tempFile, attachment.fileName, attachment.mimeType)
+                        attachUrl = repository.uploadFile(tempFile, attachment.fileName, attachment.mimeType)
                         tempFile.delete()
                         attachType = attachment.attachType
                     } catch (e: Exception) {
@@ -510,9 +495,6 @@ fun ChatScreen(
 
     var inputText by remember { mutableStateOf("") }
     var pendingAttachment by remember { mutableStateOf<PendingAttachment?>(null) }
-    // Message being edited (loads its text into the input; resend stays in
-    // the SAME session instead of spawning a new chat).
-    var editingMessageId by remember { mutableStateOf<String?>(null) }
     // Local in-chat search over the loaded messages.
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -801,7 +783,6 @@ fun ChatScreen(
                                 baseUrl = vm.getBaseUrl(),
                                 onEdit = if (message.role == MessageRole.USER && !isStreamingThis) {
                                     {
-                                        editingMessageId = message.id.toString()
                                         inputText = message.content
                                         showSearch = false
                                         searchQuery = ""
@@ -822,7 +803,6 @@ fun ChatScreen(
                 // Use ViewModel scope so cancellation doesn't lose messages
                 vm.sendWithAttachment(inputText.trim(), pendingAttachment, context, onAttachComplete = {
                     pendingAttachment = null
-                    editingMessageId = null
                     inputText = ""
                 })
             },
@@ -1288,7 +1268,6 @@ fun ToolCallCard(toolCall: ToolCallInfo) {
                 ToolCallStatus.RUNNING -> WarningAmber.copy(alpha = 0.12f)
                 ToolCallStatus.COMPLETED -> SuccessGreen.copy(alpha = 0.08f)
                 ToolCallStatus.FAILED -> ErrorRed.copy(alpha = 0.08f)
-                ToolCallStatus.PENDING -> MaterialTheme.colorScheme.surfaceVariant
             }
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
@@ -1313,12 +1292,6 @@ fun ToolCallCard(toolCall: ToolCallInfo) {
                         Icons.Filled.Error,
                         contentDescription = null,
                         tint = ErrorRed,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    ToolCallStatus.PENDING -> Icon(
-                        Icons.Filled.HourglassEmpty,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -1353,14 +1326,12 @@ fun ToolCallCard(toolCall: ToolCallInfo) {
                         ToolCallStatus.RUNNING -> "Running..."
                         ToolCallStatus.COMPLETED -> "Done"
                         ToolCallStatus.FAILED -> "Failed"
-                        ToolCallStatus.PENDING -> "Pending"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = when (toolCall.status) {
                         ToolCallStatus.RUNNING -> WarningAmber
                         ToolCallStatus.COMPLETED -> SuccessGreen
                         ToolCallStatus.FAILED -> ErrorRed
-                        ToolCallStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
                 )
             }

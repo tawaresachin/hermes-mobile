@@ -7,10 +7,10 @@ import com.hermes.mobile.data.model.ServerConfig
 import com.hermes.mobile.data.model.ModelInfo
 import com.hermes.mobile.data.model.ModelListResponse
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -103,7 +103,14 @@ class HermesApiService @Inject constructor(
         get() = com.hermes.mobile.security.SecurePrefs.get(context, "hermes_config")
 
     fun updateConfig(cfg: ServerConfig) {
+        val prev = config
         config = cfg
+        if (prev == cfg) {
+            // Unchanged — skip the prefs write. healthCheck polls every 5s
+            // and passes a fresh object; writing on every poll is needless
+            // disk I/O.
+            return
+        }
         prefs.edit()
             .putString(KEY_BASE_URL, cfg.baseUrl)
             .apply()
@@ -127,22 +134,21 @@ class HermesApiService @Inject constructor(
 
     fun getBaseUrl(): String = config?.baseUrl ?: "http://localhost:8080"
 
-    // ── Token refresh guard (one at a time) ──
-    private val refreshLock = Mutex()
-
     // ─── Health Check ───
 
     suspend fun healthCheck(cfg: ServerConfig? = null): Boolean {
         val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: config?.baseUrl ?: return false
-        cfg?.takeIf { it.baseUrl.isNotBlank() }?.let { updateConfig(it) }
+        if (cfg?.baseUrl?.isNotBlank() == true && cfg != config) updateConfig(cfg)
         return withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
                     .url("$baseUrl/health")
                     .get()
                     .build()
-                val response = client.newCall(request).execute()
-                response.isSuccessful
+                // response.use closes the body — a leaked body pins a socket
+                // (readTimeout 300s) that can't be pooled; the 5s poll loop
+                // would accumulate connections over time.
+                client.newCall(request).execute().use { it.isSuccessful }
             } catch (_: Exception) {
                 false
             }
@@ -233,16 +239,19 @@ class HermesApiService @Inject constructor(
                         // If 401, try to refresh token and retry
                         if (response?.code == 401) {
                             val baseUrl = config?.baseUrl ?: "http://localhost:8080"
-                            val refreshed = kotlinx.coroutines.runBlocking {
-                                authManager.refreshToken(baseUrl)
-                            }
-                            if (refreshed) {
-                                // Retry with new token by creating a new request
-                                continuation.resumeWithException(
+                            // Refresh off this OkHttp callback thread — a
+                            // runBlocking here would pin a dispatcher thread
+                            // per failed stream.
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val refreshed = authManager.refreshToken(baseUrl)
+                                val ex = if (refreshed) {
                                     IOException("401 - Retrying with refreshed token")
-                                )
-                                return
+                                } else {
+                                    IOException("401 - Auth failed after refresh")
+                                }
+                                continuation.resumeWithException(ex)
                             }
+                            return
                         }
                         val ex = t ?: IOException("Connection failed: ${response?.code ?: 0}")
                         continuation.resumeWithException(ex)
@@ -262,24 +271,6 @@ class HermesApiService @Inject constructor(
         }
     }
 
-    // ─── List Sessions ───
-
-    suspend fun listSessions(): List<Map<String, Any>> {
-        val baseUrl = config?.baseUrl ?: "http://localhost:8080"
-        return withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url("$baseUrl/api/sessions")
-                .get()
-                .build()
-            val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: "[]"
-            val arr = JSONArray(body)
-            (0 until arr.length()).map { i ->
-                arr.getJSONObject(i).toMap()
-            }
-        }
-    }
-
     // ─── List Models ───
 
     suspend fun listModels(sessionId: String = ""): ModelListResponse? {
@@ -288,29 +279,30 @@ class HermesApiService @Inject constructor(
             try {
                 val url = "$baseUrl/api/models" + if (sessionId.isNotBlank()) "?session_id=$sessionId" else ""
                 val request = Request.Builder().url(url).get().build()
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val body = response.body?.string() ?: return@withContext null
-                    val json = JSONObject(body)
-                    val modelsArr = json.optJSONArray("models") ?: return@withContext null
-                    val models = (0 until modelsArr.length()).map { i ->
-                        val m = modelsArr.getJSONObject(i)
-                        ModelInfo(
-                            id = m.optString("id", ""),
-                            name = m.optString("name", ""),
-                            isVision = m.optBoolean("isVision", false),
-                            isFree = m.optBoolean("isFree", false),
-                            provider = m.optString("provider", ""),
-                            baseUrl = m.optString("baseUrl", "")
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string() ?: return@use null
+                        val json = JSONObject(body)
+                        val modelsArr = json.optJSONArray("models") ?: return@use null
+                        val models = (0 until modelsArr.length()).map { i ->
+                            val m = modelsArr.getJSONObject(i)
+                            ModelInfo(
+                                id = m.optString("id", ""),
+                                name = m.optString("name", ""),
+                                isVision = m.optBoolean("isVision", false),
+                                isFree = m.optBoolean("isFree", false),
+                                provider = m.optString("provider", ""),
+                                baseUrl = m.optString("baseUrl", "")
+                            )
+                        }
+                        ModelListResponse(
+                            models = models,
+                            current = json.optString("current", ""),
+                            default = json.optString("default", ""),
+                            provider = json.optString("provider", "")
                         )
-                    }
-                    ModelListResponse(
-                        models = models,
-                        current = json.optString("current", ""),
-                        default = json.optString("default", ""),
-                        provider = json.optString("provider", "")
-                    )
-                } else null
+                    } else null
+                }
             } catch (_: Exception) { null }
         }
     }
@@ -407,6 +399,7 @@ class HermesApiService @Inject constructor(
                 if (response.isSuccessful) {
                     response.body?.bytes()
                 } else {
+                    response.close()
                     null
                 }
             } catch (_: Exception) {
@@ -426,21 +419,22 @@ class HermesApiService @Inject constructor(
         val baseUrl = config?.baseUrl ?: return null
         return withContext(Dispatchers.IO) {
             try {
-                val token = authManager.getToken()
                 val urlBuilder = "$baseUrl/api/stt".toHttpUrlOrNull()?.newBuilder()?.apply {
                     if (!lang.isNullOrBlank()) addQueryParameter("lang", lang)
                 }
                 val request = Request.Builder()
                     .url(urlBuilder?.build() ?: return@withContext null)
                     .post(wav.toRequestBody("audio/wav".toMediaType()))
-                    .apply { if (token != null) addHeader("Authorization", "Bearer $token") }
                     .build()
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val json = JSONObject(response.body?.string() ?: "{}")
-                    json.optString("text").takeIf { it.isNotBlank() }
-                } else {
-                    null
+                // AuthInterceptor adds the Authorization header (replace
+                // semantics) to every request — no manual header needed.
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val json = JSONObject(response.body?.string() ?: "{}")
+                        json.optString("text").takeIf { it.isNotBlank() }
+                    } else {
+                        null
+                    }
                 }
             } catch (_: Exception) {
                 null
@@ -454,7 +448,6 @@ class HermesApiService @Inject constructor(
         val baseUrl = config?.baseUrl ?: return null
         return withContext(Dispatchers.IO) {
             try {
-                val token = authManager.getToken()
                 val body = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", fileName, file.asRequestBody(mimeType.toMediaTypeOrNull()))
@@ -462,29 +455,19 @@ class HermesApiService @Inject constructor(
                 val request = Request.Builder()
                     .url("$baseUrl/api/upload")
                     .post(body)
-                    .apply {
-                        if (token != null) addHeader("Authorization", "Bearer $token")
-                    }
                     .build()
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val json = JSONObject(response.body?.string() ?: "{}")
-                    json.optString("url")?.takeIf { it.isNotEmpty() }
-                } else {
-                    null
+                // AuthInterceptor handles the Authorization header.
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val json = JSONObject(response.body?.string() ?: "{}")
+                        json.optString("url")?.takeIf { it.isNotEmpty() }
+                    } else {
+                        null
+                    }
                 }
             } catch (_: Exception) {
                 null
             }
         }
     }
-}
-
-internal fun org.json.JSONObject.toMap(): Map<String, Any> {
-    val map = mutableMapOf<String, Any>()
-    keys().forEach { key ->
-        val value = get(key)
-        map[key] = value
-    }
-    return map
 }

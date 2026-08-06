@@ -11,9 +11,6 @@ interface SessionDao {
     @Query("SELECT * FROM sessions ORDER BY updatedAt DESC")
     fun getAllSessions(): Flow<List<Session>>
 
-    @Query("SELECT * FROM sessions WHERE id = :sessionId")
-    suspend fun getSession(sessionId: String): Session?
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSession(session: Session)
 

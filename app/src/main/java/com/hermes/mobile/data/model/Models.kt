@@ -6,7 +6,7 @@ import androidx.room.PrimaryKey
 
 // ─── Chat / Message Models ───
 
-enum class MessageRole { USER, ASSISTANT, SYSTEM }
+enum class MessageRole { USER, ASSISTANT }
 
 @Entity(
     tableName = "messages",

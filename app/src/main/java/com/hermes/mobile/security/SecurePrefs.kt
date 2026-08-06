@@ -17,9 +17,6 @@ import androidx.security.crypto.MasterKey
  */
 object SecurePrefs {
 
-    /** Prefs name used for auth tokens (JWT / refresh). */
-    const val AUTH_PREFS = "hermes_auth"
-
     /** Prefs name used for the auto-paired device account credentials. */
     const val DEVICE_PREFS = "hermes_device"
 
@@ -37,7 +34,14 @@ object SecurePrefs {
             )
         } catch (t: Throwable) {
             // MIUI/Xiaomi key-store failure or a pre-existing plain file —
-            // never let crypto break the app.
+            // never let crypto break the app. Flag the downgrade so a
+            // maintainer sees it in the diag log instead of it being silent.
+            try {
+                com.hermes.mobile.DiagLog.w(
+                    "SEC",
+                    "EncryptedSharedPreferences unavailable for '$name' — plain fallback: ${t.javaClass.simpleName}: ${t.message}"
+                )
+            } catch (_: Exception) {}
             context.getSharedPreferences(name, Context.MODE_PRIVATE)
         }
     }

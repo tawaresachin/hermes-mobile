@@ -63,6 +63,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
     private var uHueShiftLoc = -1
     private var uRingCountLoc = -1
     private var uPulseSpeedLoc = -1
+    private var aPosLoc = -1
     private var quadBuffer: FloatBuffer? = null
 
     fun setAudioVolume(volume: Float) {
@@ -403,6 +404,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         uHueShiftLoc = GLES20.glGetUniformLocation(program, "uHueShift")
         uRingCountLoc = GLES20.glGetUniformLocation(program, "uRingCount")
         uPulseSpeedLoc = GLES20.glGetUniformLocation(program, "uPulseSpeed")
+        aPosLoc = GLES20.glGetAttribLocation(program, "aPos")
         simTime = 0f
         GLES20.glClearColor(0f, 0f, 0f, 0f)
     }
@@ -450,7 +452,9 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
             buf.put(quad).position(0)
             quadBuffer = buf
         }
-        val aPos = GLES20.glGetAttribLocation(program, "aPos")
+        // aPos location cached in onSurfaceCreated — the driver call is
+        // pointless per frame (locations are fixed at link time).
+        val aPos = aPosLoc
         GLES20.glEnableVertexAttribArray(aPos)
         buf.position(0)
         GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 0, buf)
