@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,31 +82,24 @@ class SettingsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
-    // Diag-log upload result: null = idle, "ok" = uploaded, else error text
+    // Diag-log upload result: null = idle, else status text ("Uploading…",
+    // "Uploaded ✓", or failure). The share sheet opens after the attempt
+    // regardless — upload is best-effort.
     private val _diagUploadResult = MutableStateFlow<String?>(null)
     val diagUploadResult: StateFlow<String?> = _diagUploadResult.asStateFlow()
-    @Volatile private var diagUploading = false
 
-    fun uploadDiagLog(device: String, version: String, log: String) {
-        if (diagUploading) return
-        diagUploading = true
+    /** Upload the diag log to the bridge, then return success (share follows). */
+    suspend fun uploadDiagLogNow(device: String, version: String, log: String): Boolean {
         _diagUploadResult.value = "Uploading…"
-        viewModelScope.launch {
-            try {
-                val ok = repository.uploadDiagLog(device, version, log)
-                _diagUploadResult.value = if (ok) "Uploaded to server ✓" else "Upload failed — check connection"
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _diagUploadResult.value = "Upload failed: ${e.message}"
-            } finally {
-                diagUploading = false
-            }
+        val ok = try {
+            repository.uploadDiagLog(device, version, log)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
         }
-    }
-
-    fun clearDiagUploadResult() {
-        _diagUploadResult.value = null
+        _diagUploadResult.value = if (ok) "Uploaded ✓" else "Upload failed — sharing anyway"
+        return ok
     }
 
     init {
@@ -809,60 +803,53 @@ fun SettingsScreen(
                 SettingsInfoRow("Device", "${Build.MANUFACTURER} ${Build.MODEL}")
                 SettingsInfoRow("Android", Build.VERSION.RELEASE)
                 Spacer(modifier = Modifier.height(12.dp))
-                // On-demand diagnostics: share the last 24h of activity
-                // (diag.log tail + any crash dump) or upload it to the
-                // bridge server (STORE_PATH/logs/) for the maintainer.
-                TextButton(
-                    onClick = {
-                        try {
-                            val crashText = File(context.filesDir, "crashes").listFiles()
-                                ?.filter { it.name.startsWith("crash_") }
-                                ?.maxByOrNull { it.lastModified() }
-                                ?.readText() ?: "(no crash dumps)"
-                            val diagFile = File(context.filesDir, "diag.log")
-                            val diagText = if (diagFile.exists()) diagFile.readText() else "(no diag.log)"
-                            val combined = buildString {
-                                appendLine("=== DIAG LOG (last 24h, tail) ===")
-                                appendLine(diagText.takeLast(12_000))
-                                appendLine()
-                                appendLine("=== CRASH DUMP (newest) ===")
-                                appendLine(crashText)
-                            }
-                            val send = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, "Hermes log ${BuildConfig.VERSION_NAME}")
-                                putExtra(Intent.EXTRA_TEXT, combined)
-                            }
-                            context.startActivity(
-                                Intent.createChooser(send, "Share log")
-                            )
-                        } catch (_: Exception) {}
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.BugReport, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Share log")
-                }
-                // Upload the diag log to the bridge server (STORE_PATH/logs/)
+                // Single "Share logs" action: FIRST uploads the last 24h of
+                // diag.log to the bridge server (STORE_PATH/logs/), THEN
+                // opens the share sheet with the same log (+ newest crash
+                // dump) — the maintainer gets a copy on the server AND the
+                // user can still send it anywhere manually.
                 val diagUploadResult by viewModel.diagUploadResult.collectAsState()
+                val scope = rememberCoroutineScope()
                 TextButton(
                     onClick = {
                         val diagFile = File(context.filesDir, "diag.log")
                         val logText = if (diagFile.exists()) diagFile.readText() else "(no diag.log)"
-                        viewModel.uploadDiagLog(
-                            device = "${Build.MANUFACTURER} ${Build.MODEL}",
-                            version = try {
-                                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
-                            } catch (_: Exception) { "?" },
-                            log = logText
-                        )
+                        val device = "${Build.MANUFACTURER} ${Build.MODEL}"
+                        val version = try {
+                            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
+                        } catch (_: Exception) { "?" }
+                        val crashText = File(context.filesDir, "crashes").listFiles()
+                            ?.filter { it.name.startsWith("crash_") }
+                            ?.maxByOrNull { it.lastModified() }
+                            ?.readText() ?: "(no crash dumps)"
+                        val combined = buildString {
+                            appendLine("=== DIAG LOG (last 24h) ===")
+                            appendLine(logText)
+                            appendLine()
+                            appendLine("=== CRASH DUMP (newest) ===")
+                            appendLine(crashText)
+                        }
+                        scope.launch {
+                            // 1) upload to server (best-effort)
+                            viewModel.uploadDiagLogNow(device, version, logText)
+                            // 2) then share — sheet always opens
+                            try {
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_SUBJECT, "Hermes log $version")
+                                    putExtra(Intent.EXTRA_TEXT, combined)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(send, "Share logs")
+                                )
+                            } catch (_: Exception) {}
+                        }
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Filled.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(diagUploadResult ?: "Upload log to server")
+                    Text(diagUploadResult ?: "Share logs")
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 TextButton(
