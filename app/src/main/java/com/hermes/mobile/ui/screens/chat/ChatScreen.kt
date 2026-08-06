@@ -625,10 +625,9 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(modifier = Modifier.width(4.dp))
-                // Hermes logo — the girl portrait (circle-clipped), not the
-                // old purple-H monogram
+                // Hermes logo — the golden Caduceus (circle-clipped)
                 Image(
-                    painter = painterResource(R.drawable.hermes_girl),
+                    painter = painterResource(R.drawable.hermes_caduceus),
                     contentDescription = "Hermes",
                     modifier = Modifier
                         .size(32.dp)
