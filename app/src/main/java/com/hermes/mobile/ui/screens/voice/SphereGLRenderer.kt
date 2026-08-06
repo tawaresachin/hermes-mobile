@@ -385,16 +385,16 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
             createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         } catch (t1: Throwable) {
             android.util.Log.e("SphereGL", "state shader failed, trying fallback", t1)
-            DiagLog.log("GL", "state shader failed: ${t1.message}")
+            DiagLog.e("GL", "state shader failed: ${t1.message}")
             try {
                 createProgram(VERTEX_SHADER, FALLBACK_FRAGMENT_SHADER)
             } catch (t2: Throwable) {
                 android.util.Log.e("SphereGL", "fallback shader failed too", t2)
-                DiagLog.log("GL", "fallback shader failed too: ${t2.message}")
+                DiagLog.e("GL", "fallback shader failed too: ${t2.message}")
                 0
             }
         }
-        DiagLog.log("GL", "program=$program (0=both shaders failed, disc fallback active)")
+        DiagLog.i("GL", "program=$program (0=both shaders failed, disc fallback active)")
         uTimeLoc = GLES20.glGetUniformLocation(program, "uTime")
         uVolumeLoc = GLES20.glGetUniformLocation(program, "uAudioVolume")
         uStateLoc = GLES20.glGetUniformLocation(program, "uState")

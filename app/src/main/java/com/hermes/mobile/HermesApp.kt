@@ -27,7 +27,7 @@ class HermesApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         DiagLog.init(this)
-        DiagLog.log("APP", "onCreate version=${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+        DiagLog.i("APP", "onCreate version=${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
         installCrashHandler()
     }
 
@@ -47,8 +47,8 @@ class HermesApp : Application(), ImageLoaderFactory {
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
-                DiagLog.log("CRASH", "thread=${thread.name} ${throwable.javaClass.name}: ${throwable.message}")
-                throwable.stackTrace.take(12).forEach { DiagLog.log("CRASH", "  at $it") }
+                DiagLog.e("CRASH", "thread=${thread.name} ${throwable.javaClass.name}: ${throwable.message}")
+                throwable.stackTrace.take(12).forEach { DiagLog.e("CRASH", "  at $it") }
                 val crashDir = File(filesDir, "crashes")
                 crashDir.mkdirs()
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())

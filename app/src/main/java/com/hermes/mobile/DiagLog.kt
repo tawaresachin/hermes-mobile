@@ -7,18 +7,28 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * File-backed diagnostic log with a hard 24-hour retention window.
+ * File-backed diagnostic log with LEVELS + a hard 24-hour retention window.
  *
- * - Appends tagged, timestamped lines to filesDir/diag.log
+ * - Levels: ERROR always persisted; WARN/INFO persist when at/above
+ *   [MIN_PERSIST_LEVEL]; DEBUG is transient (dropped by default) — the
+ *   on-disk log stays small and high-signal.
  * - Prunes lines older than 24h + deletes crash_*.txt older than 24h
- *   (on init and periodically while writing) — storage stays bounded,
- *   and the shared log always covers the last day of activity.
+ *   (on init and periodically while writing) — storage stays bounded.
  * - Shared via Settings → About → "Share log".
  */
 object DiagLog {
+    const val DEBUG = 0
+    const val INFO = 1
+    const val WARN = 2
+    const val ERROR = 3
+
     private const val MAX_BYTES = 200_000L
     private const val RETENTION_MS = 24L * 60 * 60 * 1000
     private const val PRUNE_EVERY = 50 // writes between prunes
+
+    // Persist ERROR always; WARN/INFO only when at/above this threshold.
+    // DEBUG lines are dropped entirely (kept out of the file).
+    private const val MIN_PERSIST_LEVEL = INFO
     private val TS_FORMAT = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
     @Volatile private var ctx: Context? = null
@@ -27,15 +37,26 @@ object DiagLog {
     fun init(context: Context) {
         ctx = context.applicationContext
         prune()
-        log("APP", "DiagLog initialized (24h retention)")
+        log(INFO, "APP", "DiagLog initialized (levels: ERROR+always, WARN/INFO by threshold, 24h retention)")
     }
 
-    fun log(tag: String, msg: String) {
+    fun d(tag: String, msg: String) = log(DEBUG, tag, msg)
+    fun i(tag: String, msg: String) = log(INFO, tag, msg)
+    fun w(tag: String, msg: String) = log(WARN, tag, msg)
+    fun e(tag: String, msg: String) = log(ERROR, tag, msg)
+
+    private fun log(level: Int, tag: String, msg: String) {
+        if (level < MIN_PERSIST_LEVEL) return // DEBUG dropped by default
         val c = ctx ?: return
         try {
             val file = File(c.filesDir, "diag.log")
+            val lvl = when (level) {
+                ERROR -> "E"
+                WARN -> "W"
+                else -> "I"
+            }
             val ts = TS_FORMAT.format(Date())
-            file.appendText("$ts [$tag] $msg\n")
+            file.appendText("$ts [$lvl][$tag] $msg\n")
             writesSincePrune++
             if (file.length() > MAX_BYTES || writesSincePrune >= PRUNE_EVERY) {
                 prune()
@@ -58,8 +79,9 @@ object DiagLog {
             val file = File(c.filesDir, "diag.log")
             if (file.exists()) {
                 val cutoff = now - RETENTION_MS
-                val kept = file.readLines().filter { line ->
-                    // Lines start with "yyyy-MM-dd HH:mm:ss.SSS [TAG] msg"
+                val lines = file.readLines()
+                val kept = lines.filter { line ->
+                    // Lines start with "yyyy-MM-dd HH:mm:ss.SSS [L][TAG] msg"
                     if (line.length < 23) return@filter true // header/partial — keep
                     val ts = try {
                         TS_FORMAT.parse(line.substring(0, 23)).time
@@ -68,7 +90,7 @@ object DiagLog {
                     }
                     ts >= cutoff
                 }
-                if (kept.size != file.readLines().size) {
+                if (kept.size != lines.size) {
                     file.writeText(kept.joinToString("\n") + if (kept.isNotEmpty()) "\n" else "")
                 }
             }
