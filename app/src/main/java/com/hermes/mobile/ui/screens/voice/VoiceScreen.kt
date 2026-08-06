@@ -823,9 +823,19 @@ class VoiceViewModel @Inject constructor(
                 val duration = player?.duration?.toFloat() ?: 0f
                 val progressJob = viewModelScope.launch {
                     try {
-                        while (isActive && player?.isPlaying == true) {
-                            val current = player?.currentPosition?.toFloat() ?: 0f
-                            _ttsProgress.value = (current / duration).coerceIn(0f, 1f)
+                        // Guard with ttsPlayingNow + try/catch: reading
+                        // isPlaying/currentPosition on a RELEASED player
+                        // throws IllegalStateException — and the playback
+                        // job's finally releases the player while this
+                        // poller may still be between delays (barge-in
+                        // race). Uncaught = viewModelScope crash.
+                        while (isActive && ttsPlayingNow) {
+                            val pos = try {
+                                player?.currentPosition?.toFloat() ?: 0f
+                            } catch (_: Exception) {
+                                0f
+                            }
+                            _ttsProgress.value = (pos / duration).coerceIn(0f, 1f)
                             delay(100)
                         }
                     } finally {
@@ -838,8 +848,12 @@ class VoiceViewModel @Inject constructor(
                 // stuck MediaPlayer can never freeze the voice loop.
                 try {
                     withTimeout(30_000) {
-                        while (player?.isPlaying == true) {
-                            delay(200)
+                        try {
+                            while (player?.isPlaying == true) {
+                                delay(200)
+                            }
+                        } catch (_: IllegalStateException) {
+                            // Player released underneath us (interrupt path) — done.
                         }
                     }
                 } catch (e: TimeoutCancellationException) {
@@ -1333,9 +1347,20 @@ fun JarvisSphere(
                     }
                 }
                 glLifecycleOwner.lifecycle.addObserver(observer)
+                // CRITICAL: the observer only receives FUTURE events — if the
+                // lifecycle is ALREADY resumed (first entry into this screen,
+                // or returning to the tab), ON_RESUME never fires and the
+                // driver never starts -> the sphere renders ONE static frame
+                // and never animates again. Start it explicitly here.
+                if (glLifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                    frameDriver.start()
+                }
                 onDispose {
                     glLifecycleOwner.lifecycle.removeObserver(observer)
                     frameDriver.stop()
+                    // Pause the GL thread too — repeated tab switches without
+                    // onPause() leave GL threads accumulating.
+                    try { glView?.onPause() } catch (_: Exception) {}
                 }
             }
         }
