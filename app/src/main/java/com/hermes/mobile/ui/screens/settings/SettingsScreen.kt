@@ -24,6 +24,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -803,64 +805,73 @@ fun SettingsScreen(
                 SettingsInfoRow("Device", "${Build.MANUFACTURER} ${Build.MODEL}")
                 SettingsInfoRow("Android", Build.VERSION.RELEASE)
                 Spacer(modifier = Modifier.height(12.dp))
-                // Single "Share logs" action: FIRST uploads the last 24h of
-                // diag.log to the bridge server (STORE_PATH/logs/), THEN
-                // opens the share sheet with the same log (+ newest crash
-                // dump) — the maintainer gets a copy on the server AND the
-                // user can still send it anywhere manually.
-                val diagUploadResult by viewModel.diagUploadResult.collectAsState()
-                val scope = rememberCoroutineScope()
-                TextButton(
-                    onClick = {
-                        val diagFile = File(context.filesDir, "diag.log")
-                        val logText = if (diagFile.exists()) diagFile.readText() else "(no diag.log)"
-                        val device = "${Build.MANUFACTURER} ${Build.MODEL}"
-                        val version = try {
-                            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
-                        } catch (_: Exception) { "?" }
-                        val crashText = File(context.filesDir, "crashes").listFiles()
-                            ?.filter { it.name.startsWith("crash_") }
-                            ?.maxByOrNull { it.lastModified() }
-                            ?.readText() ?: "(no crash dumps)"
-                        val combined = buildString {
-                            appendLine("=== DIAG LOG (last 24h) ===")
-                            appendLine(logText)
-                            appendLine()
-                            appendLine("=== CRASH DUMP (newest) ===")
-                            appendLine(crashText)
-                        }
-                        scope.launch {
-                            // 1) upload to server (best-effort)
-                            viewModel.uploadDiagLogNow(device, version, logText)
-                            // 2) then share — sheet always opens
-                            try {
-                                val send = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_SUBJECT, "Hermes log $version")
-                                    putExtra(Intent.EXTRA_TEXT, combined)
-                                }
-                                context.startActivity(
-                                    Intent.createChooser(send, "Share logs")
-                                )
-                            } catch (_: Exception) {}
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
+                // "Share logs" + "Visit Hermes Website" side by side.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(diagUploadResult ?: "Share logs")
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                TextButton(
-                    onClick = {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://hermes-agent.nousresearch.com")))
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Visit Hermes Website")
+                    // Single "Share logs" action: FIRST uploads the last 24h
+                    // of diag.log to the bridge server (STORE_PATH/logs/),
+                    // THEN opens the share sheet with the same log (+ newest
+                    // crash dump) — the maintainer gets a copy on the server
+                    // AND the user can still send it anywhere manually.
+                    val diagUploadResult by viewModel.diagUploadResult.collectAsState()
+                    val scope = rememberCoroutineScope()
+                    TextButton(
+                        onClick = {
+                            val diagFile = File(context.filesDir, "diag.log")
+                            val logText = if (diagFile.exists()) diagFile.readText() else "(no diag.log)"
+                            val device = "${Build.MANUFACTURER} ${Build.MODEL}"
+                            val version = try {
+                                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
+                            } catch (_: Exception) { "?" }
+                            val crashText = File(context.filesDir, "crashes").listFiles()
+                                ?.filter { it.name.startsWith("crash_") }
+                                ?.maxByOrNull { it.lastModified() }
+                                ?.readText() ?: "(no crash dumps)"
+                            val combined = buildString {
+                                appendLine("=== DIAG LOG (last 24h) ===")
+                                appendLine(logText)
+                                appendLine()
+                                appendLine("=== CRASH DUMP (newest) ===")
+                                appendLine(crashText)
+                            }
+                            scope.launch {
+                                // 1) upload to server (best-effort)
+                                viewModel.uploadDiagLogNow(device, version, logText)
+                                // 2) then share — sheet always opens
+                                try {
+                                    val send = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT, "Hermes log $version")
+                                        putExtra(Intent.EXTRA_TEXT, combined)
+                                    }
+                                    context.startActivity(
+                                        Intent.createChooser(send, "Share logs")
+                                    )
+                                } catch (_: Exception) {}
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = diagUploadResult ?: "Share logs",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    TextButton(
+                        onClick = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://hermes-agent.nousresearch.com")))
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Hermes Website", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
 
