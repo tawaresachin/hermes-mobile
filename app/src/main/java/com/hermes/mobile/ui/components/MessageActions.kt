@@ -14,8 +14,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Forward
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Reply
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -42,6 +45,7 @@ fun MessageActionSheet(
     onCopy: () -> Unit,
     onReply: () -> Unit,
     onDelete: () -> Unit,
+    onForward: (() -> Unit)? = null,
     onRegenerate: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
@@ -67,6 +71,9 @@ fun MessageActionSheet(
 
             SheetActionRow(Icons.Filled.ContentCopy, "Copy") { onCopy() }
             SheetActionRow(Icons.Filled.Reply, "Reply") { onReply() }
+            if (onForward != null) {
+                SheetActionRow(Icons.Filled.Forward, "Forward") { onForward() }
+            }
             if (!isUser && onRegenerate != null) {
                 SheetActionRow(Icons.Filled.Refresh, "Regenerate") { onRegenerate() }
             }
@@ -92,6 +99,30 @@ private fun SheetActionRow(
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.width(24.dp))
         Spacer(modifier = Modifier.width(16.dp))
         Text(text = label, style = MaterialTheme.typography.bodyLarge, color = tint)
+    }
+}
+
+/**
+ * Telegram-style attach sheet: Gallery (photo picker) or File (document).
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun AttachSheet(
+    onGallery: () -> Unit,
+    onFile: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.padding(bottom = 24.dp)) {
+            Text(
+                text = "Attach",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+            SheetActionRow(Icons.Filled.PhotoLibrary, "Gallery") { onGallery() }
+            SheetActionRow(Icons.Filled.AttachFile, "File") { onFile() }
+        }
     }
 }
 

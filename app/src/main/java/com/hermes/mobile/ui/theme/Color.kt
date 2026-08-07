@@ -39,6 +39,12 @@ val UserBubbleDark     = Color(0xFF2B5278)   // dark blue on dark
 val OtherBubbleLight   = Color(0xFFFFFFFF)   // white
 val OtherBubbleDark    = Color(0xFF1E2B39)   // dark navy
 
+// ── Telegram chat background ──
+val ChatBackgroundLight = Color(0xFFEFF2F5)  // Telegram light chat gray
+val ChatBackgroundDark  = Color(0xFF0E1621)  // Telegram dark chat navy
+val InputBarLight       = Color(0xFFFFFFFF)  // Telegram input: white field
+val InputBarDark        = Color(0xFF17212B)  // Telegram dark input field
+
 // ── Code blocks ──
 
 // ═══════════════════════════════════════════════════════════

@@ -22,7 +22,12 @@ data class Message(
     val isStreaming: Boolean = false,
     val attachmentUrl: String? = null,
     val attachmentType: String? = null,
-    val attachmentName: String? = null
+    val attachmentName: String? = null,
+    // Telegram-style reply: text of the quoted message (rendered as a
+    // quote chip at the top of the bubble).
+    val replyToText: String? = null,
+    // Telegram-style reaction (👍) — stored locally per message.
+    val reaction: String? = null
 )
 
 // ─── Session Models ───

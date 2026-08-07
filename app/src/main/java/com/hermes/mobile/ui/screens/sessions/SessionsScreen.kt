@@ -5,11 +5,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -45,7 +48,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class SessionsViewModel @Inject constructor(
-    private val repository: HermesRepository
+    private val repository: HermesRepository,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
 
     /** Mutable search query — debounced before filtering. */
@@ -68,13 +72,17 @@ class SessionsViewModel @Inject constructor(
 
     // ── Filtered sessions ────────────────────────────────────────
 
+    // ── Pinned sessions (Telegram-style, persisted in prefs) ──
+    private val _pinned = MutableStateFlow(loadPinnedIds())
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val filteredSessions: StateFlow<List<Session>> = combine(
         repository.allSessions,
         _searchQuery.debounce(300),
-        _refreshTrigger.onStart { emit(Unit) }
-    ) { sessions, query, _ ->
-        if (query.isBlank()) {
+        _refreshTrigger.onStart { emit(Unit) },
+        _pinned
+    ) { sessions, query, _, pinned ->
+        val base = if (query.isBlank()) {
             sessions.filter { it.isActive }
         } else {
             sessions.filter { session ->
@@ -82,7 +90,40 @@ class SessionsViewModel @Inject constructor(
                     && (session.title?.contains(query, ignoreCase = true) == true)
             }
         }
+        // Telegram-style: pinned sessions float to the top.
+        base.sortedByDescending { it.id in pinned }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // ── Pinned sessions (Telegram-style, persisted in prefs) ──
+    private fun loadPinnedIds(): Set<String> {
+        return try {
+            appContext.getSharedPreferences(
+                "hermes_sessions", android.content.Context.MODE_PRIVATE
+            )?.getStringSet("pinned_sessions", emptySet()) ?: emptySet()
+        } catch (e: Exception) {
+            emptySet()
+        }
+    }
+
+    private fun savePinnedIds(ids: Set<String>) {
+        try {
+            appContext.getSharedPreferences(
+                "hermes_sessions", android.content.Context.MODE_PRIVATE
+            )?.edit()?.putStringSet("pinned_sessions", ids)?.apply()
+        } catch (e: Exception) {
+            // ignore — pinning is best-effort
+        }
+    }
+
+    val pinnedSessions: StateFlow<Set<String>> = _pinned.asStateFlow()
+
+    fun togglePin(sessionId: String) {
+        val next = _pinned.value.toMutableSet().apply {
+            if (!add(sessionId)) remove(sessionId)
+        }
+        _pinned.value = next
+        savePinnedIds(next)
+    }
 
     // ── Actions ──────────────────────────────────────────────────
 
@@ -181,6 +222,7 @@ fun SessionsScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     // ── Snackbar event collector ───────────────────────────────
     LaunchedEffect(Unit) {
@@ -231,10 +273,19 @@ fun SessionsScreen(
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
+                val pinnedIds by viewModel.pinnedSessions.collectAsState()
+                // Draft map: read once per composition (drafts are tiny).
+                val drafts = remember(sessions) {
+                    com.hermes.mobile.data.local.DraftStore.init(context)
+                    sessions.associate { it.id to com.hermes.mobile.data.local.DraftStore.get(it.id) }
+                }
                 SessionsList(
                     sessions = sessions,
+                    pinnedIds = pinnedIds,
                     onSessionSelected = onSessionSelected,
-                    onDeleteSession = viewModel::deleteSession
+                    onDeleteSession = viewModel::deleteSession,
+                    onTogglePin = viewModel::togglePin,
+                    drafts = drafts
                 )
             }
         }
@@ -338,21 +389,23 @@ private fun SessionsTopBar(
 @Composable
 private fun SessionsList(
     sessions: List<Session>,
+    pinnedIds: Set<String>,
     onSessionSelected: (String) -> Unit,
-    onDeleteSession: (Session) -> Unit
+    onDeleteSession: (Session) -> Unit,
+    onTogglePin: (String) -> Unit,
+    drafts: Map<String, String>
 ) {
     val listState = rememberLazyListState()
 
     LazyColumn(
         state = listState,
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
         modifier = Modifier.fillMaxSize()
     ) {
-        items(
+        itemsIndexed(
             items = sessions,
-            key = { it.id }
-        ) { session ->
+            key = { _, it -> it.id }
+        ) { index, session ->
             SwipeToDismissBox(
                 state = rememberSwipeToDismissBoxState(
                     confirmValueChange = { value ->
@@ -368,10 +421,23 @@ private fun SessionsList(
                 enableDismissFromStartToEnd = false,
                 enableDismissFromEndToStart = true
             ) {
-                SessionCard(
-                    session = session,
-                    onClick = { onSessionSelected(session.id) }
-                )
+                Column {
+                    SessionCard(
+                        session = session,
+                        onClick = { onSessionSelected(session.id) },
+                        isPinned = session.id in pinnedIds,
+                        onTogglePin = { onTogglePin(session.id) },
+                        draftText = drafts[session.id] ?: ""
+                    )
+                    // Telegram-style thin divider between rows
+                    if (index < sessions.lastIndex) {
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.padding(start = 72.dp)
+                        )
+                    }
+                }
             }
         }
 
@@ -431,7 +497,10 @@ private fun SwipeDeleteBackground() {
 @Composable
 private fun SessionCard(
     session: Session,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    isPinned: Boolean = false,
+    onTogglePin: (() -> Unit)? = null,
+    draftText: String = ""
 ) {
     val dateText = remember(session.updatedAt) {
         formatTimestamp(session.updatedAt)
@@ -452,9 +521,9 @@ private fun SessionCard(
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(0.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
+            containerColor = MaterialTheme.colorScheme.surface
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
@@ -462,21 +531,21 @@ private fun SessionCard(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp)
         ) {
-            // ── Session icon ──
+            // ── Telegram-style circular avatar (colored bg + initial) ──
             Box(
                 modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(HermesPrimary.copy(alpha = 0.15f)),
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(HermesPrimary),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.ChatBubbleOutline,
-                    contentDescription = null,
-                    tint = HermesPrimary,
-                    modifier = Modifier.size(22.dp)
+                Text(
+                    text = titleText.take(1).uppercase(),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
                 )
             }
 
@@ -494,6 +563,20 @@ private fun SessionCard(
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
+
+                    // Telegram-style draft indicator: red italic "Draft: …"
+                    // shown instead of the message preview when a draft exists.
+                    if (draftText.isNotBlank()) {
+                        Text(
+                            text = "Draft: $draftText",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ErrorRed,
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
 
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -537,13 +620,24 @@ private fun SessionCard(
                     }
                 }
 
-                // Chevron
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = "Open session",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.size(20.dp)
-                )
+                // Telegram-style pin toggle (filled = pinned, floats to top)
+                if (onTogglePin != null) {
+                    IconButton(
+                        onClick = onTogglePin,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isPinned) Icons.Filled.PushPin
+                            else Icons.Outlined.PushPin,
+                            contentDescription = if (isPinned) "Unpin" else "Pin",
+                            tint = if (isPinned) HermesPrimary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                // Telegram rows have no chevron — tap the whole row
             }
         }
     }

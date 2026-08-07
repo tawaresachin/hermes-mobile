@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -67,6 +68,7 @@ import coil.compose.AsyncImage
 import com.hermes.mobile.data.local.DraftStore
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.ui.components.AttachSheet
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.components.MessageActionSheet
 import com.hermes.mobile.ui.components.ModelPickerSheet
@@ -447,6 +449,30 @@ class ChatViewModel @Inject constructor(
             sendMessage(userMsg.content)
         }
 
+        /** Telegram-style reaction toggle (double-tap 👍 on a reply). */
+        fun toggleReaction(message: Message) {
+            val next = if (message.reaction == "👍") null else "👍"
+            viewModelScope.launch {
+                repository.setReaction(message.id, next)
+                _messages.value = _messages.value.map {
+                    if (it.id == message.id) it.copy(reaction = next) else it
+                }
+            }
+        }
+
+        /** All sessions — for the Telegram-style Forward dialog. */
+        val allSessions = repository.allSessions
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), emptyList())
+
+        /** Forward a message to another session: insert as a user message
+         *  there and hand it to the AI (runs in the background — the target
+         *  session's Room flow picks it up when opened). */
+        fun forwardTo(targetSessionId: String, message: Message) {
+            viewModelScope.launch {
+                repository.forwardMessage(targetSessionId, message.content)
+            }
+        }
+
         /**
          * Copy a content-URI attachment into the app cache under a UUID
          * temp name. Security: the provider-controlled display name is NEVER
@@ -546,9 +572,36 @@ fun ChatScreen(
     // ── Telegram-style interactions ──
     var pendingReply by remember { mutableStateOf<Message?>(null) }
     var menuTarget by remember { mutableStateOf<Message?>(null) }
+    var showAttachSheet by remember { mutableStateOf(false) }
+    var forwardTarget by remember { mutableStateOf<Message?>(null) }
     // ── Search jump-to + highlight ──
     var highlightId by remember { mutableStateOf<Long?>(null) }
     var searchIndex by remember { mutableStateOf(0) }
+
+    // ── Gallery picker (Telegram-style attach sheet) ──
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            vm.hideEmojiPicker()
+            scope.launch(Dispatchers.IO) {
+                val cr = context.contentResolver
+                val mimeType = cr.getType(uri) ?: "image/*"
+                val ext = when (mimeType) {
+                    "image/png" -> "png"
+                    "image/gif" -> "gif"
+                    "image/webp" -> "webp"
+                    else -> "jpg"
+                }
+                pendingAttachment = PendingAttachment(
+                    uri = uri,
+                    fileName = "gallery_${System.currentTimeMillis()}.$ext",
+                    mimeType = mimeType,
+                    attachType = "image"
+                )
+            }
+        }
+    }
 
     // ── File picker (stores selection, doesn't upload until send clicked) ──
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -806,16 +859,23 @@ fun ChatScreen(
                 contentColor = MaterialTheme.colorScheme.onErrorContainer
             ) { Text(err) }
         }
-
+        // ── Telegram-style chat area (full width, no border) ──
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                // Telegram chat canvas: light gray (light) / deep navy (dark)
+                // so white bubbles pop.
+                .background(
+                    if (LocalDarkTheme.current) ChatBackgroundDark else ChatBackgroundLight
+                )
         ) {
             // Faded Hermes watermark — same on every screen (shared component)
             HermesWatermark()
             if (messages.isEmpty() && !isStreaming) {
-                EmptyChatState()
+                EmptyChatState(
+                    onSuggestion = { suggestion -> vm.sendMessage(suggestion) }
+                )
             } else {
                 // Overscroll bounce/glow mirrors oddly on the inverted list —
                 // disable it (clean Telegram feel, no rubber-band at the ends).
@@ -832,7 +892,8 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer { scaleY = -1f },
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    // Per-item padding drives the gaps (1dp in-group, 6dp
+                    // between groups) — the old uniform spacedBy is removed.
                     contentPadding = PaddingValues(
                         start = 8.dp,
                         end = 8.dp,
@@ -869,18 +930,43 @@ fun ChatScreen(
                     }
                     // Memoized display list (computed in the Box scope above —
                     // LazyListScope is not a composable context).
-                    items(
+                    itemsIndexed(
                         items = displayMessages,
-                        key = { it.id.toString() }
-                    ) { message ->
+                        key = { _, it -> it.id.toString() }
+                    ) { index, message ->
                         val isStreamingThis = isStreaming && message.isStreaming
                         val displayContent = if (isStreamingThis) streamingContent else message.content
-                        Box(Modifier.graphicsLayer { scaleY = -1f }) {
-                            MessageBubble(
+                        // Telegram-style grouping: consecutive same-role
+                        // messages form a group. In this newest-first list,
+                        // the newer neighbor is index-1, the older is index+1.
+                        val prevRole = displayMessages.getOrNull(index - 1)?.role
+                        val nextRole = displayMessages.getOrNull(index + 1)?.role
+                        val isGroupStart = nextRole != message.role  // oldest of group
+                        val isGroupEnd = prevRole != message.role    // newest of group
+                        // Telegram-style date separator: a "Today" /
+                        // "Yesterday" / "12 Aug" pill at the day boundary
+                        // (between this message and the newer one below).
+                        val newerTs = displayMessages.getOrNull(index - 1)?.timestamp
+                        val newDay = newerTs != null && !isSameDay(newerTs, message.timestamp)
+                        val dateLabel = remember(message.timestamp) { datePillLabel(message.timestamp) }
+                        Box(
+                            Modifier
+                                .graphicsLayer { scaleY = -1f }
+                                // Tight 1dp inside a group, 6dp between groups
+                                // (replaces the old uniform spacedBy(2.dp)).
+                                .padding(bottom = if (isGroupStart) 6.dp else 1.dp)
+                        ) {
+                            Column {
+                                if (newDay) {
+                                    DatePill(text = dateLabel)
+                                }
+                                MessageBubble(
                                 message = message,
                                 displayContent = displayContent,
                                 isStreaming = isStreamingThis,
                                 baseUrl = vm.getBaseUrl(),
+                                isFirstInGroup = isGroupStart,
+                                isLastInGroup = isGroupEnd,
                                 onEdit = if (message.role == MessageRole.USER && !isStreamingThis) {
                                     {
                                         inputText = message.content
@@ -891,11 +977,21 @@ fun ChatScreen(
                                 onReply = if (isStreamingThis) null else {
                                     { pendingReply = message }
                                 },
+                                onDelete = if (isStreamingThis) null else {
+                                    {
+                                        if (pendingReply?.id == message.id) pendingReply = null
+                                        vm.deleteMessage(message)
+                                    }
+                                },
                                 onLongPress = if (isStreamingThis) null else {
                                     { menuTarget = message }
                                 },
+                                onReact = if (isStreamingThis || message.role == MessageRole.USER) null else {
+                                    { vm.toggleReaction(message) }
+                                },
                                 highlighted = message.id == highlightId
                             )
+                            } // Column (date pill + bubble)
                         }
                     }
                 }
@@ -948,7 +1044,7 @@ fun ChatScreen(
                 inputText += emoji
                 vm.hideEmojiPicker()
             },
-            onAttach = { filePickerLauncher.launch(arrayOf("*/*")) },
+            onAttach = { showAttachSheet = true },
             pendingAttachment = pendingAttachment,
             onRemoveAttachment = { pendingAttachment = null },
             isStreaming = isStreaming,
@@ -968,6 +1064,36 @@ fun ChatScreen(
             )
         }
 
+        // ── Telegram-style attach sheet (Gallery / File) ──
+        if (showAttachSheet) {
+            AttachSheet(
+                onGallery = {
+                    showAttachSheet = false
+                    galleryLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onFile = {
+                    showAttachSheet = false
+                    filePickerLauncher.launch(arrayOf("*/*"))
+                },
+                onDismiss = { showAttachSheet = false }
+            )
+        }
+
+        // ── Telegram-style forward dialog ──
+        forwardTarget?.let { target ->
+            val sessions by vm.allSessions.collectAsState()
+            ForwardDialog(
+                sessions = sessions,
+                onSelect = { sid ->
+                    vm.forwardTo(sid, target)
+                    forwardTarget = null
+                },
+                onDismiss = { forwardTarget = null }
+            )
+        }
+
         // ── Telegram-style message action sheet (long-press menu) ──
         menuTarget?.let { target ->
             val contextForClipboard = context
@@ -980,6 +1106,10 @@ fun ChatScreen(
                 },
                 onReply = {
                     pendingReply = target
+                    menuTarget = null
+                },
+                onForward = {
+                    forwardTarget = target
                     menuTarget = null
                 },
                 onDelete = {
@@ -1110,7 +1240,7 @@ fun ConnectionStatusBar(connectionStatus: ConnectionStatus) {
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
-fun EmptyChatState() {
+fun EmptyChatState(onSuggestion: (String) -> Unit = {}) {
     Column(
         modifier = Modifier
             .fillMaxSize(),
@@ -1128,11 +1258,133 @@ fun EmptyChatState() {
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "Send a message or tap the greeting below.",
+            text = "Send a message or tap a suggestion below.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
         )
+
+        // Telegram-style suggestion chips — tap to ask instantly.
+        Spacer(modifier = Modifier.height(20.dp))
+        val suggestions = listOf(
+            "What can you do?",
+            "Plan my day",
+            "Explain like I'm 5",
+            "Summarize this article"
+        )
+        suggestions.chunked(2).forEach { rowItems ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(vertical = 4.dp)
+            ) {
+                rowItems.forEach { suggestion ->
+                    SuggestionChip(onClick = { onSuggestion(suggestion) }, label = suggestion)
+                }
+            }
+        }
     }
+}
+
+@Composable
+private fun SuggestionChip(onClick: () -> Unit, label: String) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        color = HermesPrimary.copy(alpha = 0.10f),
+        modifier = Modifier
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = HermesPrimary,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+        )
+    }
+}
+
+// ── Telegram-style date separators ──
+
+/** Telegram-style forward dialog: pick the target session. */
+@Composable
+private fun ForwardDialog(
+    sessions: List<Session>,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Forward to") },
+        text = {
+            if (sessions.isEmpty()) {
+                Text(
+                    "No other sessions yet. Create one from the Sessions tab first.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                    items(sessions) { s ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(s.id) }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = s.title ?: "Untitled Session",
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+private fun DatePill(text: String) {
+    // fillMaxWidth + centered text: `align` only exists in BoxScope, and
+    // this Surface is called from a Column (inside the flipped list item).
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 3.dp)
+        )
+    }
+}
+
+private fun isSameDay(a: Long, b: Long): Boolean {
+    val ca = java.util.Calendar.getInstance().apply { timeInMillis = a }
+    val cb = java.util.Calendar.getInstance().apply { timeInMillis = b }
+    return ca.get(java.util.Calendar.YEAR) == cb.get(java.util.Calendar.YEAR) &&
+        ca.get(java.util.Calendar.DAY_OF_YEAR) == cb.get(java.util.Calendar.DAY_OF_YEAR)
+}
+
+private fun datePillLabel(timestamp: Long): String {
+    val cal = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
+    val now = java.util.Calendar.getInstance()
+    if (isSameDay(cal.timeInMillis, now.timeInMillis)) return "Today"
+    now.add(java.util.Calendar.DAY_OF_YEAR, -1)
+    if (isSameDay(cal.timeInMillis, now.timeInMillis)) return "Yesterday"
+    return java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()).format(java.util.Date(timestamp))
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1148,8 +1400,12 @@ fun MessageBubble(
     baseUrl: String = "",
     onEdit: (() -> Unit)? = null,
     onReply: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
-    highlighted: Boolean = false
+    onReact: (() -> Unit)? = null,
+    highlighted: Boolean = false,
+    isFirstInGroup: Boolean = true,
+    isLastInGroup: Boolean = true
 ) {
     val isUser = message.role == MessageRole.USER
     val isDark = LocalDarkTheme.current
@@ -1163,11 +1419,14 @@ fun MessageBubble(
         HermesPrimary.copy(alpha = 0.30f)
     } else bubbleColor
     val alignment = if (isUser) Arrangement.End else Arrangement.Start
+    // Telegram-style grouping: within a group the inner corners square up
+    // (6dp); the group's exposed ends stay rounded (18dp). Standalone
+    // bubbles keep the exact same shape as before.
     val bubbleShape = RoundedCornerShape(
-        topStart = if (isUser) 16.dp else 4.dp,
-        topEnd = if (isUser) 4.dp else 16.dp,
-        bottomStart = 16.dp,
-        bottomEnd = 16.dp
+        topStart = if (isUser) 18.dp else (if (isFirstInGroup && !isLastInGroup) 18.dp else 6.dp),
+        topEnd = if (isUser) (if (isFirstInGroup && !isLastInGroup) 18.dp else 6.dp) else 18.dp,
+        bottomStart = if (isUser) 18.dp else (if (isLastInGroup) 18.dp else 6.dp),
+        bottomEnd = if (isUser) (if (isLastInGroup) 18.dp else 6.dp) else 18.dp
     )
     val textColor = if (isUser) {
         if (isDark) Color.White else Color(0xFF000000)
@@ -1196,14 +1455,24 @@ fun MessageBubble(
                 .combinedClickable(
                     enabled = !isStreaming,
                     onClick = {},
-                    onLongClick = onLongPress
+                    onLongClick = onLongPress,
+                    onDoubleClick = onReact
                 )
-                .pointerInput(onReply, isStreaming) {
-                    if (onReply == null || isStreaming) return@pointerInput
+                .pointerInput(onReply, onDelete, isStreaming) {
+                    if (isStreaming) return@pointerInput
+                    // Telegram gestures: swipe RIGHT = reply, swipe LEFT =
+                    // delete. Accumulate the drag (per-event deltas) and
+                    // fire once past 90px; vertical scroll is untouched.
+                    var acc = 0f
                     detectHorizontalDragGestures { change, dragAmount ->
                         change.consume()
-                        if (dragAmount > 90f) {
+                        acc += dragAmount
+                        if (acc > 90f && onReply != null) {
                             onReply()
+                            acc = 0f
+                        } else if (acc < -90f && onDelete != null) {
+                            onDelete()
+                            acc = 0f
                         }
                     }
                 },
@@ -1211,11 +1480,35 @@ fun MessageBubble(
         ) {
             // Box so the tail can OVERLAY the bubble's top corner (a Column
             // child would render below the bubble instead).
+            // Telegram-style: Hermes avatar on the LAST message of an
+            // assistant group (left side, next to the bubble).
+            if (!isUser && isLastInGroup && !isStreaming) {
+                AsyncImage(
+                    model = com.hermes.mobile.R.drawable.hermes_girl,
+                    contentDescription = "Hermes",
+                    modifier = Modifier
+                        .padding(end = 6.dp, bottom = 2.dp)
+                        .size(32.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            }
             Box {
             Column(
                 modifier = Modifier
                     .widthIn(max = bubbleMax)
             ) {
+            // Telegram-style: sender name above the FIRST message of an
+            // assistant group.
+            if (!isUser && isFirstInGroup && !isStreaming) {
+                Text(
+                    text = "Hermes",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = HermesPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 14.dp, bottom = 2.dp)
+                )
+            }
             Surface(
                 shape = bubbleShape,
                 color = effectiveBubbleColor,
@@ -1224,6 +1517,28 @@ fun MessageBubble(
                 shadowElevation = 0.dp
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    // ── Telegram-style quote chip (reply preview) ──
+                    // Rendered at the top of the replying bubble: accent-tinted
+                    // box with the quoted text, max 2 lines.
+                    if (message.replyToText?.isNotBlank() == true) {
+                        Surface(
+                            color = HermesPrimary.copy(alpha = 0.12f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 6.dp)
+                        ) {
+                            Text(
+                                text = message.replyToText!!.trim(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isUser) textColor.copy(alpha = 0.85f)
+                                else MaterialTheme.colorScheme.primary,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
                     // ── Image attachment ──
                     if (absoluteImageUrl != null && message.attachmentType?.startsWith("image") == true) {
                         AsyncImage(
@@ -1275,6 +1590,14 @@ fun MessageBubble(
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // Telegram-style sent tick (single ✓)
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = "Sent",
+                                tint = textColor.copy(alpha = 0.5f),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "Edit",
                                 style = MaterialTheme.typography.labelSmall,
@@ -1294,12 +1617,29 @@ fun MessageBubble(
                             }
                         }
                     }
+                    // Telegram-style reaction badge (double-tap to toggle 👍)
+                    if (message.reaction != null && !isStreaming) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isUser) Color.White.copy(alpha = 0.18f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                        ) {
+                            Text(
+                                text = message.reaction!!,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
             }
             } // Column (bubble)
             // ── Telegram-style tail (small arrow at the top corner) — a
             // BOX child so it overlays the bubble corner (BoxScope.align
             // accepts full alignments; ColumnScope only horizontal ones).
+            // One tail per GROUP: only the first (top) message carries it.
+            if (isFirstInGroup) {
             Canvas(
                 modifier = Modifier
                     .align(if (isUser) Alignment.TopEnd else Alignment.TopStart)
@@ -1320,6 +1660,7 @@ fun MessageBubble(
                     close()
                 }
                 drawPath(tailPath, bubbleColor)
+            }
             }
             } // Box (tail overlay)
         }
@@ -1793,12 +2134,19 @@ fun InputBar(
                     }
 
                     // ── 2. Text field (no keyboard send — only explicit send button) ──
-                    OutlinedTextField(
+                    // Telegram look: flat rounded field, NO outline. The
+                    // container bg is the field itself (white on light,
+                    // dark navy on dark), inside the bar.
+                    TextField(
                         value = inputText,
                         onValueChange = onInputChange,
                         modifier = Modifier
                             .weight(1f)
-                            .heightIn(min = 36.dp, max = 120.dp),
+                            .heightIn(min = 36.dp, max = 120.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(
+                                if (LocalDarkTheme.current) InputBarDark else InputBarLight
+                            ),
                         placeholder = {
                             Text(
                                 text = "Message",
@@ -1809,11 +2157,11 @@ fun InputBar(
                         textStyle = MaterialTheme.typography.bodyMedium.copy(
                             color = MaterialTheme.colorScheme.onSurface
                         ),
-                        colors = OutlinedTextFieldDefaults.colors(
+                        colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
                             unfocusedContainerColor = Color.Transparent,
-                            focusedBorderColor = HermesPrimary.copy(alpha = 0.5f),
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
                             cursorColor = HermesPrimary
                         ),
                         shape = RoundedCornerShape(24.dp),

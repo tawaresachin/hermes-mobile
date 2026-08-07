@@ -35,6 +35,9 @@ interface MessageDao {
     @Query("UPDATE messages SET content = :content, isStreaming = :isStreaming WHERE id = :messageId")
     suspend fun updateMessage(messageId: Long, content: String, isStreaming: Boolean = false)
 
+    @Query("UPDATE messages SET reaction = :reaction WHERE id = :messageId")
+    suspend fun updateReaction(messageId: Long, reaction: String?)
+
     @Query("DELETE FROM messages WHERE sessionId = :sessionId")
     suspend fun deleteSessionMessages(sessionId: String)
 
@@ -60,7 +63,7 @@ interface MessageDao {
 
 @Database(
     entities = [Message::class, Session::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -68,12 +71,21 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
 
     companion object {
+        /** v1 → v2: replyToText (quote chip) + reaction (👍) columns. */
+        val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN replyToText TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN reaction TEXT")
+            }
+        }
+
         fun create(context: Context): AppDatabase {
             return Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
                 "hermes_mobile.db"
             )
+                .addMigrations(MIGRATION_1_2)
                 .fallbackToDestructiveMigration()
                 .build()
         }

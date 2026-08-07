@@ -42,6 +42,17 @@ class HermesRepository @Inject constructor(
         messageDao.deleteMessage(msgId)
     }
 
+    /** Telegram-style reaction (👍) — stored locally per message. */
+    suspend fun setReaction(messageId: Long, reaction: String?) {
+        messageDao.updateReaction(messageId, reaction)
+    }
+
+    /** Telegram-style forward: send the text as a user message in the
+     *  target session (saves it + hands it to the AI in one go). */
+    suspend fun forwardMessage(sessionId: String, content: String) {
+        sendMessage(sessionId = sessionId, query = content, onChunk = {})
+    }
+
     suspend fun sendMessage(
         sessionId: String,
         query: String,
@@ -61,7 +72,8 @@ class HermesRepository @Inject constructor(
                 role = MessageRole.USER,
                 content = query,
                 attachmentUrl = attachmentUrl.ifBlank { null },
-                attachmentType = attachType.ifBlank { null }
+                attachmentType = attachType.ifBlank { null },
+                replyToText = replyTo?.take(300)
             )
             messageDao.insertMessage(userMsg)
             sessionDao.incrementMessageCount(sessionId)
