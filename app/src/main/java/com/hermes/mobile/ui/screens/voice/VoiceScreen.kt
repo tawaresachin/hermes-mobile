@@ -494,6 +494,15 @@ class VoiceViewModel @Inject constructor(
                     bufSize
                 )
                 record.startRecording()
+                // Second layer: best-effort NoiseSuppressor on the monitor
+                // session too (keeps the fixed barge-in threshold honest in
+                // noisy rooms).
+                try {
+                    if (android.media.audiofx.NoiseSuppressor.isAvailable()) {
+                        val ns = android.media.audiofx.NoiseSuppressor.create(record.audioSessionId)
+                        ns?.setEnabled(true)
+                    }
+                } catch (_: Exception) {}
                 val buf = ShortArray(1024)
                 while (isActive) {
                     val n = record.read(buf, 0, buf.size)
@@ -586,14 +595,26 @@ class VoiceViewModel @Inject constructor(
         val bufSize = max(minBuf * 2, sampleRate / 2) // ≥0.5s of buffer
         var record: android.media.AudioRecord? = null
         try {
+            // NOISE CANCELLATION: capture via VOICE_COMMUNICATION so the
+            // platform applies acoustic echo cancellation AND noise
+            // suppression at the HAL level (the raw-MIC path passes the
+            // room's hum/fan/AC straight into the VAD and whisper).
             record = android.media.AudioRecord(
-                android.media.MediaRecorder.AudioSource.MIC,
+                android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 sampleRate,
                 android.media.AudioFormat.CHANNEL_IN_MONO,
                 android.media.AudioFormat.ENCODING_PCM_16BIT,
                 bufSize
             )
             record.startRecording()
+            // Second layer: best-effort NoiseSuppressor effect on the
+            // capture session (harmless no-op if the HAL already handles it).
+            try {
+                if (android.media.audiofx.NoiseSuppressor.isAvailable()) {
+                    val ns = android.media.audiofx.NoiseSuppressor.create(record.audioSessionId)
+                    ns?.setEnabled(true)
+                }
+            } catch (_: Exception) {}
             val pcm = java.io.ByteArrayOutputStream()
             val buf = ShortArray(1024)
             var speechStarted = false
@@ -607,9 +628,11 @@ class VoiceViewModel @Inject constructor(
             val startMs = System.currentTimeMillis()
             val deadline = startMs + VoiceTuning.MAX_UTTERANCE_MS
             var wroteBytes = 0
-            // Adaptive VAD: sample the room's noise floor for the first
-            // ~500ms, then adapt the speech gate, silence timeout and
-            // amplitude scaling to it (quiet/loud rooms need no retuning).
+            // Adaptive VAD: track the room's noise floor CONTINUOUSLY —
+            // the first 500ms seed the estimator, then every SILENT block
+            // (below the gate = ambient) keeps feeding it, so a changing
+            // room (fan switches on, AC kicks in) re-adapts instead of
+            // false-triggering on the new noise level.
             val noiseFloor = AdaptiveEndpointing.NoiseFloor()
             while (System.currentTimeMillis() < deadline) {
                 val n = record.read(buf, 0, buf.size)
@@ -643,6 +666,9 @@ class VoiceViewModel @Inject constructor(
                         burstMs = now - burstStartMs
                     }
                     lastSpeechBlockAt = now
+                } else {
+                    // Below the gate = ambient noise → keep learning the floor.
+                    noiseFloor.feed(rms)
                 }
                 if (speechStarted) {
                     // Write PCM little-endian into the growing WAV payload.
