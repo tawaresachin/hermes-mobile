@@ -165,13 +165,22 @@ class ChatViewModel @Inject constructor(
     fun initSession(sessionId: String?) {
         initJob?.cancel()
         initJob = viewModelScope.launch {
-            if (sessionId != null) {
-                resumeSession(sessionId)
-            } else if (_sessionId.value == null) {
-                createNewSession()
-            } else {
-                // Re-entering the tab with an existing session — just re-observe
-                observeMessages(_sessionId.value!!)
+            when {
+                sessionId != null -> resumeSession(sessionId)
+                _sessionId.value != null -> observeMessages(_sessionId.value!!)
+                else -> {
+                    // Bottom-tab open with no active session: RESUME the
+                    // latest session instead of silently starting a new one.
+                    // New sessions come from the Home card / Sessions screen.
+                    val last = try {
+                        repository.getLastSession()
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (last != null) resumeSession(last.id) else createNewSession()
+                }
             }
         }
     }

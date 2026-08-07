@@ -152,13 +152,30 @@ class VoiceViewModel @Inject constructor(
     @Volatile private var voicePaused = false
 
     init {
-        // Create a session for voice conversations on first open
+        // Bottom-tab open: RESUME the latest session (voice keeps talking in
+        // the same conversation). A fresh session only when none exists.
         initJob = viewModelScope.launch {
             try {
                 if (_sessionId.value == null) {
-                    val session = repository.createSession()
-                    _sessionId.value = session.id
+                    val last = repository.getLastSession()
+                    _sessionId.value = if (last != null) last.id else repository.createSession().id
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to create session: ${e.message}"
+            }
+        }
+    }
+
+    /** Home voice card: force a NEW session (the tab itself resumes last). */
+    fun startNewSession() {
+        initJob?.cancel()
+        initJob = viewModelScope.launch {
+            try {
+                val session = repository.createSession()
+                _sessionId.value = session.id
+                lastSpokenSentence = ""
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -914,6 +931,15 @@ fun VoiceScreen(
     modifier: Modifier = Modifier
 ) {
     val vm: VoiceViewModel = hiltViewModel()
+
+    // Home's voice card requested a NEW session — consume the flag and
+    // switch the VM to a fresh session (the tab itself resumes the last).
+    LaunchedEffect(Unit) {
+        if (com.hermes.mobile.VoiceNav.pendingNewSession) {
+            com.hermes.mobile.VoiceNav.pendingNewSession = false
+            vm.startNewSession()
+        }
+    }
 
     val state by vm.voiceModeState.collectAsState()
     val transcript by vm.voiceTranscript.collectAsState()

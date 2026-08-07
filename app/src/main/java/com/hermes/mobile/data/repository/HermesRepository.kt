@@ -37,6 +37,9 @@ class HermesRepository @Inject constructor(
 
     fun getMessages(sessionId: String): Flow<List<Message>> = messageDao.getMessages(sessionId)
 
+    /** Latest active session (bottom tabs resume it). */
+    suspend fun getLastSession(): Session? = sessionDao.getLastSession()
+
     /** One-shot snapshot (for delete-undo: keep the messages in memory). */
     suspend fun getMessagesOnce(sessionId: String): List<Message> =
         messageDao.getMessagesOnce(sessionId)

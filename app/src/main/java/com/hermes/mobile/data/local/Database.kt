@@ -19,6 +19,11 @@ interface SessionDao {
 
     @Query("UPDATE sessions SET messageCount = messageCount + 1, updatedAt = :timestamp WHERE id = :sessionId")
     suspend fun incrementMessageCount(sessionId: String, timestamp: Long = System.currentTimeMillis())
+
+    /** Latest active session — bottom-bar tabs resume this instead of
+     *  silently creating a new one. */
+    @Query("SELECT * FROM sessions WHERE isActive = 1 ORDER BY updatedAt DESC LIMIT 1")
+    suspend fun getLastSession(): Session?
 }
 
 @Dao

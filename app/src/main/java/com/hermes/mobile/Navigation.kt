@@ -34,6 +34,12 @@ object ChatNav {
     var pendingSessionId: String? by androidx.compose.runtime.mutableStateOf(null)
 }
 
+object VoiceNav {
+    /** Set BEFORE navigating to the Voice tab to force a NEW session
+     *  (Home's voice card). The tab itself resumes the latest session. */
+    var pendingNewSession: Boolean by androidx.compose.runtime.mutableStateOf(false)
+}
+
 // ═══════════════════════════════════════════════════════════
 // Screen routes
 // ═══════════════════════════════════════════════════════════
@@ -124,6 +130,9 @@ fun MainNavigation(
                         }
                     },
                     onNavigateToVoice = {
+                        // Home voice card = NEW voice session (the Voice TAB
+                        // itself resumes the latest session).
+                        VoiceNav.pendingNewSession = true
                         navController.navigate(Screen.Voice.route) {
                             popUpTo(navController.graph.findStartDestination().id) {
                                 saveState = true
