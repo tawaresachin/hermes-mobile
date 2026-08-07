@@ -877,14 +877,6 @@ fun ChatScreen(
 
         ConnectionStatusBar(connectionStatus = connectionStatus)
 
-        errorMessage?.let { err ->
-            Snackbar(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                action = { TextButton(onClick = { vm.dismissError() }) { Text("Dismiss") } },
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer
-            ) { Text(err) }
-        }
         // ── Telegram-style chat area (full width, no border) ──
         Box(
             modifier = Modifier
@@ -896,6 +888,27 @@ fun ChatScreen(
                     if (LocalDarkTheme.current) ChatBackgroundDark else ChatBackgroundLight
                 )
         ) {
+            // Error banner as an OVERLAY (aligned top, floating above the
+            // messages) — as a Column child it PUSHED the whole chat area
+            // down/up each time a dictation error appeared and cleared,
+            // which the user saw as the list "bouncing" on every mic tap.
+            errorMessage?.let { err ->
+                // Auto-dismiss: transient voice/dictation errors must not
+                // linger as a banner.
+                LaunchedEffect(err) {
+                    kotlinx.coroutines.delay(4000)
+                    vm.dismissError()
+                }
+                Snackbar(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    action = { TextButton(onClick = { vm.dismissError() }) { Text("Dismiss") } },
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                ) { Text(err) }
+            }
             // Faded Hermes watermark — same on every screen (shared component)
             HermesWatermark()
             if (messages.isEmpty() && !isStreaming) {
