@@ -691,8 +691,13 @@ fun ChatScreen(
     // naturally, so no per-chunk scrolling is needed. The old effect keyed
     // on every streaming chunk and force-scrolled, fighting the user's
     // finger every ~50ms = the "stuck/bouncing" scroll feel.
-    LaunchedEffect(messages.size, isStreaming, userScrolledAway) {
-        if (messages.isNotEmpty() && !userScrolledAway) {
+    // Two further bounce guards (video-verified: list yanked back mid-drag):
+    // - isStreaming is NOT a key: the stream-end toggle used to re-fire the
+    //   effect and hard-jump to item 0 while the user was still touching.
+    // - isScrollInProgress: never yank while a gesture/fling is running —
+    //   userScrolledAway alone flutters as the index crosses 0..2 mid-scroll.
+    LaunchedEffect(messages.size, userScrolledAway) {
+        if (messages.isNotEmpty() && !userScrolledAway && !listState.isScrollInProgress) {
             listState.scrollToItem(0)
         }
     }
