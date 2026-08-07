@@ -37,6 +37,10 @@ class HermesRepository @Inject constructor(
 
     fun getMessages(sessionId: String): Flow<List<Message>> = messageDao.getMessages(sessionId)
 
+    /** One-shot snapshot (for delete-undo: keep the messages in memory). */
+    suspend fun getMessagesOnce(sessionId: String): List<Message> =
+        messageDao.getMessagesOnce(sessionId)
+
     /** Telegram-style per-message delete (local history only). */
     suspend fun deleteMessage(sessionId: String, msgId: Long) {
         messageDao.deleteMessage(msgId)
@@ -112,8 +116,21 @@ class HermesRepository @Inject constructor(
             if (errorMsg.contains("401") && attempt < 2) {
                 // Delete the placeholder message we just created
                 messageDao.deleteMessage(msgId)
-                // Retry silently — user message already saved, so don't re-insert
-                return sendMessage(sessionId, query, onChunk, onToolCall, onToolResult, attempt + 1)
+                // Retry silently — user message already saved, so don't re-insert.
+                // Named params: a 401 retry must NOT drop the attachment,
+                // reply quote or multi-agent flag (positional call lost them).
+                return sendMessage(
+                    sessionId = sessionId,
+                    query = query,
+                    onChunk = onChunk,
+                    onToolCall = onToolCall,
+                    onToolResult = onToolResult,
+                    attempt = attempt + 1,
+                    attachmentUrl = attachmentUrl,
+                    attachType = attachType,
+                    multiAgent = multiAgent,
+                    replyTo = replyTo,
+                )
             }
             fullResponse.append("⚠️ Connection error: ${e.message}")
         }
@@ -134,8 +151,11 @@ class HermesRepository @Inject constructor(
         messageDao.finalizeStaleStreaming(sessionId)
     }
 
-    suspend fun restoreSession(session: Session) {
+    suspend fun restoreSession(session: Session, messages: List<Message> = emptyList()) {
         sessionDao.upsertSession(session)
+        // Undo must bring the CONVERSATION back too — re-inserting only the
+        // session row resurrects an empty chat with all history gone.
+        messages.forEach { messageDao.insertMessage(it) }
     }
 
     /** Local-only delete (no server call). Used as fallback. */
@@ -151,6 +171,11 @@ class HermesRepository @Inject constructor(
     suspend fun finalizePendingMessage(sessionId: String, content: String) {
         // Update the last streaming assistant message with final content
         messageDao.updateLastStreamingMessage(sessionId, content)
+    }
+
+    /** Drop stale isStreaming placeholders (no text produced before cancel). */
+    suspend fun deletePendingMessage(sessionId: String) {
+        messageDao.deleteStreamingPlaceholders(sessionId)
     }
 
     // ─── File Upload ───

@@ -39,6 +39,12 @@ class HermesApiService @Inject constructor(
 
     companion object {
         private const val PREFS_NAME = "hermes_config"
+        // SECURITY: the secure store MUST use a DIFFERENT file name than
+        // the plain store. Sharing "hermes_config" made
+        // EncryptedSharedPreferences throw ("pre-existing plain file") and
+        // silently fall back to plaintext at rest. A distinct name keeps
+        // apiKey/setupToken encrypted on fresh installs.
+        private const val SECURE_PREFS_NAME = "hermes_config_secure"
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_API_KEY = "api_key"
         private const val KEY_SETUP_TOKEN = "setup_token"
@@ -100,7 +106,7 @@ class HermesApiService @Inject constructor(
     private var config: ServerConfig? = null
 
     private val secretPrefs: SharedPreferences
-        get() = com.hermes.mobile.security.SecurePrefs.get(context, "hermes_config")
+        get() = com.hermes.mobile.security.SecurePrefs.get(context, SECURE_PREFS_NAME)
 
     fun updateConfig(cfg: ServerConfig) {
         val prev = config
@@ -123,10 +129,29 @@ class HermesApiService @Inject constructor(
     fun getConfig(): ServerConfig? {
         if (config != null) return config
         val url = prefs.getString(KEY_BASE_URL, null) ?: return null
+        // Legacy rescue: pre-fix installs stored keys in the PLAIN
+        // "hermes_config" file (name-collision bug). Migrate them into the
+        // secure store once and scrub the plain copy.
+        var apiKey = secretPrefs.getString(KEY_API_KEY, "") ?: ""
+        var setupToken = secretPrefs.getString(KEY_SETUP_TOKEN, "") ?: ""
+        if (apiKey.isEmpty() || setupToken.isEmpty()) {
+            val legacyPlain = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val legacyKey = legacyPlain.getString(KEY_API_KEY, "") ?: ""
+            val legacyToken = legacyPlain.getString(KEY_SETUP_TOKEN, "") ?: ""
+            if (apiKey.isEmpty()) apiKey = legacyKey
+            if (setupToken.isEmpty()) setupToken = legacyToken
+            if (legacyKey.isNotEmpty() || legacyToken.isNotEmpty()) {
+                secretPrefs.edit()
+                    .putString(KEY_API_KEY, apiKey)
+                    .putString(KEY_SETUP_TOKEN, setupToken)
+                    .apply()
+                legacyPlain.edit().remove(KEY_API_KEY).remove(KEY_SETUP_TOKEN).apply()
+            }
+        }
         val restored = ServerConfig(
             baseUrl = url,
-            apiKey = secretPrefs.getString(KEY_API_KEY, "") ?: "",
-            setupToken = secretPrefs.getString(KEY_SETUP_TOKEN, "") ?: "",
+            apiKey = apiKey,
+            setupToken = setupToken,
         )
         config = restored
         return restored

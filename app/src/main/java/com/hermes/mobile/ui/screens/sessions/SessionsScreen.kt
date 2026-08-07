@@ -70,6 +70,9 @@ class SessionsViewModel @Inject constructor(
     /** The most recently deleted session — held for potential undo. */
     private var lastDeletedSession: Session? = null
 
+    /** Its messages — Undo restores the conversation, not just the row. */
+    private var lastDeletedMessages: List<com.hermes.mobile.data.model.Message> = emptyList()
+
     // ── Filtered sessions ────────────────────────────────────────
 
     // ── Pinned sessions (Telegram-style, persisted in prefs) ──
@@ -147,6 +150,8 @@ class SessionsViewModel @Inject constructor(
      */
     fun deleteSession(session: Session) {
         viewModelScope.launch {
+            // Snapshot BEFORE delete — Undo restores the conversation.
+            lastDeletedMessages = repository.getMessagesOnce(session.id)
             try {
                 repository.deleteSession(session.id)
                 lastDeletedSession = session
@@ -185,10 +190,12 @@ class SessionsViewModel @Inject constructor(
      */
     fun restoreLastDeleted() {
         val session = lastDeletedSession ?: return
+        val messages = lastDeletedMessages
         viewModelScope.launch {
             try {
-                repository.restoreSession(session)
+                repository.restoreSession(session, messages)
                 lastDeletedSession = null
+                lastDeletedMessages = emptyList()
             } catch (_: Exception) {
                 // If restore fails (e.g. database error), fall back to
                 // creating a fresh session so the user isn't left stranded.

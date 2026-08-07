@@ -246,9 +246,15 @@ class ChatViewModel @Inject constructor(
         streamingJob?.cancel()
         val pendingContent = _streamingContent.value
         streamingJob = viewModelScope.launch {
-            // Save any remaining pending content as a completed message
+            // Supersede the previous stream's placeholder. With text: finalize
+            // it into a completed message. Without text (tool-call-only or the
+            // throttled snapshot had nothing yet): DELETE it — finalizing blank
+            // would leave an empty bubble, and leaving it isStreaming=1 makes
+            // TWO rows render the next stream's text (the two-bubbles bug).
             if (pendingContent.isNotBlank()) {
                 repository.finalizePendingMessage(sid, pendingContent)
+            } else {
+                repository.deletePendingMessage(sid)
             }
 
             _isStreaming.value = true
@@ -536,6 +542,12 @@ fun ChatScreen(
 ) {
     val context = LocalContext.current
     val vm: ChatViewModel = hiltViewModel()
+
+    // Kill any in-flight dictation recognizer when the screen leaves —
+    // otherwise the mic service keeps running (a leak).
+    DisposableEffect(Unit) {
+        onDispose { stopActiveDictation() }
+    }
 
     val messages by vm.messages.collectAsState()
     val streamingContent by vm.streamingContent.collectAsState()
@@ -1009,7 +1021,13 @@ fun ChatScreen(
 
         InputBar(
             inputText = inputText,
-            onInputChange = { inputText = it; DraftStore.set(sessionIdState ?: "", it) },
+            onInputChange = { text ->
+                inputText = text
+                // Only save drafts once the session id exists — saving under
+                // "" would write a ghost draft and, worse, the session-init
+                // restore would then OVERWRITE what the user just typed.
+                sessionIdState?.let { DraftStore.set(it, text) }
+            },
             onSend = {
                 // Use ViewModel scope so cancellation doesn't lose messages
                 vm.sendWithAttachment(inputText.trim(), pendingAttachment, context, onAttachComplete = {
@@ -1133,6 +1151,21 @@ fun ChatScreen(
 // Inline voice dictation — uses SpeechRecognizer directly
 // ═══════════════════════════════════════════════════════════════
 
+// Singleton: creating a second SpeechRecognizer while one is active errors
+// out, and a recognizer left running after the screen leaves is a leak.
+@Volatile
+private var activeDictationRecognizer: android.speech.SpeechRecognizer? = null
+
+private fun stopActiveDictation() {
+    activeDictationRecognizer?.let { r ->
+        try {
+            r.destroy()
+        } catch (_: Exception) {
+        }
+        activeDictationRecognizer = null
+    }
+}
+
 private fun startVoiceDictation(
     context: android.content.Context,
     onFinalText: (String) -> Unit,
@@ -1142,12 +1175,15 @@ private fun startVoiceDictation(
         onError("Speech recognition not available on this device")
         return
     }
+    // Re-entry / double-tap guard: kill any previous recognizer first.
+    stopActiveDictation()
     try {
         val recognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(context)
         if (recognizer == null) {
             onError("Speech recognition service unavailable")
             return
         }
+        activeDictationRecognizer = recognizer
         val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(
                 android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -1170,15 +1206,15 @@ private fun startVoiceDictation(
                     android.speech.SpeechRecognizer.ERROR_CLIENT -> "Client error"
                     else -> "Voice error ($error)"
                 }
+                stopActiveDictation()
                 onError(msg)
-                recognizer.destroy()
             }
             override fun onResults(results: android.os.Bundle?) {
                 val matches = results?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
                 val text = matches?.firstOrNull() ?: ""
+                stopActiveDictation()
                 if (text.isNotBlank()) onFinalText(text)
                 else onError("No speech detected")
-                recognizer.destroy()
             }
             override fun onPartialResults(partialResults: android.os.Bundle?) {}
             override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
@@ -2416,10 +2452,6 @@ private fun filteredMessages(query: String, messages: List<Message>): List<Messa
     val q = query.trim()
     return messages.filter { it.content.contains(q, ignoreCase = true) }
 }
-
-/** Number of loaded messages matching the query. */
-private fun visibleMessagesCount(query: String, messages: List<Message>): Int =
-    filteredMessages(query, messages).size
 
 /**
  * Telegram-style search jump: scroll the inverted list to the match and

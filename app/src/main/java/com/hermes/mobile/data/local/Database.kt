@@ -35,6 +35,9 @@ interface MessageDao {
     @Query("UPDATE messages SET content = :content, isStreaming = :isStreaming WHERE id = :messageId")
     suspend fun updateMessage(messageId: Long, content: String, isStreaming: Boolean = false)
 
+    @Query("DELETE FROM messages WHERE sessionId = :sessionId AND isStreaming = 1")
+    suspend fun deleteStreamingPlaceholders(sessionId: String)
+
     @Query("UPDATE messages SET reaction = :reaction WHERE id = :messageId")
     suspend fun updateReaction(messageId: Long, reaction: String?)
 
@@ -86,7 +89,9 @@ abstract class AppDatabase : RoomDatabase() {
                 "hermes_mobile.db"
             )
                 .addMigrations(MIGRATION_1_2)
-                .fallbackToDestructiveMigration()
+                // NO fallbackToDestructiveMigration: a missed migration must
+                // crash LOUDLY at open (caught upstream) rather than silently
+                // wipe every session and message the user ever had.
                 .build()
         }
     }

@@ -29,7 +29,12 @@ object DiagLog {
     // Persist ERROR always; WARN/INFO only when at/above this threshold.
     // DEBUG lines are dropped entirely (kept out of the file).
     private const val MIN_PERSIST_LEVEL = INFO
-    private val TS_FORMAT = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    // SimpleDateFormat is NOT thread-safe, and log() runs on OkHttp
+    // callbacks, IO and Main threads concurrently — one shared instance can
+    // garble timestamps. ThreadLocal gives each thread its own formatter.
+    private val TS_FORMAT = ThreadLocal.withInitial {
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    }
 
     @Volatile private var ctx: Context? = null
     @Volatile private var writesSincePrune = 0
@@ -55,7 +60,7 @@ object DiagLog {
                 WARN -> "W"
                 else -> "I"
             }
-            val ts = TS_FORMAT.format(Date())
+            val ts = TS_FORMAT.get().format(Date())
             file.appendText("$ts [$lvl][$tag] $msg\n")
             writesSincePrune++
             if (file.length() > MAX_BYTES || writesSincePrune >= PRUNE_EVERY) {
@@ -84,7 +89,7 @@ object DiagLog {
                     // Lines start with "yyyy-MM-dd HH:mm:ss.SSS [L][TAG] msg"
                     if (line.length < 23) return@filter true // header/partial — keep
                     val ts = try {
-                        TS_FORMAT.parse(line.substring(0, 23)).time
+                        TS_FORMAT.get().parse(line.substring(0, 23)).time
                     } catch (_: Exception) {
                         return@filter true // unparseable — keep (don't lose evidence)
                     }
