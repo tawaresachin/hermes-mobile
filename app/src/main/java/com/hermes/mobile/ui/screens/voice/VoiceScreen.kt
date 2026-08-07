@@ -1584,8 +1584,12 @@ fun JarvisSphere(
         // ── Top transcript bar — stacked INSIDE the same Column as the
         // chips (no fixed offset, so it can never overlap them) ──
         // Hidden during ERROR — the red error banner replaces it.
-        if (transcript.isNotBlank() && state != SphereState.ERROR) {
-            Spacer(modifier = Modifier.height(8.dp))
+        // ALSO hidden when the transcript is just a stock status placeholder
+        // ("Listening…" / "Thinking…") — the bottom hint already says that,
+        // and an empty status card under the chips read as "overlap".
+        val stockStatus = transcript.startsWith("Listening…") || transcript == "Thinking…"
+        if (transcript.isNotBlank() && state != SphereState.ERROR && !stockStatus) {
+            Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
