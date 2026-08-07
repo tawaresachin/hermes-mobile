@@ -1402,46 +1402,13 @@ fun JarvisSphere(
             }
         }
 
-        // ── Status pill: accent dot + label per state (never color-only) ──
-        val pillColor = when (state) {
-            SphereState.IDLE, SphereState.AWAITING, SphereState.LISTENING -> VoiceNeonCyan
-            SphereState.THINKING -> VoiceNeonViolet
-            SphereState.SPEAKING -> VoiceNeonBlue
-            SphereState.ERROR -> VoiceNeonRed
-        }
-        val pillLabel = when (state) {
-            SphereState.IDLE -> "Idle"
-            SphereState.LISTENING -> "Listening"
-            SphereState.THINKING -> "Thinking"
-            SphereState.SPEAKING -> "Speaking"
-            SphereState.AWAITING -> "Awaiting"
-            SphereState.ERROR -> "Error"
-        }
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 52.dp)
-                .clip(RoundedCornerShape(50))
-                .background(chipBg)
-                .border(1.dp, pillColor.copy(alpha = 0.55f), RoundedCornerShape(50))
-                .padding(horizontal = 12.dp, vertical = 6.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(pillColor)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = pillLabel,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = chipText
-                )
-            }
-        }
+        // ── Status pill REMOVED ──
+        // An accent-dot + label pill used to float at TopCenter (top=52dp) —
+        // the SAME band as the model chip row. With the chips spanning
+        // wide, the pill rendered BEHIND the 'best-coding' chip (the
+        // "overlapping component" the user kept seeing). The state is
+        // already communicated twice: the sphere's color/animation and the
+        // bottom hint text ("Listening… speak freely" etc.).
 
         // ── TTS progress arc hugging the sphere rim (SPEAKING only) ──
         if (state == SphereState.SPEAKING) {
