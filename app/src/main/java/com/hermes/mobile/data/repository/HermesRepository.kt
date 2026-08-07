@@ -37,6 +37,11 @@ class HermesRepository @Inject constructor(
 
     fun getMessages(sessionId: String): Flow<List<Message>> = messageDao.getMessages(sessionId)
 
+    /** Telegram-style per-message delete (local history only). */
+    suspend fun deleteMessage(sessionId: String, msgId: Long) {
+        messageDao.deleteMessage(msgId)
+    }
+
     suspend fun sendMessage(
         sessionId: String,
         query: String,
@@ -47,6 +52,7 @@ class HermesRepository @Inject constructor(
         attachmentUrl: String = "",
         attachType: String = "",
         multiAgent: Boolean = false,
+        replyTo: String? = null,
     ): String {
         // Save user message ONLY on first attempt (retries must not duplicate it)
         if (attempt == 1) {
@@ -84,6 +90,7 @@ class HermesRepository @Inject constructor(
                 attachmentUrl = attachmentUrl,
                 attachType = attachType,
                 multiAgent = multiAgent,
+                replyTo = replyTo,
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e  // cancelled send must not write a ghost error message

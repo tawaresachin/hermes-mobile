@@ -166,6 +166,7 @@ class HermesApiService @Inject constructor(
         attachmentUrl: String = "",
         attachType: String = "",
         multiAgent: Boolean = false,
+        replyTo: String? = null,
     ): Unit = withContext(Dispatchers.IO) {
         suspendCancellableCoroutine { continuation ->
             val baseUrl = config?.baseUrl ?: "http://localhost:8080"
@@ -174,6 +175,7 @@ class HermesApiService @Inject constructor(
                 put("session_id", sessionId)
                 put("stream", true)
                 if (multiAgent) put("multi_agent", true)
+                if (replyTo.isNullOrBlank().not()) put("reply_to", replyTo)
                 if (attachmentUrl.isNotBlank()) put("attachment_url", attachmentUrl)
                 if (attachType.isNotBlank()) put("attachment_type", attachType)
             }

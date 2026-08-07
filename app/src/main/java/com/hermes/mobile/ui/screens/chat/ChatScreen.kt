@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -33,6 +34,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
@@ -60,11 +64,13 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
-import com.hermes.mobile.data.local.AppDatabase
+import com.hermes.mobile.data.local.DraftStore
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.components.HermesWatermark
+import com.hermes.mobile.ui.components.MessageActionSheet
 import com.hermes.mobile.ui.components.ModelPickerSheet
+import com.hermes.mobile.ui.components.ReplyBar
 import com.hermes.mobile.R
 import com.hermes.mobile.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -230,7 +236,7 @@ class ChatViewModel @Inject constructor(
     // cancelled stream can't clobber the new stream's UI content.
     private var streamGeneration = 0
 
-    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, multiAgent: Boolean = false) {
+    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, multiAgent: Boolean = false, replyTo: Message? = null) {
         val sid = _sessionId.value ?: return
         val gen = ++streamGeneration
 
@@ -260,6 +266,7 @@ class ChatViewModel @Inject constructor(
                     attachmentUrl = attachmentUrl ?: "",
                     attachType = attachType ?: "",
                     multiAgent = multiAgent,
+                    replyTo = replyTo?.content,
                     onChunk = { chunk ->
                         // Drop chunks from a superseded stream (generation changed).
                         if (gen == streamGeneration) {
@@ -392,7 +399,8 @@ class ChatViewModel @Inject constructor(
             attachment: PendingAttachment?,
             context: android.content.Context,
             onAttachComplete: () -> Unit,
-            multiAgent: Boolean = false
+            multiAgent: Boolean = false,
+            replyTo: Message? = null
         ) {
             val sid = _sessionId.value ?: return
             viewModelScope.launch {
@@ -414,10 +422,29 @@ class ChatViewModel @Inject constructor(
                     }
                 }
                 if (text.isNotBlank() || attachUrl != null) {
-                    sendMessage(text, attachUrl, attachType, multiAgent = multiAgent)
+                    sendMessage(text, attachUrl, attachType, multiAgent = multiAgent, replyTo = replyTo)
                 }
                 onAttachComplete()
             }
+        }
+
+        // ── Telegram-style message actions ──
+        fun deleteMessage(message: Message) {
+            viewModelScope.launch {
+                repository.deleteMessage(message.sessionId, message.id)
+                _messages.value = _messages.value.filterNot { it.id == message.id }
+            }
+        }
+
+        /** Regenerate: delete the assistant reply and resend the user
+         *  message that preceded it. */
+        fun regenerate(message: Message) {
+            val list = _messages.value
+            val idx = list.indexOfFirst { it.id == message.id }
+            if (idx <= 0) return
+            val userMsg = list.subList(0, idx).lastOrNull { it.role == MessageRole.USER } ?: return
+            deleteMessage(message)
+            sendMessage(userMsg.content)
         }
 
         /**
@@ -516,6 +543,12 @@ fun ChatScreen(
     var showModelPicker by remember { mutableStateOf(false) }
     // ── Multi-agent mode: routes turns through the ruflo swarm ──
     var multiAgentMode by remember { mutableStateOf(false) }
+    // ── Telegram-style interactions ──
+    var pendingReply by remember { mutableStateOf<Message?>(null) }
+    var menuTarget by remember { mutableStateOf<Message?>(null) }
+    // ── Search jump-to + highlight ──
+    var highlightId by remember { mutableStateOf<Long?>(null) }
+    var searchIndex by remember { mutableStateOf(0) }
 
     // ── File picker (stores selection, doesn't upload until send clicked) ──
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -590,10 +623,12 @@ fun ChatScreen(
         }
     }
 
-    // Load models when session ID is available
+    // Load models when session ID is available + restore the draft
     LaunchedEffect(sessionIdState) {
         if (sessionIdState != null) {
             vm.loadModels()
+            DraftStore.init(context)
+            inputText = DraftStore.get(sessionIdState!!)
         }
     }
 
@@ -705,12 +740,59 @@ fun ChatScreen(
             }
         }
 
+        // Memoized display list (newest-first for the inverted LazyColumn).
+        // Full O(n) filter+reverse only re-runs when the message list or
+        // search query changes (NOT on every recomposition — streaming emits
+        // ~20Hz of recompositions). Hoisted so the search bar can jump to
+        // matches too.
+        val displayMessages = remember(messages, searchQuery) {
+            filteredMessages(searchQuery, messages)
+                .asReversed()
+                .filter {
+                    // Never render blank assistant rows (whitespace-only
+                    // responses / abandoned placeholders) — they show as
+                    // unexplained gaps between messages. Streaming
+                    // placeholders stay (they carry the live text).
+                    it.role != MessageRole.ASSISTANT ||
+                        it.isStreaming ||
+                        it.content.isNotBlank()
+                }
+        }
+
         AnimatedVisibility(visible = showSearch) {
+            val searchMatches = remember(messages, searchQuery) {
+                if (searchQuery.isBlank()) emptyList()
+                else messages.filter {
+                    it.content.contains(searchQuery, ignoreCase = true) ||
+                        (it.attachmentName?.contains(searchQuery, ignoreCase = true) == true)
+                }
+            }
             ChatSearchBar(
                 query = searchQuery,
-                onQueryChange = { searchQuery = it },
-                resultCount = visibleMessagesCount(searchQuery, messages),
-                onClose = { showSearch = false; searchQuery = "" }
+                onQueryChange = { searchQuery = it; searchIndex = 0; highlightId = null },
+                resultCount = searchMatches.size,
+                position = if (searchMatches.isEmpty()) 0 else searchIndex.coerceIn(0, searchMatches.size - 1),
+                onPrev = if (searchMatches.isNotEmpty()) {
+                    {
+                        searchIndex = (searchIndex - 1 + searchMatches.size) % searchMatches.size
+                        scope.launch {
+                            jumpToSearchMatch(searchMatches[searchIndex], displayMessages, listState) {
+                                highlightId = searchMatches[searchIndex].id
+                            }
+                        }
+                    }
+                } else null,
+                onNext = if (searchMatches.isNotEmpty()) {
+                    {
+                        searchIndex = (searchIndex + 1) % searchMatches.size
+                        scope.launch {
+                            jumpToSearchMatch(searchMatches[searchIndex], displayMessages, listState) {
+                                highlightId = searchMatches[searchIndex].id
+                            }
+                        }
+                    }
+                } else null,
+                onClose = { showSearch = false; searchQuery = ""; highlightId = null }
             )
         }
 
@@ -725,7 +807,6 @@ fun ChatScreen(
             ) { Text(err) }
         }
 
-        // ── Telegram-style chat area (full width, no border) ──
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -736,23 +817,6 @@ fun ChatScreen(
             if (messages.isEmpty() && !isStreaming) {
                 EmptyChatState()
             } else {
-                // Memoized display list: full O(n) filter+reverse only
-                // re-runs when the message list or search query actually
-                // changes (NOT on every recomposition — streaming emits
-                // ~20Hz of recompositions).
-                val displayMessages = remember(messages, searchQuery) {
-                    filteredMessages(searchQuery, messages)
-                        .asReversed()
-                        .filter {
-                            // Never render blank assistant rows (whitespace-only
-                            // responses / abandoned placeholders) — they show
-                            // as unexplained gaps between messages. Streaming
-                            // placeholders stay (they carry the live text).
-                            it.role != MessageRole.ASSISTANT ||
-                                it.isStreaming ||
-                                it.content.isNotBlank()
-                        }
-                }
                 // Overscroll bounce/glow mirrors oddly on the inverted list —
                 // disable it (clean Telegram feel, no rubber-band at the ends).
                 CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
@@ -823,7 +887,14 @@ fun ChatScreen(
                                         showSearch = false
                                         searchQuery = ""
                                     }
-                                } else null
+                                } else null,
+                                onReply = if (isStreamingThis) null else {
+                                    { pendingReply = message }
+                                },
+                                onLongPress = if (isStreamingThis) null else {
+                                    { menuTarget = message }
+                                },
+                                highlighted = message.id == highlightId
                             )
                         }
                     }
@@ -832,15 +903,25 @@ fun ChatScreen(
             } // CompositionLocalProvider (overscroll off)
         }
 
+        // ── Telegram-style reply bar (quote above the input) ──
+        pendingReply?.let { replyMsg ->
+            ReplyBar(
+                message = replyMsg,
+                onCancel = { pendingReply = null }
+            )
+        }
+
         InputBar(
             inputText = inputText,
-            onInputChange = { inputText = it },
+            onInputChange = { inputText = it; DraftStore.set(sessionIdState ?: "", it) },
             onSend = {
                 // Use ViewModel scope so cancellation doesn't lose messages
                 vm.sendWithAttachment(inputText.trim(), pendingAttachment, context, onAttachComplete = {
                     pendingAttachment = null
                     inputText = ""
-                }, multiAgent = multiAgentMode)
+                }, multiAgent = multiAgentMode, replyTo = pendingReply)
+                DraftStore.clear(sessionIdState ?: "")
+                pendingReply = null
             },
             onVoice = {
                 // Request mic permission, then start inline voice dictation
@@ -852,7 +933,8 @@ fun ChatScreen(
                         onFinalText = { text ->
                             if (text.isNotBlank()) {
                                 inputText = text
-                                vm.sendMessage(text.trim())
+                                vm.sendMessage(text.trim(), replyTo = pendingReply)
+                                pendingReply = null
                                 inputText = ""
                             }
                         },
@@ -883,6 +965,36 @@ fun ChatScreen(
                 modelsLoading = modelsLoading,
                 onSelect = { modelId, global -> vm.switchModel(modelId, global = global) },
                 onDismiss = { showModelPicker = false }
+            )
+        }
+
+        // ── Telegram-style message action sheet (long-press menu) ──
+        menuTarget?.let { target ->
+            val contextForClipboard = context
+            MessageActionSheet(
+                message = target,
+                onCopy = {
+                    val cm = contextForClipboard.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("message", target.content))
+                    menuTarget = null
+                },
+                onReply = {
+                    pendingReply = target
+                    menuTarget = null
+                },
+                onDelete = {
+                    if (pendingReply?.id == target.id) pendingReply = null
+                    vm.deleteMessage(target)
+                    menuTarget = null
+                },
+                onRegenerate = if (target.role != MessageRole.USER) {
+                    {
+                        if (pendingReply?.id == target.id) pendingReply = null
+                        vm.regenerate(target)
+                        menuTarget = null
+                    }
+                } else null,
+                onDismiss = { menuTarget = null }
             )
         }
     }
@@ -1027,13 +1139,17 @@ fun EmptyChatState() {
 // Message bubble
 // ═══════════════════════════════════════════════════════════════
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(
     message: Message,
     displayContent: String,
     isStreaming: Boolean,
     baseUrl: String = "",
-    onEdit: (() -> Unit)? = null
+    onEdit: (() -> Unit)? = null,
+    onReply: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
+    highlighted: Boolean = false
 ) {
     val isUser = message.role == MessageRole.USER
     val isDark = LocalDarkTheme.current
@@ -1042,6 +1158,10 @@ fun MessageBubble(
     } else {
         if (isDark) OtherBubbleDark else OtherBubbleLight
     }
+    // Search-jump highlight: wash the bubble with the accent tint
+    val effectiveBubbleColor = if (highlighted) {
+        HermesPrimary.copy(alpha = 0.30f)
+    } else bubbleColor
     val alignment = if (isUser) Arrangement.End else Arrangement.Start
     val bubbleShape = RoundedCornerShape(
         topStart = if (isUser) 16.dp else 4.dp,
@@ -1067,7 +1187,26 @@ fun MessageBubble(
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val bubbleMax = this.maxWidth * 0.78f
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                // Telegram-style interactions:
+                // - long-press → action sheet (copy / reply / delete / regen)
+                // - horizontal swipe right → quick reply (fires once past
+                //   ~90px; vertical scroll is untouched — separate axis)
+                .combinedClickable(
+                    enabled = !isStreaming,
+                    onClick = {},
+                    onLongClick = onLongPress
+                )
+                .pointerInput(onReply, isStreaming) {
+                    if (onReply == null || isStreaming) return@pointerInput
+                    detectHorizontalDragGestures { change, dragAmount ->
+                        change.consume()
+                        if (dragAmount > 90f) {
+                            onReply()
+                        }
+                    }
+                },
             horizontalArrangement = alignment
         ) {
             // Box so the tail can OVERLAY the bubble's top corner (a Column
@@ -1079,7 +1218,7 @@ fun MessageBubble(
             ) {
             Surface(
                 shape = bubbleShape,
-                color = bubbleColor,
+                color = effectiveBubbleColor,
                 // No shadowElevation: per-bubble shadows are the classic
                 // Compose list-scroll jank source (Telegram bubbles are flat).
                 shadowElevation = 0.dp
@@ -1763,16 +1902,33 @@ fun MarkdownText(
 
 /**
  * Parse basic markdown into AnnotatedString.
- * Supports: **bold**, *italic*
+ * Supports: **bold**, *italic*, `inline code`, ```fenced code blocks```,
+ * and `> quote` lines (italic + accent color).
  */
 private fun parseMarkdown(
     text: String,
     style: TextStyle,
     baseColor: Color
 ): AnnotatedString {
+    val codeBackground = baseColor.copy(alpha = 0.10f)
+    val codeStyle = SpanStyle(
+        fontFamily = FontFamily.Monospace,
+        background = codeBackground
+    )
     return buildAnnotatedString {
         var i = 0
         while (i < text.length) {
+            // Fenced code block: ```...``` (multi-line, monospace + bg)
+            if (text.startsWith("```", i)) {
+                val end = text.indexOf("```", i + 3)
+                if (end != -1) {
+                    val start = length
+                    append(text.substring(i + 3, end).trim('\n'))
+                    addStyle(codeStyle, start, length)
+                    i = end + 3
+                    continue
+                }
+            }
             // Check for **bold** (prefer bold over italic)
             if (i + 1 < text.length && text[i] == '*' && text[i + 1] == '*') {
                 val end = text.indexOf("**", i + 2)
@@ -1802,6 +1958,33 @@ private fun parseMarkdown(
                     i = end + 1
                     continue
                 }
+            }
+            // Inline code: `...` → monospace + subtle background
+            if (text[i] == '`') {
+                val end = text.indexOf('`', i + 1)
+                if (end != -1 && end > i + 1) {
+                    val start = length
+                    append(text.substring(i + 1, end))
+                    addStyle(codeStyle, start, length)
+                    i = end + 1
+                    continue
+                }
+            }
+            // Quote line: starts with "> " → italic + accent tint
+            if (text[i] == '>' && (i == 0 || text[i - 1] == '\n')) {
+                val lineEnd = text.indexOf('\n', i)
+                val contentEnd = if (lineEnd == -1) text.length else lineEnd
+                val start = length
+                append(text.substring(i + 1, contentEnd))
+                addStyle(
+                    SpanStyle(
+                        fontStyle = FontStyle.Italic,
+                        color = baseColor.copy(alpha = 0.75f)
+                    ),
+                    start, length
+                )
+                i = contentEnd
+                continue
             }
             append(text[i])
             i++
@@ -1890,12 +2073,32 @@ private fun filteredMessages(query: String, messages: List<Message>): List<Messa
 private fun visibleMessagesCount(query: String, messages: List<Message>): Int =
     filteredMessages(query, messages).size
 
+/**
+ * Telegram-style search jump: scroll the inverted list to the match and
+ * flash its bubble. `displayList` is newest-first (index 0 = bottom).
+ */
+private suspend fun jumpToSearchMatch(
+    target: Message,
+    displayList: List<Message>,
+    listState: LazyListState,
+    onHighlight: () -> Unit
+) {
+    val idx = displayList.indexOfFirst { it.id == target.id }
+    if (idx >= 0) {
+        listState.scrollToItem(idx)
+        onHighlight()
+    }
+}
+
 /** Stripped-down search bar shown when the lens is active. */
 @Composable
 private fun ChatSearchBar(
     query: String,
     onQueryChange: (String) -> Unit,
     resultCount: Int,
+    position: Int = 0,
+    onPrev: (() -> Unit)? = null,
+    onNext: (() -> Unit)? = null,
     onClose: () -> Unit
 ) {
     Row(
@@ -1923,9 +2126,24 @@ private fun ChatSearchBar(
                 unfocusedIndicatorColor = MaterialTheme.colorScheme.outlineVariant,
             )
         )
-        if (query.isNotBlank()) {
+        if (query.isNotBlank() && resultCount > 0) {
+            // ── Jump-to: prev/next + "n/m" position (Telegram-style) ──
+            IconButton(onClick = { onPrev?.invoke() }, enabled = onPrev != null) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowUp,
+                    contentDescription = "Previous match",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = { onNext?.invoke() }, enabled = onNext != null) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "Next match",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Text(
-                text = "$resultCount",
+                text = "${position + 1}/$resultCount",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(end = 8.dp)
