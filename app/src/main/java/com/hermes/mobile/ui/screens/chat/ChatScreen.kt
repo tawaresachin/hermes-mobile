@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -229,7 +230,7 @@ class ChatViewModel @Inject constructor(
     // cancelled stream can't clobber the new stream's UI content.
     private var streamGeneration = 0
 
-    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null) {
+    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, multiAgent: Boolean = false) {
         val sid = _sessionId.value ?: return
         val gen = ++streamGeneration
 
@@ -258,6 +259,7 @@ class ChatViewModel @Inject constructor(
                     query = query,
                     attachmentUrl = attachmentUrl ?: "",
                     attachType = attachType ?: "",
+                    multiAgent = multiAgent,
                     onChunk = { chunk ->
                         // Drop chunks from a superseded stream (generation changed).
                         if (gen == streamGeneration) {
@@ -389,7 +391,8 @@ class ChatViewModel @Inject constructor(
             text: String,
             attachment: PendingAttachment?,
             context: android.content.Context,
-            onAttachComplete: () -> Unit
+            onAttachComplete: () -> Unit,
+            multiAgent: Boolean = false
         ) {
             val sid = _sessionId.value ?: return
             viewModelScope.launch {
@@ -411,7 +414,7 @@ class ChatViewModel @Inject constructor(
                     }
                 }
                 if (text.isNotBlank() || attachUrl != null) {
-                    sendMessage(text, attachUrl, attachType)
+                    sendMessage(text, attachUrl, attachType, multiAgent = multiAgent)
                 }
                 onAttachComplete()
             }
@@ -502,6 +505,8 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     // ── Model picker state ──
     var showModelPicker by remember { mutableStateOf(false) }
+    // ── Multi-agent mode: routes turns through the ruflo swarm ──
+    var multiAgentMode by remember { mutableStateOf(false) }
 
     // ── File picker (stores selection, doesn't upload until send clicked) ──
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -546,7 +551,7 @@ fun ChatScreen(
                 onFinalText = { text ->
                     if (text.isNotBlank()) {
                         inputText = text
-                        vm.sendMessage(text.trim())
+                        vm.sendMessage(text.trim(), multiAgent = multiAgentMode)
                         inputText = ""
                     }
                 },
@@ -650,6 +655,29 @@ fun ChatScreen(
                         contentDescription = "Select model",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                // Multi-agent toggle — routes this chat's turns through the
+                // ruflo swarm (8 parallel specialists). Slow (minutes) but
+                // deep: use for heavy analysis/build tasks.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                ) {
+                    Text(
+                        text = "Multi",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (multiAgentMode) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Switch(
+                        checked = multiAgentMode,
+                        onCheckedChange = { multiAgentMode = it },
+                        modifier = Modifier.scale(0.75f),
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = HermesPrimary,
+                            checkedThumbColor = Color.White
+                        )
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
@@ -804,7 +832,7 @@ fun ChatScreen(
                 vm.sendWithAttachment(inputText.trim(), pendingAttachment, context, onAttachComplete = {
                     pendingAttachment = null
                     inputText = ""
-                })
+                }, multiAgent = multiAgentMode)
             },
             onVoice = {
                 // Request mic permission, then start inline voice dictation

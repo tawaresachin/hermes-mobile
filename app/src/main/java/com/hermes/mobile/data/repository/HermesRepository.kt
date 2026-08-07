@@ -46,6 +46,7 @@ class HermesRepository @Inject constructor(
         attempt: Int = 1,
         attachmentUrl: String = "",
         attachType: String = "",
+        multiAgent: Boolean = false,
     ): String {
         // Save user message ONLY on first attempt (retries must not duplicate it)
         if (attempt == 1) {
@@ -82,6 +83,7 @@ class HermesRepository @Inject constructor(
                 onToolResult = onToolResult,
                 attachmentUrl = attachmentUrl,
                 attachType = attachType,
+                multiAgent = multiAgent,
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e  // cancelled send must not write a ghost error message
