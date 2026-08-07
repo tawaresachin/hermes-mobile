@@ -487,12 +487,24 @@ class VoiceViewModel @Inject constructor(
                 record.startRecording()
                 // Echo-safety (c): best-effort acoustic echo cancellation on
                 // the monitor's audio session.
+                var aec: android.media.audiofx.AcousticEchoCanceler? = null
                 try {
                     if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
                         aec = android.media.audiofx.AcousticEchoCanceler.create(record.audioSessionId)
                         aec?.setEnabled(true)
                     }
                 } catch (_: Exception) {}
+                // Echo-safety (d): WITHOUT AEC the monitor cannot tell the
+                // speaker's own voice from the user's — the TTS echo would
+                // trigger barge-in on every reply and cut responses off.
+                // Rather than fight that, don't listen at all: the user can
+                // still tap to interrupt.
+                if (aec == null) {
+                    DiagLog.i("VOICE", "AEC unavailable — barge-in monitor disabled (tap to interrupt still works)")
+                    try { record.stop() } catch (_: Exception) {}
+                    try { record.release() } catch (_: Exception) {}
+                    return@launch
+                }
                 val buf = ShortArray(1024)
                 while (isActive) {
                     val n = record.read(buf, 0, buf.size)
@@ -1494,11 +1506,16 @@ fun JarvisSphere(
             }
         }
 
-        // ── Top-left controls: reply-mode toggle + model chip ──
-        Row(
+        // ── Top controls: reply-mode toggle + model chip + transcript ──
+        // One stacked Column (NOT absolute offsets): at larger system font
+        // scales the old fixed-top transcript collided with the chips row.
+        Column(
             modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(top = 48.dp, start = 16.dp),
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .padding(top = 48.dp, start = 16.dp, end = 16.dp)
+        ) {
+        Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1562,55 +1579,52 @@ fun JarvisSphere(
             )
             } // Row (model chip content)
             } // Box (model chip)
-        } // Row (top-left controls)
+        } // Row (top controls)
 
-        // ── Top transcript bar (below the model chip — no overlap) ──
+        // ── Top transcript bar — stacked INSIDE the same Column as the
+        // chips (no fixed offset, so it can never overlap them) ──
         // Hidden during ERROR — the red error banner replaces it.
         if (transcript.isNotBlank() && state != SphereState.ERROR) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 96.dp, start = 24.dp, end = 24.dp, bottom = 0.dp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = cardBg,
+                    contentColor = cardContent
+                ),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = cardBg,
-                        contentColor = cardContent
-                    ),
-                    shape = RoundedCornerShape(16.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-                ) {
-                    Column(modifier = Modifier.padding(all = 16.dp)) {
-                        Text(
-                            text = transcript.take(200),
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        if (state == SphereState.SPEAKING) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "▁▂▃▄▅▆▇  ${(ttsProgress * 100).toInt()}%",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = particleColor
-                                )
-                                Text(
-                                    text = "Tap to interrupt",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = chipText
-                                )
-                            }
+                Column(modifier = Modifier.padding(all = 16.dp)) {
+                    Text(
+                        text = transcript.take(200),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (state == SphereState.SPEAKING) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "▁▂▃▄▅▆▇  ${(ttsProgress * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = particleColor
+                            )
+                            Text(
+                                text = "Tap to interrupt",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = chipText
+                            )
                         }
                     }
                 }
             }
         }
+        } // Column (top controls)
 
         // ── Bottom hint ──
         Box(

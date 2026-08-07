@@ -33,8 +33,13 @@ object VoiceTuning {
     /** Silence length that triggers an early finalize (ms). */
     const val EARLY_FINALIZE_SILENCE_MS = 2000L
 
-    /** Mic deafen right after TTS starts (ms) — the speaker's own audio. */
-    const val DEAFEN_MS = 250L
+    /** Mic deafen right after TTS starts (ms) — the speaker's own audio.
+     *  Was 250ms: the TTS echo hits the mic for the WHOLE sentence, so a
+     *  250ms window let the monitor hear its own voice and self-barge-in,
+     *  cutting replies off. 1500ms covers the loudest echo burst; after
+     *  that AEC must be cancelling the tail (and if AEC is unavailable the
+     *  monitor is not armed at all — see armBargeInMonitor). */
+    const val DEAFEN_MS = 1500L
 
     /** Pause between barge-in and re-arming listening (ms). */
     const val BARGE_IN_SETTLE_MS = 150L
