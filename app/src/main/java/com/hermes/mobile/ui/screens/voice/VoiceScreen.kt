@@ -145,6 +145,9 @@ class VoiceViewModel @Inject constructor(
     private val bargeInTriggered = AtomicBoolean(false)
     @Volatile private var vadDeafenUntilMs = 0L
     @Volatile private var ttsPlayingNow = false
+    /** When the current SPEAKING cycle began — barge-in is ignored for the
+     *  first 2s (the user's speech is settling + the loudest echo burst). */
+    @Volatile private var speakingCycleStartedAt = 0L
     private var initJob: Job? = null
     @Volatile private var lastSpokenSentence: String = ""
     @Volatile private var lastSpokenAt: Long = 0L
@@ -242,6 +245,7 @@ class VoiceViewModel @Inject constructor(
                             if (first) {
                                 first = false
                                 setVoiceModeState(SphereState.SPEAKING)
+                                speakingCycleStartedAt = SystemClock.elapsedRealtime()
                                 // Arm the barge-in monitor for the whole
                                 // SPEAKING cycle (fresh AudioRecord per
                                 // reply; the deafen window refreshes per
@@ -474,42 +478,33 @@ class VoiceViewModel @Inject constructor(
             )
             val bufSize = max(minBuf * 2, sampleRate / 2) // ≥0.5s of buffer
             var record: android.media.AudioRecord? = null
-            var aec: android.media.audiofx.AcousticEchoCanceler? = null
             val detector = BargeInDetector()
             try {
+                // ECHO-SAFETY (c/d): capture via VOICE_COMMUNICATION — the
+                // platform applies acoustic echo cancellation at the HAL
+                // level. MIC + the AcousticEchoCanceler EFFECT looked
+                // available but was a no-op in practice: the TTS echo
+                // reached the detector and self-triggered barge-in on long
+                // replies (the user's "response gets terminated").
                 record = android.media.AudioRecord(
-                    android.media.MediaRecorder.AudioSource.MIC,
+                    android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                     sampleRate,
                     android.media.AudioFormat.CHANNEL_IN_MONO,
                     android.media.AudioFormat.ENCODING_PCM_16BIT,
                     bufSize
                 )
                 record.startRecording()
-                // Echo-safety (c): best-effort acoustic echo cancellation on
-                // the monitor's audio session.
-                var aec: android.media.audiofx.AcousticEchoCanceler? = null
-                try {
-                    if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
-                        aec = android.media.audiofx.AcousticEchoCanceler.create(record.audioSessionId)
-                        aec?.setEnabled(true)
-                    }
-                } catch (_: Exception) {}
-                // Echo-safety (d): WITHOUT AEC the monitor cannot tell the
-                // speaker's own voice from the user's — the TTS echo would
-                // trigger barge-in on every reply and cut responses off.
-                // Rather than fight that, don't listen at all: the user can
-                // still tap to interrupt.
-                if (aec == null) {
-                    DiagLog.i("VOICE", "AEC unavailable — barge-in monitor disabled (tap to interrupt still works)")
-                    try { record.stop() } catch (_: Exception) {}
-                    try { record.release() } catch (_: Exception) {}
-                    return@launch
-                }
                 val buf = ShortArray(1024)
                 while (isActive) {
                     val n = record.read(buf, 0, buf.size)
                     if (n <= 0) continue
                     val nowMs = SystemClock.elapsedRealtime()
+                    // Warm-up guard: never self-trigger during the reply's
+                    // opening — the user's own speech is still settling and
+                    // the first echo burst is at its loudest.
+                    if (speakingCycleStartedAt > 0L && nowMs - speakingCycleStartedAt < 2000L) {
+                        continue
+                    }
                     var sumSq = 0.0
                     for (i in 0 until n) sumSq += buf[i].toDouble() * buf[i]
                     val rms = kotlin.math.sqrt(sumSq / n).toFloat()
@@ -526,7 +521,6 @@ class VoiceViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.w("VoiceScreen", "Barge-in monitor failed: ${e.message}")
             } finally {
-                try { aec?.release() } catch (_: Exception) {}
                 try { record?.stop() } catch (_: Exception) {}
                 try { record?.release() } catch (_: Exception) {}
             }
