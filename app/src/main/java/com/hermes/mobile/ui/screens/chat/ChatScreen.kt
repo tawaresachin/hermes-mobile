@@ -785,7 +785,7 @@ fun ChatScreen(
                     modifier = Modifier.clip(RoundedCornerShape(8.dp))
                 ) {
                     Text(
-                        text = "Multi agent",
+                        text = "Multi",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (multiAgentMode) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
