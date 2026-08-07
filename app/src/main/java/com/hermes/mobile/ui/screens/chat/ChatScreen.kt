@@ -916,23 +916,24 @@ fun ChatScreen(
                     onSuggestion = { suggestion -> vm.sendMessage(suggestion) }
                 )
             } else {
-                // Overscroll bounce/glow mirrors oddly on the inverted list —
+                // Overscroll bounce/glow mirrors oddly on the reversed list —
                 // disable it (clean Telegram feel, no rubber-band at the ends).
                 CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
                 LazyColumn(
                     state = listState,
-                    // Telegram-style bottom anchoring via the INVERTED LIST
-                    // trick (bulletproof — does not rely on reverseLayout
-                    // semantics): the whole list is flipped vertically so
-                    // item 0 renders at the BOTTOM edge; each item is
-                    // flipped back so content reads normally. Short content
-                    // is mathematically forced to the bottom; history grows
-                    // upward. Blank space sits ABOVE the conversation.
+                    // Telegram-style bottom anchoring via the NATIVE reversed
+                    // list (reverseLayout = true) — exactly how DrKLO's
+                    // RecyclerView anchors chats. The old "inverted list"
+                    // trick (whole list flipped + each item flipped back via
+                    // graphicsLayer) cost two GPU flips per visible item per
+                    // frame and flipped the touch space under the gesture
+                    // detectors — that was the scroll "hooking" feel.
+                    // reverseLayout puts item 0 at the BOTTOM edge natively;
+                    // short content is forced to the bottom; history grows
+                    // upward. No per-item flips, no flipped hit-testing.
+                    reverseLayout = true,
                     modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer { scaleY = -1f },
-                    // Per-item padding drives the gaps (1dp in-group, 6dp
-                    // between groups) — the old uniform spacedBy is removed.
+                        .fillMaxSize(),
                     contentPadding = PaddingValues(
                         start = 8.dp,
                         end = 8.dp,
@@ -940,7 +941,7 @@ fun ChatScreen(
                         bottom = 2.dp
                     )
                 ) {
-                    // Inverted list: FIRST declared items render at the
+                    // Reversed list: FIRST declared items render at the
                     // visual BOTTOM — declare bottom-most UI first:
                     // 1. typing pulse (very bottom, above the input)
                     // 2. tool-execution cards (inline, under the newest msg)
@@ -952,18 +953,16 @@ fun ChatScreen(
                     // while reading history mid-stream.
                     if (isStreaming) {
                         item(key = "live_status") {
-                            Box(Modifier.graphicsLayer { scaleY = -1f }) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 4.dp, vertical = 4.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    if (streamingContent.isBlank()) {
-                                        TypingIndicator()
-                                    }
-                                    toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                if (streamingContent.isBlank()) {
+                                    TypingIndicator()
                                 }
+                                toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
                             }
                         }
                     }
@@ -983,23 +982,22 @@ fun ChatScreen(
                         val isGroupStart = nextRole != message.role  // oldest of group
                         val isGroupEnd = prevRole != message.role    // newest of group
                         // Telegram-style date separator: a "Today" /
-                        // "Yesterday" / "12 Aug" pill at the day boundary
-                        // (between this message and the newer one below).
-                        val newerTs = displayMessages.getOrNull(index - 1)?.timestamp
-                        val newDay = newerTs != null && !isSameDay(newerTs, message.timestamp)
+                        // "Yesterday" / "12 Aug" pill above the FIRST message
+                        // of a new day (day differs from the older neighbor).
+                        val olderTs = displayMessages.getOrNull(index + 1)?.timestamp
+                        val newDay = olderTs != null && !isSameDay(olderTs, message.timestamp)
                         val dateLabel = remember(message.timestamp) { datePillLabel(message.timestamp) }
-                        Box(
-                            Modifier
-                                .graphicsLayer { scaleY = -1f }
-                                // Tight 1dp inside a group, 6dp between groups
-                                // (replaces the old uniform spacedBy(2.dp)).
-                                .padding(bottom = if (isGroupStart) 6.dp else 1.dp)
+                        // reverseLayout: index grows UPWARD, so the gap toward
+                        // the OLDER neighbor (above) is this item's TOP
+                        // padding — tight 1dp inside a group, 6dp between
+                        // groups (replaces the old uniform spacedBy(2.dp)).
+                        Column(
+                            Modifier.padding(top = if (isGroupStart) 6.dp else 1.dp)
                         ) {
-                            Column {
-                                if (newDay) {
-                                    DatePill(text = dateLabel)
-                                }
-                                MessageBubble(
+                            if (newDay) {
+                                DatePill(text = dateLabel)
+                            }
+                            MessageBubble(
                                 message = message,
                                 displayContent = displayContent,
                                 isStreaming = isStreamingThis,
@@ -1030,8 +1028,7 @@ fun ChatScreen(
                                 },
                                 highlighted = message.id == highlightId
                             )
-                            } // Column (date pill + bubble)
-                        }
+                        } // Column (date pill + bubble) — reverseLayout, no flip
                     }
                 }
             }
