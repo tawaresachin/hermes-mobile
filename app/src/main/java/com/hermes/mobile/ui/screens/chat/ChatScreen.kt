@@ -502,6 +502,15 @@ fun ChatScreen(
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    // Telegram behavior: if the reader scrolled UP to read history, the
+    // list NEVER yanks them back down. The flag flips when the user leaves
+    // the bottom ~2 items and clears when they return — auto-scroll only
+    // fires while they're parked at the bottom.
+    var userScrolledAway by remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .collect { index -> userScrolledAway = index > 2 }
+    }
     val scope = rememberCoroutineScope()
     // ── Model picker state ──
     var showModelPicker by remember { mutableStateOf(false) }
@@ -575,13 +584,9 @@ fun ChatScreen(
     // naturally, so no per-chunk scrolling is needed. The old effect keyed
     // on every streaming chunk and force-scrolled, fighting the user's
     // finger every ~50ms = the "stuck/bouncing" scroll feel.
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            // Inverted list: index 0 is the bottom (newest message).
-            val firstVisible = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
-            if (firstVisible <= 3) {
-                listState.scrollToItem(0)
-            }
+    LaunchedEffect(messages.size, isStreaming, userScrolledAway) {
+        if (messages.isNotEmpty() && !userScrolledAway) {
+            listState.scrollToItem(0)
         }
     }
 
@@ -776,13 +781,13 @@ fun ChatScreen(
                     // 1. typing pulse (very bottom, above the input)
                     // 2. tool-execution cards (inline, under the newest msg)
                     // 3. messages, newest first
-                    if (isStreaming && streamingContent.isBlank()) {
-                        item(key = "typing_indicator") {
-                            Box(Modifier.graphicsLayer { scaleY = -1f }) { TypingIndicator() }
-                        }
-                    }
-                    if (isStreaming && toolCalls.isNotEmpty()) {
-                        item(key = "tool_calls") {
+                    // ONE stable item for all live-stream UI (typing pulse +
+                    // tool cards). A single always-present item avoids
+                    // insert/remove layout shifts — separate conditional
+                    // items made the list 'bounce' under the user's finger
+                    // while reading history mid-stream.
+                    if (isStreaming) {
+                        item(key = "live_status") {
                             Box(Modifier.graphicsLayer { scaleY = -1f }) {
                                 Column(
                                     modifier = Modifier
@@ -790,6 +795,9 @@ fun ChatScreen(
                                         .padding(horizontal = 4.dp, vertical = 4.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
+                                    if (streamingContent.isBlank()) {
+                                        TypingIndicator()
+                                    }
                                     toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
                                 }
                             }
