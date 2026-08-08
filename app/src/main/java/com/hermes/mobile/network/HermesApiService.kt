@@ -207,6 +207,7 @@ class HermesApiService @Inject constructor(
         onChunk: (String) -> Unit,
         onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
         onToolResult: (String, String) -> Unit = { _, _ -> },
+        onOpen: () -> Unit = {},
         attachmentUrl: String = "",
         attachType: String = "",
         multiAgent: Boolean = false,
@@ -239,6 +240,7 @@ class HermesApiService @Inject constructor(
             val source = factory.newEventSource(request, object : EventSourceListener() {
                 override fun onOpen(eventSource: EventSource, response: Response) {
                     lastEventMs = System.currentTimeMillis()
+                    onOpen()
                 }
                 override fun onEvent(
                     eventSource: EventSource,

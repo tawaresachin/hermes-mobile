@@ -6,6 +6,7 @@ import com.hermes.mobile.data.model.*
 import com.hermes.mobile.network.HermesApiService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -74,6 +75,7 @@ class HermesRepository @Inject constructor(
         replyTo: String? = null,
     ): String {
         // Save user message ONLY on first attempt (retries must not duplicate it)
+        var userMsgId: Long? = null
         if (attempt == 1) {
             val userMsg = Message(
                 sessionId = sessionId,
@@ -81,10 +83,17 @@ class HermesRepository @Inject constructor(
                 content = query,
                 attachmentUrl = attachmentUrl.ifBlank { null },
                 attachmentType = attachType.ifBlank { null },
-                replyToText = replyTo?.take(300)
+                replyToText = replyTo?.take(300),
+                // Telegram-style tick: SENDING until the server acknowledges.
+                status = MessageStatus.SENDING
             )
-            messageDao.insertMessage(userMsg)
+            userMsgId = messageDao.insertMessage(userMsg)
             sessionDao.incrementMessageCount(sessionId)
+        } else {
+            // Retry: the user row already exists — reuse it so the tick
+            // chain (SENT → READ) still advances on the retried attempt.
+            userMsgId = messageDao.getMessagesOnce(sessionId)
+                .lastOrNull { it.role == MessageRole.USER }?.id
         }
 
         // Create placeholder for assistant response
@@ -101,8 +110,30 @@ class HermesRepository @Inject constructor(
             apiService.streamChat(
                 query = query,
                 sessionId = sessionId,
+                onOpen = {
+                    // Server accepted + opened the stream → SENT.
+                    if (userMsgId != null) {
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                            try {
+                                messageDao.updateMessageStatus(userMsgId!!, MessageStatus.SENT)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (_: Exception) { }
+                        }
+                    }
+                },
                 onChunk = { chunk ->
                     fullResponse.append(chunk)
+                    // First content → the agent is answering → READ.
+                    if (fullResponse.length == chunk.length && userMsgId != null) {
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                            try {
+                                messageDao.updateMessageStatus(userMsgId!!, MessageStatus.READ)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (_: Exception) { }
+                        }
+                    }
                     onChunk(chunk)
                 },
                 onToolCall = onToolCall,
@@ -164,6 +195,14 @@ class HermesRepository @Inject constructor(
                 )
             }
             fullResponse.append("⚠️ Connection error: ${e.message}")
+            // Tick → FAILED: the send did not complete after retries.
+            if (userMsgId != null) {
+                try {
+                    messageDao.updateMessageStatus(userMsgId!!, MessageStatus.FAILED)
+                } catch (e2: kotlinx.coroutines.CancellationException) {
+                    throw e2
+                } catch (_: Exception) { }
+            }
         }
 
         // Finalize message

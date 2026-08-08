@@ -43,6 +43,9 @@ interface MessageDao {
     @Query("UPDATE messages SET content = :content, isStreaming = :isStreaming WHERE id = :messageId")
     suspend fun updateMessage(messageId: Long, content: String, isStreaming: Boolean = false)
 
+    @Query("UPDATE messages SET status = :status WHERE id = :messageId")
+    suspend fun updateMessageStatus(messageId: Long, status: com.hermes.mobile.data.model.MessageStatus)
+
     @Query("DELETE FROM messages WHERE sessionId = :sessionId AND isStreaming = 1")
     suspend fun deleteStreamingPlaceholders(sessionId: String)
 
@@ -74,7 +77,7 @@ interface MessageDao {
 
 @Database(
     entities = [Message::class, Session::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -90,13 +93,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v2 → v3: Telegram-style delivery status tick column. */
+        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN status TEXT")
+            }
+        }
+
         fun create(context: Context): AppDatabase {
             return Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
                 "hermes_mobile.db"
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 // NO fallbackToDestructiveMigration: a missed migration must
                 // crash LOUDLY at open (caught upstream) rather than silently
                 // wipe every session and message the user ever had.

@@ -8,6 +8,9 @@ import androidx.room.PrimaryKey
 
 enum class MessageRole { USER, ASSISTANT }
 
+/** Telegram-style delivery status for OUTGOING (user) messages. */
+enum class MessageStatus { SENDING, SENT, READ, FAILED }
+
 @Entity(
     tableName = "messages",
     indices = [Index(value = ["sessionId"])]
@@ -27,7 +30,9 @@ data class Message(
     // quote chip at the top of the bubble).
     val replyToText: String? = null,
     // Telegram-style reaction (👍) — stored locally per message.
-    val reaction: String? = null
+    val reaction: String? = null,
+    // Telegram-style delivery tick (user messages only; null = SENT).
+    val status: MessageStatus? = null
 )
 
 // ─── Session Models ───

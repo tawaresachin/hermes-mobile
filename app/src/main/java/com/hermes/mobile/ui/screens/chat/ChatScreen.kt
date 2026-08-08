@@ -27,7 +27,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.runtime.*
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -772,7 +774,12 @@ fun ChatScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = if (currentModel.isNotBlank())
+                            // Telegram-style: while the agent is thinking
+                            // (streaming, no token yet) the subtitle becomes
+                            // an animated "thinking…" instead of the model.
+                            text = if (isStreaming && streamingContent.isBlank())
+                                ThinkingSubtitle()
+                            else if (currentModel.isNotBlank())
                                 currentModel.substringAfterLast("/").take(20)
                             else "AI Assistant",
                             style = MaterialTheme.typography.bodySmall,
@@ -992,8 +999,15 @@ fun ChatScreen(
                         // the newer neighbor is index-1, the older is index+1.
                         val prevRole = displayMessages.getOrNull(index - 1)?.role
                         val nextRole = displayMessages.getOrNull(index + 1)?.role
-                        val isGroupStart = nextRole != message.role  // oldest of group
-                        val isGroupEnd = prevRole != message.role    // newest of group
+                        // Telegram's exact rule: same sender AND gap ≤ 5 min.
+                        val prevMsg = displayMessages.getOrNull(index - 1)
+                        val nextMsg = displayMessages.getOrNull(index + 1)
+                        val isGroupStart = nextMsg == null ||
+                            nextRole != message.role ||
+                            (message.timestamp - nextMsg.timestamp) > GROUP_WINDOW_MS
+                        val isGroupEnd = prevMsg == null ||
+                            prevRole != message.role ||
+                            (prevMsg.timestamp - message.timestamp) > GROUP_WINDOW_MS
                         // Telegram-style date separator: a "Today" /
                         // "Yesterday" / "12 Aug" pill above the FIRST message
                         // of a new day (day differs from the older neighbor).
@@ -1046,6 +1060,64 @@ fun ChatScreen(
                 }
             }
             } // CompositionLocalProvider (overscroll off)
+
+            // ── Telegram-style scroll-to-bottom FAB with unread counter ──
+            // Visible only while scrolled up; shows how much NEW content
+            // arrived while away from the bottom; tap = fast animated return.
+            val atBottom by remember {
+                derivedStateOf {
+                    val info = listState.layoutInfo
+                    val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                    val total = info.totalItemsCount
+                    total == 0 || lastVisible >= total - 2
+                }
+            }
+            val totalItems = displayMessages.size + (if (isStreaming) 1 else 0)
+            var knownAtBottom by remember { mutableStateOf(totalItems) }
+            LaunchedEffect(atBottom, totalItems) {
+                if (atBottom) knownAtBottom = totalItems
+            }
+            val newCount = (totalItems - knownAtBottom).coerceAtLeast(0)
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !atBottom && totalItems > 0,
+                enter = fadeIn() + slideInVertically { it / 2 },
+                exit = fadeOut() + slideOutVertically { it / 2 },
+                modifier = Modifier.align(Alignment.BottomEnd)
+            ) {
+                FloatingActionButton(
+                    onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                    modifier = Modifier
+                        .padding(end = 10.dp, bottom = 6.dp)
+                        .size(40.dp),
+                    shape = CircleShape,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = HermesPrimary,
+                    elevation = FloatingActionButtonDefaults.elevation(6.dp)
+                ) {
+                    Box {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "Scroll to latest",
+                            modifier = Modifier.size(22.dp)
+                        )
+                        if (newCount > 0) {
+                            Text(
+                                text = "$newCount",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 2.dp, y = (-2).dp)
+                                    .background(
+                                        HermesPrimary,
+                                        CircleShape
+                                    )
+                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // ── Telegram-style reply bar (quote above the input) ──
@@ -1458,6 +1530,9 @@ private fun isSameDay(a: Long, b: Long): Boolean {
         ca.get(java.util.Calendar.DAY_OF_YEAR) == cb.get(java.util.Calendar.DAY_OF_YEAR)
 }
 
+/** Telegram's grouping window: same sender + gap ≤ 5 min = one cluster. */
+private const val GROUP_WINDOW_MS = 5 * 60 * 1000L
+
 private fun datePillLabel(timestamp: Long): String {
     val cal = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
     val now = java.util.Calendar.getInstance()
@@ -1470,6 +1545,56 @@ private fun datePillLabel(timestamp: Long): String {
 // ═══════════════════════════════════════════════════════════════
 // Message bubble
 // ═══════════════════════════════════════════════════════════════
+
+/**
+ * Telegram-style animated "thinking…" subtitle (three pulsing dots).
+ */
+@Composable
+private fun ThinkingSubtitle(): String {
+    val dots by rememberInfiniteTransition(label = "thinking").animateFloat(
+        initialValue = 0f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "dots"
+    )
+    return "thinking" + ".".repeat(dots.toInt())
+}
+
+/**
+ * Telegram-style delivery tick: clock (sending) → ✓ (sent) →
+ * blue ✓✓ (read) → red ! (failed).
+ */
+@Composable
+private fun StatusTick(status: MessageStatus, tint: Color) {
+    when (status) {
+        MessageStatus.SENDING -> CircularProgressIndicator(
+            modifier = Modifier.size(12.dp),
+            strokeWidth = 1.5.dp,
+            color = tint
+        )
+        MessageStatus.SENT -> Icon(
+            imageVector = Icons.Filled.Check,
+            contentDescription = "Sent",
+            tint = tint,
+            modifier = Modifier.size(14.dp)
+        )
+        MessageStatus.READ -> Icon(
+            imageVector = Icons.Filled.DoneAll,
+            contentDescription = "Read",
+            tint = HermesPrimary,
+            modifier = Modifier.size(14.dp)
+        )
+        MessageStatus.FAILED -> Icon(
+            imageVector = Icons.Filled.ErrorOutline,
+            contentDescription = "Failed",
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(14.dp)
+        )
+    }
+}
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -1660,6 +1785,22 @@ fun MessageBubble(
                         Spacer(modifier = Modifier.height(4.dp))
                         StreamingIndicator(color = textColor.copy(alpha = 0.6f))
                     }
+                    // Telegram-style delivery tick — always visible on
+                    // finished user messages (clock → ✓ → blue ✓✓ / red !).
+                    if (isUser && !isStreaming && displayContent.isNotBlank()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            StatusTick(
+                                status = message.status ?: MessageStatus.SENT,
+                                tint = textColor.copy(alpha = 0.5f)
+                            )
+                        }
+                    }
                     // Edit affordance for finished user messages — loads the
                     // text back into the input to resend in the SAME session.
                     if (onEdit != null && !isStreaming && isUser && displayContent.isNotBlank()) {
@@ -1670,14 +1811,6 @@ fun MessageBubble(
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Telegram-style sent tick (single ✓)
-                            Icon(
-                                imageVector = Icons.Filled.Check,
-                                contentDescription = "Sent",
-                                tint = textColor.copy(alpha = 0.5f),
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "Edit",
                                 style = MaterialTheme.typography.labelSmall,
