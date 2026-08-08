@@ -2,6 +2,7 @@ package com.hermes.mobile.ui.screens.sessions
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -184,6 +185,13 @@ class SessionsViewModel @Inject constructor(
         }
     }
 
+    /** Rename a session (local-only metadata change). */
+    fun renameSession(sessionId: String, title: String) {
+        viewModelScope.launch {
+            repository.renameSession(sessionId, title)
+        }
+    }
+
     /**
      * Restore the most recently deleted session.
      * Called when the user taps "Undo" on the snackbar.
@@ -230,6 +238,9 @@ fun SessionsScreen(
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    // Long-press target for the rename dialog
+    var renameTarget by remember { mutableStateOf<Session?>(null) }
 
     // ── Snackbar event collector ───────────────────────────────
     LaunchedEffect(Unit) {
@@ -292,10 +303,23 @@ fun SessionsScreen(
                     onSessionSelected = onSessionSelected,
                     onDeleteSession = viewModel::deleteSession,
                     onTogglePin = viewModel::togglePin,
+                    onRenameSession = { renameTarget = it },
                     drafts = drafts
                 )
             }
         }
+    }
+
+    // Rename dialog (long-press a session row)
+    renameTarget?.let { target ->
+        com.hermes.mobile.ui.components.RenameSessionDialog(
+            currentTitle = target.title ?: "",
+            onDismiss = { renameTarget = null },
+            onRename = { name ->
+                viewModel.renameSession(target.id, name)
+                renameTarget = null
+            }
+        )
     }
 }
 
@@ -400,6 +424,7 @@ private fun SessionsList(
     onSessionSelected: (String) -> Unit,
     onDeleteSession: (Session) -> Unit,
     onTogglePin: (String) -> Unit,
+    onRenameSession: (Session) -> Unit,
     drafts: Map<String, String>
 ) {
     val listState = rememberLazyListState()
@@ -433,6 +458,7 @@ private fun SessionsList(
                     SessionCard(
                         session = session,
                         onClick = { onSessionSelected(session.id) },
+                        onLongClick = { onRenameSession(session) },
                         isPinned = session.id in pinnedIds,
                         onTogglePin = { onTogglePin(session.id) },
                         draftText = drafts[session.id] ?: ""
@@ -502,10 +528,12 @@ private fun SwipeDeleteBackground() {
 //  session icon, title, date, and message count
 // ═══════════════════════════════════════════════════════════════
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SessionCard(
     session: Session,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     isPinned: Boolean = false,
     onTogglePin: (() -> Unit)? = null,
     draftText: String = ""
@@ -527,8 +555,9 @@ private fun SessionCard(
     }
 
     Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = RoundedCornerShape(0.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface

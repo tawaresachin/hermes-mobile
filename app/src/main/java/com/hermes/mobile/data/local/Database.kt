@@ -17,6 +17,9 @@ interface SessionDao {
     @Query("DELETE FROM sessions WHERE id = :sessionId")
     suspend fun deleteSession(sessionId: String)
 
+    @Query("UPDATE sessions SET title = :title WHERE id = :sessionId")
+    suspend fun renameSession(sessionId: String, title: String)
+
     @Query("UPDATE sessions SET messageCount = messageCount + 1, updatedAt = :timestamp WHERE id = :sessionId")
     suspend fun incrementMessageCount(sessionId: String, timestamp: Long = System.currentTimeMillis())
 

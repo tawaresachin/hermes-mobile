@@ -167,6 +167,11 @@ class HermesRepository @Inject constructor(
         sessionDao.deleteSession(sessionId)
     }
 
+    /** Rename a session (local-only metadata change). */
+    suspend fun renameSession(sessionId: String, title: String) {
+        sessionDao.renameSession(sessionId, title.trim().ifBlank { "Untitled Session" })
+    }
+
     suspend fun clearSession(sessionId: String) {
         messageDao.deleteSessionMessages(sessionId)
     }

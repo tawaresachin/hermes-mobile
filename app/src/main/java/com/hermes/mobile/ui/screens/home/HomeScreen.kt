@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -55,6 +56,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -207,6 +210,12 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun renameSession(sessionId: String, title: String) {
+        viewModelScope.launch {
+            repository.renameSession(sessionId, title)
+        }
+    }
+
     fun refreshConnection() {
         checkConnection()
     }
@@ -222,6 +231,9 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    // Long-press target for the rename dialog
+    var renameTarget by remember { mutableStateOf<Session?>(null) }
 
     // Re-check connection when returning from Settings
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -293,7 +305,8 @@ fun HomeScreen(
                         SwipeableSessionItem(
                             session = session,
                             onClick = { onNavigateToChat(session.id) },
-                            onDelete = { viewModel.deleteSession(session.id) }
+                            onDelete = { viewModel.deleteSession(session.id) },
+                            onRename = { renameTarget = session }
                         )
                         // Telegram-style thin divider between rows
                         if (index < uiState.sessions.lastIndex) {
@@ -307,6 +320,18 @@ fun HomeScreen(
                 }
             }
         }
+        }
+
+        // Rename dialog (long-press a session row)
+        renameTarget?.let { target ->
+            com.hermes.mobile.ui.components.RenameSessionDialog(
+                currentTitle = target.title ?: "",
+                onDismiss = { renameTarget = null },
+                onRename = { name ->
+                    viewModel.renameSession(target.id, name)
+                    renameTarget = null
+                }
+            )
         }
     }
 }
@@ -595,7 +620,8 @@ private fun EmptySessionsPlaceholder() {
 private fun SwipeableSessionItem(
     session: Session,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onRename: () -> Unit
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { dismissValue ->
@@ -651,7 +677,8 @@ private fun SwipeableSessionItem(
     ) {
         SessionItem(
             session = session,
-            onClick = onClick
+            onClick = onClick,
+            onLongClick = onRename
         )
     }
 }
@@ -674,10 +701,12 @@ private fun formatRelativeTime(timestamp: Long): String {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SessionItem(
     session: Session,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
 ) {
     val titleText = remember(session.title) {
         if (session.title.isNullOrBlank()) "Untitled Session" else session.title!!
@@ -692,7 +721,11 @@ private fun SessionItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            // Opaque surface: without this, the red swipe-delete layer +
+            // trash icon show through the transparent row and sit on top of
+            // the trailing timestamp even at rest.
+            .background(MaterialTheme.colorScheme.background)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 8.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
