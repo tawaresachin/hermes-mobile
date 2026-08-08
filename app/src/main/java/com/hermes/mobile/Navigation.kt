@@ -18,6 +18,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.compose.ui.platform.LocalHapticFeedback
 import com.hermes.mobile.ui.screens.chat.ChatScreen
 import com.hermes.mobile.ui.screens.home.HomeScreen
 import com.hermes.mobile.ui.screens.sessions.SessionsScreen
@@ -70,6 +71,8 @@ fun MainNavigation(
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
+    // Haptic feedback for tab switches
+    val haptic = LocalHapticFeedback.current
 
     // Security: leave gated screens (Chat/Voice/Sessions) IMMEDIATELY when
     // the user signs out — an already-open screen must not stay usable.
@@ -96,6 +99,10 @@ fun MainNavigation(
                     screens = bottomNavScreens,
                     currentDestination = currentDestination,
                     onNavigate = { screen ->
+                        // Telegram-style light tick on tab switch
+                        haptic.performHapticFeedback(
+                            androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                        )
                         navController.navigate(screen.route) {
                             // saveState/restoreState: each tab's backstack
                             // entry (and its ViewModels) SURVIVE tab

@@ -764,26 +764,15 @@ private fun SessionsEmptyState(
 private fun formatTimestamp(millis: Long): String {
     if (millis <= 0L) return "Unknown"
 
+    // Telegram-style relative time: now / 5m / 3h / Yesterday / weekday / date
     val now = System.currentTimeMillis()
-    val tz = java.util.TimeZone.getDefault()
-    val todayStart = java.util.Calendar.getInstance().apply {
-        timeInMillis = now
-        set(java.util.Calendar.HOUR_OF_DAY, 0)
-        set(java.util.Calendar.MINUTE, 0)
-        set(java.util.Calendar.SECOND, 0)
-        set(java.util.Calendar.MILLISECOND, 0)
-    }.timeInMillis
-    val tzOffset = tz.getOffset(now)
-
+    val diff = now - millis
     return when {
-        millis >= todayStart -> {
-            SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(millis))
-        }
-        millis >= todayStart - 6 * 86_400_000L + tzOffset -> {
-            SimpleDateFormat("EEE h:mm a", Locale.getDefault()).format(Date(millis))
-        }
-        else -> {
-            SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(millis))
-        }
+        diff < 60_000L -> "now"
+        diff < 3_600_000L -> "${diff / 60_000L}m"
+        diff < 86_400_000L -> "${diff / 3_600_000L}h"
+        diff < 172_800_000L -> "Yesterday"
+        diff < 7L * 86_400_000L -> SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(millis))
+        else -> SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(millis))
     }
 }

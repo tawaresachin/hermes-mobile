@@ -1144,23 +1144,25 @@ fun SettingsSection(
     content: @Composable ColumnScope.() -> Unit
 ) {
     Column {
+        // Telegram style: small muted uppercase section label, then a flat
+        // card with thin dividers between rows.
         Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = HermesPrimary,
-            modifier = Modifier.padding(bottom = 10.dp)
+            text = title.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            letterSpacing = androidx.compose.ui.unit.TextUnit.Unspecified,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 12.dp, bottom = 6.dp)
         )
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 20.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 content = content
             )
         }

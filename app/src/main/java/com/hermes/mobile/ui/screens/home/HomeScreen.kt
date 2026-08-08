@@ -27,7 +27,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -50,6 +52,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
@@ -249,24 +252,17 @@ fun HomeScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+                .padding(horizontal = 16.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                top = 48.dp,
+                top = 24.dp,
                 bottom = 24.dp
             )
         ) {
-            // ── Greeting ──
-            item(key = "greeting") {
-                GreetingSection(
+            // ── Compact header (Telegram-style: title + status line) ──
+            item(key = "header") {
+                HomeHeader(
+                    greeting = uiState.greeting,
                     emoji = uiState.greetingEmoji,
-                    greeting = uiState.greeting
-                )
-            }
-
-            // ── Connection Hero Card ──
-            item(key = "connection_hero") {
-                ConnectionHeroCard(
                     status = uiState.connectionStatus,
                     serverUrl = uiState.serverBaseUrl,
                     latency = uiState.connectionLatency,
@@ -274,7 +270,7 @@ fun HomeScreen(
                 )
             }
 
-            // ── Quick Actions ──
+            // ── Quick actions: compact pill row ──
             item(key = "quick_actions") {
                 QuickActionsRow(
                     isLoading = uiState.isLoading,
@@ -297,15 +293,25 @@ fun HomeScreen(
                     EmptySessionsPlaceholder()
                 }
             } else {
-                items(
+                itemsIndexed(
                     items = uiState.sessions,
-                    key = { it.id }
-                ) { session ->
-                    SwipeableSessionItem(
-                        session = session,
-                        onClick = { onNavigateToChat(session.id) },
-                        onDelete = { viewModel.deleteSession(session.id) }
-                    )
+                    key = { _, it -> it.id }
+                ) { index, session ->
+                    Column {
+                        SwipeableSessionItem(
+                            session = session,
+                            onClick = { onNavigateToChat(session.id) },
+                            onDelete = { viewModel.deleteSession(session.id) }
+                        )
+                        // Telegram-style thin divider between rows
+                        if (index < uiState.sessions.lastIndex) {
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                                modifier = Modifier.padding(start = 64.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -313,168 +319,87 @@ fun HomeScreen(
     }
 }
 
-// ─── Greeting Section ───
+// ─── Compact Home Header (greeting + connection line) ───
 
 @Composable
-private fun GreetingSection(
+private fun HomeHeader(
+    greeting: String,
     emoji: String,
-    greeting: String
-) {
-    AnimatedContent(
-        targetState = greeting,
-        transitionSpec = {
-            fadeIn(animationSpec = tween(400)) togetherWith
-                fadeOut(animationSpec = tween(400))
-        },
-        label = "greeting_animation"
-    ) { currentGreeting ->
-        val targetEmoji = when (currentGreeting) {
-            "Good Morning" -> "🌅"
-            "Good Afternoon" -> "☀️"
-            "Good Evening" -> "🌆"
-            "Good Night" -> "🌙"
-            "Late Night" -> "🌙"
-            else -> "👋"
-        }
-        Text(
-            text = "$targetEmoji $currentGreeting",
-            style = MaterialTheme.typography.displayMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.fillMaxWidth()
-        )
-    }
-
-    Text(
-        text = "Welcome to Hermes Mobile",
-        style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 4.dp)
-    )
-}
-
-// ─── Connection Hero Card ───
-
-@Composable
-private fun ConnectionHeroCard(
     status: ConnectionStatus,
     serverUrl: String,
     latency: Long,
     onRefresh: () -> Unit
 ) {
-    val transition = rememberInfiniteTransition(label = "pulse")
-    val pulseAlpha by transition.animateFloat(
-        initialValue = 0.6f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse_alpha"
-    )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "$emoji $greeting",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            text = "Hermes Mobile",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
-    val statusColor by animateColorAsState(
-        targetValue = when (status) {
-            ConnectionStatus.CONNECTED -> SuccessGreen
-            ConnectionStatus.CONNECTING -> WarningAmber
-            ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
-            ConnectionStatus.ERROR -> ErrorRed
-        },
-        animationSpec = tween(600),
-        label = "statusColor"
-    )
+        Spacer(modifier = Modifier.height(12.dp))
 
-    val statusText = when (status) {
-        ConnectionStatus.CONNECTED -> "Connected"
-        ConnectionStatus.CONNECTING -> "Connecting…"
-        ConnectionStatus.DISCONNECTED -> "Disconnected"
-        ConnectionStatus.ERROR -> "Connection Error"
-    }
-
-    val statusIcon = when (status) {
-        ConnectionStatus.CONNECTED -> Icons.Filled.CheckCircle
-        ConnectionStatus.CONNECTING -> Icons.Filled.Sync
-        ConnectionStatus.DISCONNECTED -> Icons.Filled.CloudOff
-        ConnectionStatus.ERROR -> Icons.Filled.Error
-    }
-
-    Card(
-        onClick = onRefresh,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
+        // Slim connection line (tap to refresh) — no hero card.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onRefresh)
+                .padding(horizontal = 4.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Status icon with pulse
+            val dotColor = when (status) {
+                ConnectionStatus.CONNECTED -> SuccessGreen
+                ConnectionStatus.CONNECTING -> WarningAmber
+                ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
+                ConnectionStatus.ERROR -> ErrorRed
+            }
+            val statusText = when (status) {
+                ConnectionStatus.CONNECTED -> "Connected"
+                ConnectionStatus.CONNECTING -> "Connecting…"
+                ConnectionStatus.DISCONNECTED -> "Disconnected"
+                ConnectionStatus.ERROR -> "Connection Error"
+            }
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(statusColor.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .alpha(
-                            if (status == ConnectionStatus.CONNECTING) pulseAlpha else 1f
-                        )
-                ) {
-                    Icon(
-                        imageVector = statusIcon,
-                        contentDescription = null,
-                        tint = statusColor,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = serverUrl.ifBlank { "Not configured" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(dotColor)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (status == ConnectionStatus.CONNECTED) SuccessGreen
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            )
             if (status == ConnectionStatus.CONNECTED) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = SuccessGreen.copy(alpha = 0.12f)
-                ) {
-                    Text(
-                        text = "${latency}ms",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = SuccessGreen,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "· ${latency}ms",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
             }
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = serverUrl.ifBlank { "Not configured" },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
 
-// ─── Quick Actions Row ───
+// ─── Quick Actions: compact pill row (Telegram-style) ───
 
 @Composable
 private fun QuickActionsRow(
@@ -483,114 +408,99 @@ private fun QuickActionsRow(
     onResumeSession: () -> Unit,
     onVoiceInput: () -> Unit
 ) {
-    Column {
-        Text(
-            text = "Quick Actions",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.padding(bottom = 12.dp)
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // New Chat
-            QuickActionButton(
-                icon = Icons.Filled.Add,
-                label = "New Chat",
-                description = "Start a fresh conversation",
-                gradientColors = listOf(HermesPrimary, HermesPrimaryDark),
-                onClick = onNewChat,
-                modifier = Modifier.weight(1f),
-                enabled = !isLoading
-            )
-
-            // Resume
-            QuickActionButton(
-                icon = Icons.Filled.MenuBook,
-                label = "Resume",
-                description = "Pick up where you left off",
-                gradientColors = listOf(HermesSecondary, HermesSecondaryDark),
-                onClick = onResumeSession,
-                modifier = Modifier.weight(1f)
-            )
-
-            // Voice
-            QuickActionButton(
-                icon = Icons.Filled.Mic,
-                label = "Voice",
-                description = "Speak your query",
-                gradientColors = listOf(HermesAccent, WarningAmber),
-                onClick = onVoiceInput,
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun QuickActionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    description: String,
-    gradientColors: List<Color>,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true
-) {
-    Card(
-        onClick = onClick,
-        modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        enabled = enabled
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(10.dp)
+        // New chat — filled primary pill
+        Surface(
+            onClick = onNewChat,
+            modifier = Modifier.weight(1.2f),
+            shape = RoundedCornerShape(50),
+            color = HermesPrimary,
+            enabled = !isLoading
         ) {
-            // Icon with solid background
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(gradientColors[0].copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
             ) {
                 Icon(
-                    imageVector = icon,
-                    contentDescription = label,
-                    tint = gradientColors[0],
-                    modifier = Modifier.size(16.dp)
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "New chat",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
                 )
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1
+        }
+        // Voice — outline pill
+        Surface(
+            onClick = onVoiceInput,
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(50),
+            color = Color.Transparent,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp, MaterialTheme.colorScheme.outlineVariant
             )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = description,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Mic,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Voice",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+        // Sessions — outline pill
+        Surface(
+            onClick = onResumeSession,
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(50),
+            color = Color.Transparent,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp, MaterialTheme.colorScheme.outlineVariant
             )
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.History,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Sessions",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
     }
 }
+
 
 // ─── Recent Sessions Header ───
 
@@ -604,10 +514,11 @@ private fun RecentSessionsHeader(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "Recent Sessions",
-            style = MaterialTheme.typography.titleLarge,
+            text = "Recent sessions",
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.padding(top = 12.dp)
         )
 
         Spacer(modifier = Modifier.weight(1f))
@@ -748,108 +659,85 @@ private fun SwipeableSessionItem(
     }
 }
 
-// ─── Session Item ───
+// ─── Session Item (Telegram-style row) ───
+
+private fun formatRelativeTime(timestamp: Long): String {
+    val diff = System.currentTimeMillis() - timestamp
+    return when {
+        diff < 60_000L -> "now"
+        diff < 3_600_000L -> "${diff / 60_000L}m"
+        diff < 86_400_000L -> "${diff / 3_600_000L}h"
+        diff < 7L * 86_400_000L -> "${diff / 86_400_000L}d"
+        else -> java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault())
+            .format(java.util.Date(timestamp))
+    }
+}
 
 @Composable
 private fun SessionItem(
     session: Session,
     onClick: () -> Unit
 ) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    val titleText = remember(session.title) {
+        if (session.title.isNullOrBlank()) "Untitled Session" else session.title!!
+    }
+    val preview = when {
+        session.messageCount <= 0 -> "No messages"
+        session.messageCount == 1 -> "1 message"
+        else -> "${session.messageCount} messages"
+    }
+    val timeText = remember(session.updatedAt) { formatRelativeTime(session.updatedAt) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
+        // Telegram-style circular avatar (colored bg + initial)
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(HermesPrimary),
+            contentAlignment = Alignment.Center
         ) {
-            // Session icon
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = HermesPrimary.copy(alpha = 0.12f),
-                modifier = Modifier.size(44.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Filled.PlayArrow,
-                        contentDescription = null,
-                        tint = HermesPrimary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = session.title ?: "Untitled Session",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "${session.messageCount} message${if (session.messageCount != 1) "s" else ""}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (session.messageCount > 0) {
-                        Text(
-                            text = " · ",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = formatRelativeTime(session.updatedAt),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            Icon(
-                imageVector = Icons.Outlined.ChevronRight,
-                contentDescription = "Open session",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.size(20.dp)
+            Text(
+                text = titleText.take(1).uppercase(),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
             )
         }
-    }
-}
 
-// ─── Relative Time Formatting ───
+        Spacer(modifier = Modifier.width(14.dp))
 
-private fun formatRelativeTime(timestamp: Long): String {
-    val now = System.currentTimeMillis()
-    val diff = now - timestamp
+        // Title + preview
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = titleText,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = preview,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
 
-    return when {
-        diff < 60_000L -> "just now"
-        diff < 3600_000L -> {
-            val mins = diff / 60_000L
-            "${mins}m ago"
-        }
-        diff < 86_400_000L -> {
-            val hours = diff / 3600_000L
-            "${hours}h ago"
-        }
-        diff < 604_800_000L -> {
-            val days = diff / 86_400_000L
-            "${days}d ago"
-        }
-        else -> {
-            val sdf = SimpleDateFormat("MMM d", Locale.getDefault())
-            sdf.format(Date(timestamp))
-        }
+        // Relative time
+        Text(
+            text = timeText,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
     }
 }
