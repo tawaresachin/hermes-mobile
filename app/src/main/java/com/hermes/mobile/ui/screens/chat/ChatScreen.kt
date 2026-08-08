@@ -220,6 +220,9 @@ class ChatViewModel @Inject constructor(
             repository.finalizeStaleStreaming(sessionId)
             observeMessages(sessionId)
             repository.resumeSession(sessionId) // warm cache
+            // Safety net: if the LAST response was lost (stream died while
+            // the user was away), recover it from the server.
+            repository.repairBlankAssistantResponse(sessionId)
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Legitimate cancellation when scope is torn down — suppress
         } catch (e: Exception) {

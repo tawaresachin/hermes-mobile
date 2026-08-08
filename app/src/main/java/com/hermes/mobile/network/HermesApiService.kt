@@ -386,6 +386,36 @@ class HermesApiService @Inject constructor(
         }
     }
 
+    /**
+     * Fetch a session's messages from the server (source of truth).
+     * Returns list of {role, content, timestamp} or null on failure.
+     * Used to repair a last response lost to an interrupted stream.
+     */
+    suspend fun fetchSessionMessages(sessionId: String): List<JSONObject>? {
+        val baseUrl = config?.baseUrl ?: return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url("$baseUrl/api/sessions/$sessionId/messages")
+                    .get()
+                    .build()
+                val response = client.newCall(request).execute()
+                response.use { resp ->
+                    if (!resp.isSuccessful) return@withContext null
+                    val body = resp.body?.string() ?: return@withContext null
+                    val arr = JSONArray(body)
+                    buildList {
+                        for (i in 0 until arr.length()) {
+                            add(arr.getJSONObject(i))
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
     // ─── Diag log upload (production support) ───
     // Ships the on-device diag.log to the bridge, which stores it under
     // STORE_PATH/logs/ for the user/maintainer to pull for analysis.
