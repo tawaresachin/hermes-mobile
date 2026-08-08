@@ -957,7 +957,7 @@ fun SettingsScreen(
                     SetupHelpSection(
                         title = "📱 2. App-side (this phone)",
                         steps = listOf(
-                            "Install the Hermes Mobile APK (v2.19+)",
+                            "Install the Hermes Mobile APK",
                             "Open Settings → tap 'Scan QR Code'",
                             "Aim the camera at the QR shown on the setup page",
                             "The app auto-configures the server URL + key",
