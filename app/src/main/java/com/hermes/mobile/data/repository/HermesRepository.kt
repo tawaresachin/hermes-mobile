@@ -209,6 +209,20 @@ class HermesRepository @Inject constructor(
         messageDao.updateMessage(msgId, fullResponse.toString(), false)
         sessionDao.incrementMessageCount(sessionId)
 
+        // Tick → READ once the response COMPLETED. The first-text-chunk
+        // hook misses tool-only / reasoning-only / resume-repair responses
+        // (no text chunk ever fires), leaving those stuck on the single
+        // tick. Any completed turn with real content = read. (The FAILED
+        // path already marked FAILED above and starts with the error
+        // marker — never override it.)
+        if (userMsgId != null && !fullResponse.startsWith("⚠️ Connection error")) {
+            try {
+                messageDao.updateMessageStatus(userMsgId!!, MessageStatus.READ)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { }
+        }
+
         return fullResponse.toString()
     }
 
@@ -240,6 +254,14 @@ class HermesRepository @Inject constructor(
                     // would patch STALE content (duplicate/wrong bubble).
                     if (tail.optString("content").isNotBlank()) {
                         messageDao.updateMessage(last.id, tail.optString("content"), false)
+                        // The recovered response means the turn completed —
+                        // the user's tick must advance to READ (it was stuck
+                        // on SENT because the stream died before any chunk).
+                        messageDao.getMessagesOnce(sessionId)
+                            .lastOrNull { it.role == MessageRole.USER }
+                            ?.let { user ->
+                                messageDao.updateMessageStatus(user.id, MessageStatus.READ)
+                            }
                     } else {
                         // Genuinely empty turn — drop the dead bubble.
                         messageDao.deleteMessage(last.id)
