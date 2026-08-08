@@ -761,6 +761,10 @@ private fun SessionsEmptyState(
  * - **This week**    → "Mon 3:45 PM"
  * - **Older**        → "Jan 5, 2025"
  */
+// Cached formatters — SimpleDateFormat is expensive to construct per row.
+private val tsWeekdayFmt = SimpleDateFormat("EEEE", Locale.getDefault())
+private val tsDateFmt = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
+
 private fun formatTimestamp(millis: Long): String {
     if (millis <= 0L) return "Unknown"
 
@@ -772,7 +776,7 @@ private fun formatTimestamp(millis: Long): String {
         diff < 3_600_000L -> "${diff / 60_000L}m"
         diff < 86_400_000L -> "${diff / 3_600_000L}h"
         diff < 172_800_000L -> "Yesterday"
-        diff < 7L * 86_400_000L -> SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(millis))
-        else -> SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(millis))
+        diff < 7L * 86_400_000L -> tsWeekdayFmt.format(Date(millis))
+        else -> tsDateFmt.format(Date(millis))
     }
 }

@@ -40,7 +40,6 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale

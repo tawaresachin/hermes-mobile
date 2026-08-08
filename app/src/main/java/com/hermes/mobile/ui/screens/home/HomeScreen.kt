@@ -1,18 +1,14 @@
 package com.hermes.mobile.ui.screens.home
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.VectorConverter
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -35,14 +31,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.outlined.ChevronRight
@@ -664,6 +656,11 @@ private fun SwipeableSessionItem(
 
 // ─── Session Item (Telegram-style row) ───
 
+// Cached — SimpleDateFormat is expensive to construct per row per frame.
+private val relTimeDateFmt = java.text.SimpleDateFormat(
+    "d MMM", java.util.Locale.getDefault()
+)
+
 private fun formatRelativeTime(timestamp: Long): String {
     val diff = System.currentTimeMillis() - timestamp
     return when {
@@ -671,8 +668,7 @@ private fun formatRelativeTime(timestamp: Long): String {
         diff < 3_600_000L -> "${diff / 60_000L}m"
         diff < 86_400_000L -> "${diff / 3_600_000L}h"
         diff < 7L * 86_400_000L -> "${diff / 86_400_000L}d"
-        else -> java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault())
-            .format(java.util.Date(timestamp))
+        else -> relTimeDateFmt.format(java.util.Date(timestamp))
     }
 }
 
