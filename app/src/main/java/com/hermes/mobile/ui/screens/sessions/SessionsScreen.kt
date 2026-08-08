@@ -416,12 +416,13 @@ private fun SessionsList(
             SwipeToDismissBox(
                 state = rememberSwipeToDismissBoxState(
                     confirmValueChange = { value ->
+                        // Allow every transition — returning false for Settled
+                        // leaves the row stuck half-swiped (delete icon covering
+                        // the trailing timestamp).
                         if (value == SwipeToDismissBoxValue.EndToStart) {
                             onDeleteSession(session)
-                            true
-                        } else {
-                            false
                         }
+                        true
                     }
                 ),
                 backgroundContent = { SwipeDeleteBackground() },

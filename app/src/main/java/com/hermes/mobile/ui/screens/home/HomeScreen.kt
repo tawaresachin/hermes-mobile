@@ -599,12 +599,14 @@ private fun SwipeableSessionItem(
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { dismissValue ->
+            // Allow EVERY transition (Settled spring-back AND EndToStart)
+            // — returning false for Settled is the classic bug that leaves
+            // the row stuck half-swiped, with the delete icon covering the
+            // row's trailing timestamp.
             if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
                 onDelete()
-                true
-            } else {
-                false
             }
+            true
         }
     )
 
