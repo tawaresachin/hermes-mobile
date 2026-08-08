@@ -1779,10 +1779,9 @@ fun MessageBubble(
                             )
                         }
                     }
-                    if (isStreaming) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        StreamingIndicator(color = textColor.copy(alpha = 0.6f))
-                    }
+                    // The old blinking cursor bar is REMOVED — the header's
+                    // "thinking…" subtitle is the generating indicator now
+                    // (Telegram's top-bar placement; no blinking in the list).
                     // Telegram-style delivery tick — always visible on
                     // finished user messages (clock → ✓ → blue ✓✓ / red !).
                     // Legacy rows (pre-status column) default to READ —
