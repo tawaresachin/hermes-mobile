@@ -974,15 +974,16 @@ fun ChatScreen(
                     // while reading history mid-stream.
                     if (isStreaming) {
                         item(key = "live_status") {
+                            // Inline typing pulse REMOVED — the header now
+                            // shows the animated "thinking…" subtitle
+                            // (Telegram's top-bar placement). The list never
+                            // shifts during streaming; tool cards remain.
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 4.dp, vertical = 4.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                if (streamingContent.isBlank()) {
-                                    TypingIndicator()
-                                }
                                 toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
                             }
                         }
@@ -1065,14 +1066,10 @@ fun ChatScreen(
             // ── Telegram-style scroll-to-bottom FAB with unread counter ──
             // Visible only while scrolled up; shows how much NEW content
             // arrived while away from the bottom; tap = fast animated return.
-            val atBottom by remember {
-                derivedStateOf {
-                    val info = listState.layoutInfo
-                    val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-                    val total = info.totalItemsCount
-                    total == 0 || lastVisible >= total - 2
-                }
-            }
+            // atBottom reuses the existing userScrolledAway flag
+            // (firstVisibleItemIndex-based) — a viewport shrink (keyboard
+            // opening) must NOT fake a scroll-away + phantom counter.
+            val atBottom = !userScrolledAway
             val totalItems = displayMessages.size + (if (isStreaming) 1 else 0)
             var knownAtBottom by remember { mutableStateOf(totalItems) }
             LaunchedEffect(atBottom, totalItems) {
@@ -1788,6 +1785,8 @@ fun MessageBubble(
                     }
                     // Telegram-style delivery tick — always visible on
                     // finished user messages (clock → ✓ → blue ✓✓ / red !).
+                    // Legacy rows (pre-status column) default to READ —
+                    // past messages were all read, never single-tick.
                     if (isUser && !isStreaming && displayContent.isNotBlank()) {
                         Row(
                             modifier = Modifier
@@ -1797,7 +1796,7 @@ fun MessageBubble(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             StatusTick(
-                                status = message.status ?: MessageStatus.SENT,
+                                status = message.status ?: MessageStatus.READ,
                                 tint = textColor.copy(alpha = 0.5f)
                             )
                         }
