@@ -127,6 +127,19 @@ class HomeViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
+    // Rolling latency history — a single RTT over Tailscale jitters wildly
+    // (14ms vs 167ms); the DISPLAYED value is the median of the last 5
+    // samples so tapping 'Connected' shows a stable number.
+    private val latencyHistory = ArrayDeque<Long>()
+
+    private fun medianOf(values: List<Long>): Long {
+        if (values.isEmpty()) return 0L
+        val sorted = values.sorted()
+        val mid = sorted.size / 2
+        return if (sorted.size % 2 == 1) sorted[mid]
+        else (sorted[mid - 1] + sorted[mid]) / 2
+    }
+
     init {
         observeSessions()
         updateGreeting()
@@ -174,7 +187,10 @@ class HomeViewModel @Inject constructor(
                 val start = System.currentTimeMillis()
                 val status = repository.checkConnection(savedConfig)
                 val latency = if (status == ConnectionStatus.CONNECTED) {
-                    System.currentTimeMillis() - start
+                    val measured = System.currentTimeMillis() - start
+                    latencyHistory.addLast(measured)
+                    while (latencyHistory.size > 5) latencyHistory.removeFirst()
+                    medianOf(latencyHistory.toList())
                 } else 0L
                 _uiState.update { state ->
                     state.copy(
