@@ -27,8 +27,22 @@ import com.hermes.mobile.ui.screens.voice.VoiceScreen
 import com.hermes.mobile.ui.theme.HermesPrimary
 
 // ═══════════════════════════════════════════════════════════
-// Screen routes
+// Screen routes — PLAIN routes (no query args). Query-arg patterns
+// ("chat?sessionId={sessionId}") look identical but break saved-backstack
+// restore: an entry saved with route "chat" by an older version no longer
+// matches the new pattern → IllegalArgumentException at launch.
 // ═══════════════════════════════════════════════════════════
+
+// One-shot session delivery (kept instead of nav args): the pending id is
+// CONSUMED by ChatScreen once; the sign-out gate CLEARS it, so a stale id
+// can never leak into another account's session (the original bug).
+object ChatNav {
+    var pendingSessionId: String? by androidx.compose.runtime.mutableStateOf(null)
+}
+
+object VoiceNav {
+    var pendingNewSession: Boolean by androidx.compose.runtime.mutableStateOf(false)
+}
 
 sealed class Screen(
     val route: String,
@@ -36,8 +50,8 @@ sealed class Screen(
     val icon: ImageVector
 ) {
     data object Home : Screen("home", "Home", Icons.Filled.Home)
-    data object Chat : Screen("chat?sessionId={sessionId}", "Chat", Icons.Filled.Chat)
-    data object Voice : Screen("voice?newSession={newSession}", "Voice", Icons.Filled.Mic)
+    data object Chat : Screen("chat", "Chat", Icons.Filled.Chat)
+    data object Voice : Screen("voice", "Voice", Icons.Filled.Mic)
     data object Sessions : Screen("sessions", "Sessions", Icons.Filled.History)
     data object Settings : Screen("settings", "Settings", Icons.Filled.Settings)
 }
@@ -88,10 +102,9 @@ fun MainNavigation(
                         haptic.performHapticFeedback(
                             androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
                         )
-                        // Tab taps use the arg-less route (resume state);
+                        // Tab taps use the plain route (resume state);
                         // explicit session/new flags come from Home/Sessions.
-                        val tabRoute = screen.route.substringBefore("?")
-                        navController.navigate(tabRoute) {
+                        navController.navigate(screen.route) {
                             // saveState/restoreState: each tab's backstack
                             // entry (and its ViewModels) SURVIVE tab
                             // switches — an ongoing chat stream keeps
@@ -127,30 +140,26 @@ fun MainNavigation(
                     onNavigateToVoice = {
                         // Home voice card = NEW voice session (the Voice TAB
                         // itself resumes the latest session).
-                        navController.navigate("voice?newSession=true") {
+                        VoiceNav.pendingNewSession = true
+                        navController.navigate(Screen.Voice.route) {
                             popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = false
+                                saveState = true
                             }
-                            launchSingleTop = false
+                            launchSingleTop = true
+                            restoreState = true
                         }
                     }
                 )
             }
-            composable(
-                route = Screen.Chat.route,
-                arguments = listOf(
-                    androidx.navigation.navArgument("sessionId") {
-                        type = androidx.navigation.NavType.StringType
-                        nullable = true
-                        defaultValue = null
-                    }
-                )
-            ) {
+            composable(Screen.Chat.route) {
                 if (isLoggedIn) {
                     ChatScreen(
                         paddingValues = scaffoldPadding
                     )
                 } else {
+                    // Gate shown — the pending session id must NOT survive
+                    // for the next account/session (stale-session bug).
+                    ChatNav.pendingSessionId = null
                     SignInRequired(
                         feature = "Chat",
                         onGoToSettings = {
@@ -159,16 +168,7 @@ fun MainNavigation(
                     )
                 }
             }
-            composable(
-                route = Screen.Voice.route,
-                arguments = listOf(
-                    androidx.navigation.navArgument("newSession") {
-                        type = androidx.navigation.NavType.BoolType
-                        nullable = true
-                        defaultValue = false
-                    }
-                )
-            ) {
+            composable(Screen.Voice.route) {
                 if (isLoggedIn) {
                     VoiceScreen(
                         onExit = {
@@ -179,6 +179,7 @@ fun MainNavigation(
                         }
                     )
                 } else {
+                    VoiceNav.pendingNewSession = false
                     SignInRequired(
                         feature = "Voice",
                         onGoToSettings = {
@@ -261,17 +262,16 @@ fun HermesBottomNavigationBar(
 
 /** Navigate to the chat screen, optionally opening a session (null = new chat). */
 private fun openChat(navController: NavHostController, sessionId: String?) {
-    // Session id travels as a NAV ARGUMENT (not a global): it is bound to
-    // this entry's lifetime, consumed once by the ViewModel, and can never
-    // leak a stale id into another account's session. A fresh entry is
-    // forced (launchSingleTop=false, saveState=false) so the arg is always
-    // delivered — Home cards start NEW by design.
-    val route = if (sessionId != null) "chat?sessionId=$sessionId" else "chat"
-    navController.navigate(route) {
+    // One-shot delivery via ChatNav: consumed by ChatScreen on compose.
+    // The sign-out gate clears it, so a stale id can never open the wrong
+    // session after switching accounts (the original bug).
+    ChatNav.pendingSessionId = sessionId
+    navController.navigate(Screen.Chat.route) {
         popUpTo(navController.graph.findStartDestination().id) {
-            saveState = false
+            saveState = true
         }
-        launchSingleTop = false
+        launchSingleTop = true
+        restoreState = true
     }
 }
 

@@ -187,12 +187,6 @@ class ChatViewModel @Inject constructor(
         }
     }
     init {
-        // Nav-arg delivery: the session id travels as a nav argument bound
-        // to this entry. CONSUME it here (one-shot) so a restored entry can
-        // never re-deliver a stale id into a different account's session.
-        val pending = savedStateHandle.get<String>("sessionId")
-        savedStateHandle["sessionId"] = null
-        initSession(pending)
         checkConnection()
         // Poll connection every 5s when not connected
         viewModelScope.launch {
@@ -698,8 +692,15 @@ fun ChatScreen(
         }
     }
 
-    // Initialise session — the session id (if any) arrives as a nav
-    // argument and is consumed by the ViewModel's init. Nothing to do here.
+    // Initialise session — read pending session once on creation. The id
+    // is consumed here; the sign-out gate clears it so it can never leak
+    // into another account's session.
+    LaunchedEffect(Unit) {
+        val pending = com.hermes.mobile.ChatNav.pendingSessionId
+        com.hermes.mobile.ChatNav.pendingSessionId = null // consume
+        vm.initSession(pending)
+    }
+
     // Auto-scroll: ONLY when a new message arrives (size change) and the
     // user is already near the bottom. The inverted layout keeps the newest
     // item pinned to the bottom edge — growing streaming text pushes UP
