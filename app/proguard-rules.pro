@@ -6,20 +6,13 @@
 -keep class com.hermes.mobile.data.model.** { *; }
 -keep class com.hermes.mobile.network.** { *; }
 
-# Gson
--keep class com.google.gson.** { *; }
--keepclassmembers class * {
-    @com.google.gson.annotations.SerializedName <fields>;
-}
-
 # OkHttp
 -dontwarn okhttp3.**
 -dontwarn okio.**
 
-# Retrofit
--keepattributes Signature
--keepattributes Exceptions
--keep class retrofit2.** { *; }
+# security-crypto (Tink): errorprone annotations are compile-time only
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.annotation.**
 
 # Room
 -keep class * extends androidx.room.RoomDatabase

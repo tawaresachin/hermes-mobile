@@ -14,8 +14,8 @@ android {
         applicationId = "com.hermes.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 115
-        versionName = "2.28.11"
+        versionCode = 116
+        versionName = "2.28.12"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -36,7 +36,18 @@ android {
             )
         }
         debug {
-            isMinifyEnabled = false
+            // R8 on debug too — the delivered APK is the debug build, and
+            // without minify it ships ~8MB of dead dex (all 2000+ material
+            // icons, unused deps). Same signature, installs over existing.
+            // NOTE: isShrinkResources stays OFF here — with it on, AGP pads
+            // the APK with a ~15MB zero hole (zipalign/page-align artifact),
+            // making the file BIGGER than before.
+            isMinifyEnabled = true
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 
@@ -57,6 +68,12 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        // Compress the (tiny) native libs: page-aligned uncompressed libs
+        // cause AGP to pad the APK with a ~14MB zero hole after minify
+        // (libs get placed at a fixed offset far past the content).
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }
@@ -94,15 +111,10 @@ dependencies {
     ksp("com.google.dagger:hilt-android-compiler:2.53.1")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
 
-    // Network - Retrofit + OkHttp
-    implementation("com.squareup.retrofit2:retrofit:2.11.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
+    // Network - OkHttp (direct usage — Retrofit/Gson removed: zero references)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
-
-    // Gson
-    implementation("com.google.code.gson:gson:2.11.0")
 
     // Room Database
     implementation("androidx.room:room-runtime:2.6.1")
