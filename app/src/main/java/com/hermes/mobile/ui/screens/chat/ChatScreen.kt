@@ -1937,7 +1937,7 @@ fun ToolCallCard(toolCall: ToolCallInfo) {
                     else toolCall.result!!.take(80) + if (toolCall.result!!.length > 80) "..." else "",
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = if (expanded) 20 else 3,
                     overflow = TextOverflow.Ellipsis
@@ -1948,7 +1948,7 @@ fun ToolCallCard(toolCall: ToolCallInfo) {
                         text = if (expanded) "▲ Show less" else "▼ Show more",
                         style = MaterialTheme.typography.labelSmall,
                         color = HermesPrimary,
-                        fontSize = 10.sp
+                        fontSize = 12.sp
                     )
                 }
             }
