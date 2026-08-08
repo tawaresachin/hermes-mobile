@@ -4,6 +4,7 @@ import com.hermes.mobile.data.local.MessageDao
 import com.hermes.mobile.data.local.SessionDao
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.network.HermesApiService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 import javax.inject.Inject
@@ -152,20 +153,29 @@ class HermesRepository @Inject constructor(
     /**
      * Repair a lost last response. If the session's newest local row is a
      * BLANK assistant message (placeholder left by a stream that died when
-     * the user left the chat / the process was killed), the server still has
-     * the real response — fetch it and patch it in. Best-effort; never throws.
+     * the user left the chat / the process was killed), the server is still
+     * generating it in a detached background task — poll until it lands,
+     * then patch the real content in. Best-effort; never throws.
      */
     suspend fun repairBlankAssistantResponse(sessionId: String) {
         try {
             val msgs = messageDao.getMessagesOnce(sessionId)
             val last = msgs.lastOrNull() ?: return
             if (last.role != MessageRole.ASSISTANT || last.content.isNotBlank()) return
-            val serverMsgs = apiService.fetchSessionMessages(sessionId) ?: return
-            val full = serverMsgs.asReversed().firstOrNull {
-                it.optString("role") == "assistant" &&
-                    it.optString("content").isNotBlank()
-            } ?: return
-            messageDao.updateMessage(last.id, full.optString("content"), false)
+            // Poll up to ~3 min: the server's detached generation may still
+            // be running (it saves the response when finished).
+            repeat(90) { attempt ->
+                val serverMsgs = apiService.fetchSessionMessages(sessionId) ?: return
+                val full = serverMsgs.asReversed().firstOrNull {
+                    it.optString("role") == "assistant" &&
+                        it.optString("content").isNotBlank()
+                }
+                if (full != null) {
+                    messageDao.updateMessage(last.id, full.optString("content"), false)
+                    return
+                }
+                if (attempt < 89) delay(2000)
+            }
         } catch (_: Exception) {
             // Best-effort repair — never crash the resume path.
         }

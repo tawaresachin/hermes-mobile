@@ -14,8 +14,8 @@ android {
         applicationId = "com.hermes.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 111
-        versionName = "2.28.7"
+        versionCode = 112
+        versionName = "2.28.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
