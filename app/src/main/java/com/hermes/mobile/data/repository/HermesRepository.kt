@@ -166,14 +166,22 @@ class HermesRepository @Inject constructor(
             // be running (it saves the response when finished).
             repeat(90) { attempt ->
                 val serverMsgs = apiService.fetchSessionMessages(sessionId) ?: return
-                val full = serverMsgs.asReversed().firstOrNull {
-                    it.optString("role") == "assistant" &&
-                        it.optString("content").isNotBlank()
-                }
-                if (full != null) {
-                    messageDao.updateMessage(last.id, full.optString("content"), false)
+                val tail = serverMsgs.lastOrNull()
+                if (tail != null && tail.optString("role") == "assistant") {
+                    // ONLY the server's NEWEST message counts. If it's a
+                    // non-blank response, THIS turn's answer has landed —
+                    // patch it in. Taking any older non-blank assistant row
+                    // would patch STALE content (duplicate/wrong bubble).
+                    if (tail.optString("content").isNotBlank()) {
+                        messageDao.updateMessage(last.id, tail.optString("content"), false)
+                    } else {
+                        // Genuinely empty turn — drop the dead bubble.
+                        messageDao.deleteMessage(last.id)
+                    }
                     return
                 }
+                // Server's newest is still the user's query — generation in
+                // progress, wait and retry.
                 if (attempt < 89) delay(2000)
             }
         } catch (_: Exception) {
