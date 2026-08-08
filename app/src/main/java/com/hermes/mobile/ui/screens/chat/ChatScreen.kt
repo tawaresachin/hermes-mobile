@@ -185,6 +185,12 @@ class ChatViewModel @Inject constructor(
         }
     }
     init {
+        // Nav-arg delivery: the session id travels as a nav argument bound
+        // to this entry. CONSUME it here (one-shot) so a restored entry can
+        // never re-deliver a stale id into a different account's session.
+        val pending = savedStateHandle.get<String>("sessionId")
+        savedStateHandle["sessionId"] = null
+        initSession(pending)
         checkConnection()
         // Poll connection every 5s when not connected
         viewModelScope.launch {
@@ -195,6 +201,8 @@ class ChatViewModel @Inject constructor(
                         checkConnection()
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) { }
         }
     }
@@ -385,6 +393,8 @@ class ChatViewModel @Inject constructor(
                     _availableModels.value = response.models
                     _currentModel.value = response.current
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) { }
             _modelsLoading.value = false
         }
@@ -437,6 +447,8 @@ class ChatViewModel @Inject constructor(
                         attachUrl = repository.uploadFile(tempFile, attachment.fileName, attachment.mimeType)
                         tempFile.delete()
                         attachType = attachment.attachType
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         _errorMessage.value = "Upload failed: ${e.message}"
                     }
@@ -526,6 +538,8 @@ class ChatViewModel @Inject constructor(
                 } else {
                     tempFile
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 tempFile.delete()
                 null
@@ -682,13 +696,8 @@ fun ChatScreen(
         }
     }
 
-    // Initialise session — read pending session once on creation
-    LaunchedEffect(Unit) {
-        val pending = com.hermes.mobile.ChatNav.pendingSessionId
-        com.hermes.mobile.ChatNav.pendingSessionId = null // consume
-        vm.initSession(pending)
-    }
-
+    // Initialise session — the session id (if any) arrives as a nav
+    // argument and is consumed by the ViewModel's init. Nothing to do here.
     // Auto-scroll: ONLY when a new message arrives (size change) and the
     // user is already near the bottom. The inverted layout keeps the newest
     // item pinned to the bottom edge — growing streaming text pushes UP
@@ -1191,6 +1200,8 @@ private fun stopActiveDictation() {
     activeDictationRecognizer?.let { r ->
         try {
             r.destroy()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (_: Exception) {
         }
         activeDictationRecognizer = null
@@ -1251,6 +1262,8 @@ private fun startVoiceDictation(
             override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
         })
         recognizer.startListening(intent)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
     } catch (e: Exception) {
         onError("Voice error: ${e.message}")
     }

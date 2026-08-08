@@ -136,6 +136,33 @@ class HermesRepository @Inject constructor(
                     replyTo = replyTo,
                 )
             }
+            // Transient network failure BEFORE any content arrived (drop,
+            // idle timeout, connection reset): retry with backoff instead
+            // of writing an error bubble. No retry once content started —
+            // the resume-repair polls the server for the completed answer.
+            val noContentYet = fullResponse.isEmpty()
+            val transient = noContentYet && (
+                e is java.io.IOException ||
+                    errorMsg.contains("timeout", ignoreCase = true) ||
+                    errorMsg.contains("idle", ignoreCase = true) ||
+                    errorMsg.contains("Connection failed", ignoreCase = true)
+                )
+            if (transient && attempt < 3) {
+                messageDao.deleteMessage(msgId)
+                kotlinx.coroutines.delay(1_000L * attempt) // 1s, 2s backoff
+                return sendMessage(
+                    sessionId = sessionId,
+                    query = query,
+                    onChunk = onChunk,
+                    onToolCall = onToolCall,
+                    onToolResult = onToolResult,
+                    attempt = attempt + 1,
+                    attachmentUrl = attachmentUrl,
+                    attachType = attachType,
+                    multiAgent = multiAgent,
+                    replyTo = replyTo,
+                )
+            }
             fullResponse.append("⚠️ Connection error: ${e.message}")
         }
 
@@ -184,6 +211,8 @@ class HermesRepository @Inject constructor(
                 // progress, wait and retry.
                 if (attempt < 89) delay(2000)
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (_: Exception) {
             // Best-effort repair — never crash the resume path.
         }
@@ -258,6 +287,8 @@ class HermesRepository @Inject constructor(
         return try {
             if (apiService.healthCheck(config)) ConnectionStatus.CONNECTED
             else ConnectionStatus.ERROR
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             ConnectionStatus.ERROR
         }

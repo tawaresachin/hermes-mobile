@@ -9,6 +9,7 @@ import com.hermes.mobile.data.model.ModelListResponse
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -48,6 +49,12 @@ class HermesApiService @Inject constructor(
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_API_KEY = "api_key"
         private const val KEY_SETUP_TOKEN = "setup_token"
+
+        /** A stream that stays silent this long is dead (hung provider,
+         *  silently dropped connection) — kill it instead of waiting out
+         *  the 300s OkHttp read timeout. */
+        private const val STREAM_IDLE_TIMEOUT_MS = 45_000L
+        private const val WATCHDOG_POLL_MS = 2_000L
         private const val KEY_DARK_THEME = "dark_theme"
     }
 
@@ -87,6 +94,7 @@ class HermesApiService @Inject constructor(
     // ── HTTP Client with AuthInterceptor ──
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
     private val client by lazy {
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -103,10 +111,17 @@ class HermesApiService @Inject constructor(
     // baseUrl stays in plain prefs (non-secret); apiKey + setupToken go to
     // SecurePrefs (AES256-GCM at rest) — same store device creds use.
 
+    // Written on Main (updateConfig) and read from IO threads (healthCheck
+    // / streamChat) — publication must be visible across dispatchers.
+    @Volatile
     private var config: ServerConfig? = null
 
-    private val secretPrefs: SharedPreferences
-        get() = com.hermes.mobile.security.SecurePrefs.get(context, SECURE_PREFS_NAME)
+    // Built ONCE (lazy): SecurePrefs.get() creates a MasterKey +
+    // EncryptedSharedPreferences (KeyStore init + file decrypt) — doing
+    // that on EVERY access was blocking the Main thread on each 5s poll.
+    private val secretPrefs: SharedPreferences by lazy {
+        com.hermes.mobile.security.SecurePrefs.get(context, SECURE_PREFS_NAME)
+    }
 
     fun updateConfig(cfg: ServerConfig) {
         val prev = config
@@ -162,7 +177,9 @@ class HermesApiService @Inject constructor(
     // ─── Health Check ───
 
     suspend fun healthCheck(cfg: ServerConfig? = null): Boolean {
-        val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: config?.baseUrl ?: return false
+        val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: config?.baseUrl
+            ?: return false
         if (cfg?.baseUrl?.isNotBlank() == true && cfg != config) updateConfig(cfg)
         return withContext(Dispatchers.IO) {
             try {
@@ -174,6 +191,8 @@ class HermesApiService @Inject constructor(
                 // (readTimeout 300s) that can't be pooled; the 5s poll loop
                 // would accumulate connections over time.
                 client.newCall(request).execute().use { it.isSuccessful }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 false
             }
@@ -213,7 +232,14 @@ class HermesApiService @Inject constructor(
 
             val factory = EventSources.createFactory(client)
             val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+            // Idle watchdog: a silently dead connection (no events) would
+            // otherwise hold the typing indicator until the 300s OkHttp
+            // read timeout. Track last-event time; kill on silence.
+            var lastEventMs = System.currentTimeMillis()
             val source = factory.newEventSource(request, object : EventSourceListener() {
+                override fun onOpen(eventSource: EventSource, response: Response) {
+                    lastEventMs = System.currentTimeMillis()
+                }
                 override fun onEvent(
                     eventSource: EventSource,
                     id: String?,
@@ -221,6 +247,7 @@ class HermesApiService @Inject constructor(
                     data: String
                 ) {
                     if (completed.get()) return
+                    lastEventMs = System.currentTimeMillis()
 
                     if (data == "[DONE]") {
                         if (completed.compareAndSet(false, true)) {
@@ -253,6 +280,8 @@ class HermesApiService @Inject constructor(
                                 onChunk("⚠️ $msg")
                             }
                         }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (_: Exception) {
                         // Fallback: treat as plain text
                         onChunk(data)
@@ -294,8 +323,28 @@ class HermesApiService @Inject constructor(
                 }
             })
 
+            // Idle watchdog: fires when no event arrived for the idle
+            // window (dead connection, hung provider). Cancels the source
+            // and surfaces a retryable failure.
+            val watchdog = CoroutineScope(Dispatchers.IO).launch {
+                while (!completed.get()) {
+                    delay(WATCHDOG_POLL_MS)
+                    if (!completed.get() &&
+                        System.currentTimeMillis() - lastEventMs > STREAM_IDLE_TIMEOUT_MS
+                    ) {
+                        if (completed.compareAndSet(false, true)) {
+                            source.cancel()
+                            continuation.resumeWithException(
+                                IOException("Stream idle — no data for ${STREAM_IDLE_TIMEOUT_MS / 1000}s")
+                            )
+                        }
+                        return@launch
+                    }
+                }
+            }
             continuation.invokeOnCancellation {
                 source.cancel()
+                watchdog.cancel()
             }
         }
     }
@@ -332,6 +381,8 @@ class HermesApiService @Inject constructor(
                         )
                     } else null
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) { null }
         }
     }
@@ -343,6 +394,8 @@ class HermesApiService @Inject constructor(
         return try {
             val response = sendChat(query, sessionId)
             response.contains("✅") || response.contains("switched")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (_: Exception) { false }
     }
 
@@ -380,6 +433,8 @@ class HermesApiService @Inject constructor(
                     .build()
                 val response = client.newCall(request).execute()
                 response.use { it.isSuccessful }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 false
             }
@@ -410,6 +465,8 @@ class HermesApiService @Inject constructor(
                         }
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 null
             }
@@ -433,6 +490,8 @@ class HermesApiService @Inject constructor(
                     .post(body.toRequestBody("application/json".toMediaType()))
                     .build()
                 client.newCall(request).execute().use { it.isSuccessful }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 false
             }
@@ -461,6 +520,8 @@ class HermesApiService @Inject constructor(
                     response.close()
                     null
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 null
             }
@@ -495,6 +556,8 @@ class HermesApiService @Inject constructor(
                         null
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 null
             }
@@ -524,6 +587,8 @@ class HermesApiService @Inject constructor(
                         null
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 null
             }

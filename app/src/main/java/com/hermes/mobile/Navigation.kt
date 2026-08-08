@@ -27,21 +27,6 @@ import com.hermes.mobile.ui.screens.voice.VoiceScreen
 import com.hermes.mobile.ui.theme.HermesPrimary
 
 // ═══════════════════════════════════════════════════════════
-// Shared state — observable, lets Home/Sessions pass sessionId to Chat
-// ═══════════════════════════════════════════════════════════
-
-object ChatNav {
-    /** Set BEFORE navigating to the Chat tab to resume a session. */
-    var pendingSessionId: String? by androidx.compose.runtime.mutableStateOf(null)
-}
-
-object VoiceNav {
-    /** Set BEFORE navigating to the Voice tab to force a NEW session
-     *  (Home's voice card). The tab itself resumes the latest session. */
-    var pendingNewSession: Boolean by androidx.compose.runtime.mutableStateOf(false)
-}
-
-// ═══════════════════════════════════════════════════════════
 // Screen routes
 // ═══════════════════════════════════════════════════════════
 
@@ -51,8 +36,8 @@ sealed class Screen(
     val icon: ImageVector
 ) {
     data object Home : Screen("home", "Home", Icons.Filled.Home)
-    data object Chat : Screen("chat", "Chat", Icons.Filled.Chat)
-    data object Voice : Screen("voice", "Voice", Icons.Filled.Mic)
+    data object Chat : Screen("chat?sessionId={sessionId}", "Chat", Icons.Filled.Chat)
+    data object Voice : Screen("voice?newSession={newSession}", "Voice", Icons.Filled.Mic)
     data object Sessions : Screen("sessions", "Sessions", Icons.Filled.History)
     data object Settings : Screen("settings", "Settings", Icons.Filled.Settings)
 }
@@ -103,7 +88,10 @@ fun MainNavigation(
                         haptic.performHapticFeedback(
                             androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
                         )
-                        navController.navigate(screen.route) {
+                        // Tab taps use the arg-less route (resume state);
+                        // explicit session/new flags come from Home/Sessions.
+                        val tabRoute = screen.route.substringBefore("?")
+                        navController.navigate(tabRoute) {
                             // saveState/restoreState: each tab's backstack
                             // entry (and its ViewModels) SURVIVE tab
                             // switches — an ongoing chat stream keeps
@@ -139,18 +127,25 @@ fun MainNavigation(
                     onNavigateToVoice = {
                         // Home voice card = NEW voice session (the Voice TAB
                         // itself resumes the latest session).
-                        VoiceNav.pendingNewSession = true
-                        navController.navigate(Screen.Voice.route) {
+                        navController.navigate("voice?newSession=true") {
                             popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
+                                saveState = false
                             }
-                            launchSingleTop = true
-                            restoreState = true
+                            launchSingleTop = false
                         }
                     }
                 )
             }
-            composable(Screen.Chat.route) {
+            composable(
+                route = Screen.Chat.route,
+                arguments = listOf(
+                    androidx.navigation.navArgument("sessionId") {
+                        type = androidx.navigation.NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    }
+                )
+            ) {
                 if (isLoggedIn) {
                     ChatScreen(
                         paddingValues = scaffoldPadding
@@ -164,7 +159,16 @@ fun MainNavigation(
                     )
                 }
             }
-            composable(Screen.Voice.route) {
+            composable(
+                route = Screen.Voice.route,
+                arguments = listOf(
+                    androidx.navigation.navArgument("newSession") {
+                        type = androidx.navigation.NavType.BoolType
+                        nullable = true
+                        defaultValue = false
+                    }
+                )
+            ) {
                 if (isLoggedIn) {
                     VoiceScreen(
                         onExit = {
@@ -257,13 +261,17 @@ fun HermesBottomNavigationBar(
 
 /** Navigate to the chat screen, optionally opening a session (null = new chat). */
 private fun openChat(navController: NavHostController, sessionId: String?) {
-    ChatNav.pendingSessionId = sessionId
-    navController.navigate(Screen.Chat.route) {
+    // Session id travels as a NAV ARGUMENT (not a global): it is bound to
+    // this entry's lifetime, consumed once by the ViewModel, and can never
+    // leak a stale id into another account's session. A fresh entry is
+    // forced (launchSingleTop=false, saveState=false) so the arg is always
+    // delivered — Home cards start NEW by design.
+    val route = if (sessionId != null) "chat?sessionId=$sessionId" else "chat"
+    navController.navigate(route) {
         popUpTo(navController.graph.findStartDestination().id) {
-            saveState = true
+            saveState = false
         }
-        launchSingleTop = true
-        restoreState = true
+        launchSingleTop = false
     }
 }
 

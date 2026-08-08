@@ -104,6 +104,8 @@ class SessionsViewModel @Inject constructor(
             appContext.getSharedPreferences(
                 "hermes_sessions", android.content.Context.MODE_PRIVATE
             )?.getStringSet("pinned_sessions", emptySet()) ?: emptySet()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             emptySet()
         }
@@ -114,6 +116,8 @@ class SessionsViewModel @Inject constructor(
             appContext.getSharedPreferences(
                 "hermes_sessions", android.content.Context.MODE_PRIVATE
             )?.edit()?.putStringSet("pinned_sessions", ids)?.apply()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             // ignore — pinning is best-effort
         }
@@ -162,6 +166,8 @@ class SessionsViewModel @Inject constructor(
                         actionLabel = "Undo"
                     )
                 )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 // If delete fails, try a direct local-only delete
                 try {
@@ -204,6 +210,8 @@ class SessionsViewModel @Inject constructor(
                 repository.restoreSession(session, messages)
                 lastDeletedSession = null
                 lastDeletedMessages = emptyList()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 // If restore fails (e.g. database error), fall back to
                 // creating a fresh session so the user isn't left stranded.

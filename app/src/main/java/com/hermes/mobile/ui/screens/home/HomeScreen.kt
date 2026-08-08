@@ -114,6 +114,7 @@ data class HomeUiState(
     val connectionLatency: Long = 0L,
     val serverBaseUrl: String = "",
     val isLoading: Boolean = false,
+    val error: String? = null,
     val sessions: List<Session> = emptyList()
 )
 
@@ -214,9 +215,18 @@ class HomeViewModel @Inject constructor(
     fun createNewSession(onCreated: (String) -> Unit) {
         viewModelScope.launch {
             _uiState.update { state -> state.copy(isLoading = true) }
-            val session = repository.createSession()
-            _uiState.update { state -> state.copy(isLoading = false) }
-            onCreated(session.id)
+            try {
+                val session = repository.createSession()
+                onCreated(session.id)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Surface the failure instead of leaving the button
+                // disabled forever on a DB error.
+                _uiState.update { state -> state.copy(isLoading = false, error = "Could not create session") }
+            } finally {
+                _uiState.update { state -> state.copy(isLoading = false) }
+            }
         }
     }
 
@@ -288,6 +298,18 @@ fun HomeScreen(
                     latency = uiState.connectionLatency,
                     onRefresh = { viewModel.refreshConnection() }
                 )
+            }
+
+            // ── Error surface (e.g. session creation failure) ──
+            uiState.error?.let { err ->
+                item(key = "home_error") {
+                    Text(
+                        text = err,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                    )
+                }
             }
 
             // ── Quick actions: compact pill row ──

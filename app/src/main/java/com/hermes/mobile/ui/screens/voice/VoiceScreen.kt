@@ -48,6 +48,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.DiagLog
@@ -87,7 +88,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 @HiltViewModel
 class VoiceViewModel @Inject constructor(
     private val repository: HermesRepository,
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
     // ── Session (voice queries go into their own session) ──
@@ -155,6 +157,11 @@ class VoiceViewModel @Inject constructor(
     @Volatile private var voicePaused = false
 
     init {
+        // Home's voice card requests a NEW session via a nav argument —
+        // CONSUME it here (one-shot). The tab itself resumes the latest.
+        val wantNew = savedStateHandle.get<Boolean>("newSession") == true
+        savedStateHandle["newSession"] = false
+        if (wantNew) startNewSession()
         // Bottom-tab open: RESUME the latest session (voice keeps talking in
         // the same conversation). A fresh session only when none exists.
         initJob = viewModelScope.launch {
@@ -964,14 +971,8 @@ fun VoiceScreen(
 ) {
     val vm: VoiceViewModel = hiltViewModel()
 
-    // Home's voice card requested a NEW session — consume the flag and
-    // switch the VM to a fresh session (the tab itself resumes the last).
-    LaunchedEffect(Unit) {
-        if (com.hermes.mobile.VoiceNav.pendingNewSession) {
-            com.hermes.mobile.VoiceNav.pendingNewSession = false
-            vm.startNewSession()
-        }
-    }
+    // Home's voice card requests a NEW session via a nav argument —
+    // consumed one-shot by the ViewModel's init. Nothing to do here.
 
     val state by vm.voiceModeState.collectAsState()
     val transcript by vm.voiceTranscript.collectAsState()
