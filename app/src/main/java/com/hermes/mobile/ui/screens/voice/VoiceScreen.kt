@@ -561,22 +561,22 @@ class VoiceViewModel @Inject constructor(
     }
 
     /**
-     * One listen cycle. Whisper-first: the bridge's whisper STT records
-     * SILENTLY (no system "listening" beep) and handles Indian languages
-     * better than the ROM recognizer. Falls back to the Android
-     * SpeechRecognizer when the bridge is unreachable or returns nothing.
+     * One listen cycle. SpeechRecognizer-first: Google's recognizer is
+     * free, serverless and more accurate than whisper. Falls back to the
+     * bridge's whisper STT (silent, offline-capable) when the system
+     * recognizer is unavailable or returns nothing.
      */
     private suspend fun listenOnce(): String? {
-        val whisperText = try {
-            listenOnceWhisper()
+        val systemText = try {
+            listenOnceSystem()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w("VoiceScreen", "Whisper listen failed, falling back: ${e.message}")
+            Log.w("VoiceScreen", "System listen failed, falling back: ${e.message}")
             null
         }
-        if (!whisperText.isNullOrBlank()) return whisperText
-        return listenOnceSystem()
+        if (!systemText.isNullOrBlank()) return systemText
+        return listenOnceWhisper()
     }
 
     /**
