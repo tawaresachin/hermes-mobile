@@ -841,21 +841,22 @@ fun ChatScreen(
         }
 
         // Memoized display list (newest-first for the inverted LazyColumn).
-        // Full O(n) filter+reverse only re-runs when the message list or
-        // search query changes (NOT on every recomposition — streaming emits
+        // Full O(n) filter+reverse only re-runs when the message list,
+        // search query or LIVE streaming content changes (streaming emits
         // ~20Hz of recompositions). Hoisted so the search bar can jump to
         // matches too.
-        val displayMessages = remember(messages, searchQuery) {
+        val displayMessages = remember(messages, searchQuery, streamingContent) {
             filteredMessages(searchQuery, messages)
                 .asReversed()
                 .filter {
-                    // Never render blank assistant rows (whitespace-only
-                    // responses / abandoned placeholders) — they show as
-                    // unexplained gaps between messages. Streaming
-                    // placeholders stay (they carry the live text).
+                    // Telegram behavior: while the agent is "thinking"
+                    // (streaming, no content yet) there is NO bubble in the
+                    // list — the header's "thinking…" subtitle is the only
+                    // indicator. The bubble appears the moment content
+                    // streams. Blank non-streaming rows stay filtered out.
                     it.role != MessageRole.ASSISTANT ||
-                        it.isStreaming ||
-                        it.content.isNotBlank()
+                        (it.isStreaming && streamingContent.isNotBlank()) ||
+                        (!it.isStreaming && it.content.isNotBlank())
                 }
         }
 
