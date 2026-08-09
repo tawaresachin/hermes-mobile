@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -47,6 +48,7 @@ fun MessageActionSheet(
     onDelete: () -> Unit,
     onForward: (() -> Unit)? = null,
     onRegenerate: (() -> Unit)? = null,
+    onSelect: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     val isUser = message.role == MessageRole.USER
@@ -69,6 +71,9 @@ fun MessageActionSheet(
             )
             Spacer(modifier = Modifier.height(12.dp))
 
+            if (onSelect != null) {
+                SheetActionRow(Icons.Filled.CheckCircleOutline, "Select") { onSelect() }
+            }
             SheetActionRow(Icons.Filled.ContentCopy, "Copy") { onCopy() }
             SheetActionRow(Icons.Filled.Reply, "Reply") { onReply() }
             if (onForward != null) {

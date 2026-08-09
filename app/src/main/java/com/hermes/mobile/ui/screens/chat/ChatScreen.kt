@@ -607,6 +607,13 @@ fun ChatScreen(
     // ── Telegram-style interactions ──
     var pendingReply by remember { mutableStateOf<Message?>(null) }
     var menuTarget by remember { mutableStateOf<Message?>(null) }
+    // ── Telegram-style selection mode (batch copy/delete) ──
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<Long>()) }
+    androidx.activity.compose.BackHandler(enabled = selectionMode) {
+        selectionMode = false
+        selectedIds = emptySet()
+    }
     var showAttachSheet by remember { mutableStateOf(false) }
     var forwardTarget by remember { mutableStateOf<Message?>(null) }
     // ── Search jump-to + highlight ──
@@ -899,6 +906,45 @@ fun ChatScreen(
 
         ConnectionStatusBar(connectionStatus = connectionStatus)
 
+        // ── Telegram-style selection action bar (replaces the top bar
+        //    actions while in selection mode) ──
+        if (selectionMode) {
+            val clipboardContext = context
+            SelectionActionBar(
+                count = selectedIds.size,
+                total = displayMessages.size,
+                onSelectAll = {
+                    selectedIds = if (selectedIds.size == displayMessages.size)
+                        emptySet() else displayMessages.map { it.id }.toSet()
+                },
+                onCopy = {
+                    val cm = clipboardContext.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val text = displayMessages
+                        .asReversed()
+                        .filter { it.id in selectedIds }
+                        .joinToString("\n\n") { it.content.ifBlank { "(attachment)" } }
+                    if (text.isNotBlank()) {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("selected messages", text))
+                    }
+                    selectionMode = false
+                    selectedIds = emptySet()
+                },
+                onDelete = {
+                    val targets = displayMessages.filter { it.id in selectedIds }
+                    targets.forEach { msg ->
+                        if (pendingReply?.id == msg.id) pendingReply = null
+                        vm.deleteMessage(msg)
+                    }
+                    selectionMode = false
+                    selectedIds = emptySet()
+                },
+                onExit = {
+                    selectionMode = false
+                    selectedIds = emptySet()
+                }
+            )
+        }
+
         // ── Telegram-style chat area (full width, no border) ──
         Box(
             modifier = Modifier
@@ -1034,6 +1080,14 @@ fun ChatScreen(
                                 baseUrl = vm.getBaseUrl(),
                                 isFirstInGroup = isGroupStart,
                                 isLastInGroup = isGroupEnd,
+                                selectionMode = selectionMode,
+                                selected = message.id in selectedIds,
+                                onToggleSelect = if (selectionMode) {
+                                    {
+                                        selectedIds = if (message.id in selectedIds)
+                                            selectedIds - message.id else selectedIds + message.id
+                                    }
+                                } else null,
                                 onEdit = if (message.role == MessageRole.USER && !isStreamingThis) {
                                     {
                                         inputText = message.content
@@ -1228,6 +1282,11 @@ fun ChatScreen(
             val contextForClipboard = context
             MessageActionSheet(
                 message = target,
+                onSelect = {
+                    selectionMode = true
+                    selectedIds = setOf(target.id)
+                    menuTarget = null
+                },
                 onCopy = {
                     val cm = contextForClipboard.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                     cm.setPrimaryClip(android.content.ClipData.newPlainText("message", target.content))
@@ -1343,6 +1402,70 @@ private fun startVoiceDictation(
 // ═══════════════════════════════════════════════════════════════
 // Connection status bar
 // ═══════════════════════════════════════════════════════════════
+
+/**
+ * Telegram-style selection action bar: "N selected" + Select-all / Copy /
+ * Delete / close. Rendered under the header while selection mode is on.
+ */
+@Composable
+private fun SelectionActionBar(
+    count: Int,
+    total: Int,
+    onSelectAll: () -> Unit,
+    onCopy: () -> Unit,
+    onDelete: () -> Unit,
+    onExit: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = HermesPrimary.copy(alpha = 0.08f),
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (count == 0) "Select messages" else "$count selected",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onSelectAll) {
+                Icon(
+                    imageVector = if (count == total) Icons.Filled.Deselect else Icons.Filled.SelectAll,
+                    contentDescription = "Select all",
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            IconButton(onClick = onCopy, enabled = count > 0) {
+                Icon(
+                    imageVector = Icons.Filled.ContentCopy,
+                    contentDescription = "Copy",
+                    tint = if (count > 0) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = onDelete, enabled = count > 0) {
+                Icon(
+                    imageVector = Icons.Filled.Delete,
+                    contentDescription = "Delete",
+                    tint = if (count > 0) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = onExit) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "Exit selection",
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun ConnectionStatusBar(connectionStatus: ConnectionStatus) {
@@ -1626,7 +1749,10 @@ fun MessageBubble(
     onReact: (() -> Unit)? = null,
     highlighted: Boolean = false,
     isFirstInGroup: Boolean = true,
-    isLastInGroup: Boolean = true
+    isLastInGroup: Boolean = true,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: (() -> Unit)? = null
 ) {
     val isUser = message.role == MessageRole.USER
     val isDark = LocalDarkTheme.current
@@ -1669,18 +1795,16 @@ fun MessageBubble(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                // Telegram-style interactions:
-                // - long-press → action sheet (copy / reply / delete / regen)
-                // - horizontal swipe right → quick reply (fires once past
-                //   ~90px; vertical scroll is untouched — separate axis)
+                // In selection mode: tap toggles selection; long-press and
+                // double-tap actions are disabled.
                 .combinedClickable(
                     enabled = !isStreaming,
-                    onClick = {},
-                    onLongClick = onLongPress,
-                    onDoubleClick = onReact
+                    onClick = { if (selectionMode) onToggleSelect?.invoke() },
+                    onLongClick = if (selectionMode) null else onLongPress,
+                    onDoubleClick = if (selectionMode) null else onReact
                 )
-                .pointerInput(onReply, onDelete, isStreaming) {
-                    if (isStreaming) return@pointerInput
+                .pointerInput(onReply, onDelete, isStreaming, selectionMode) {
+                    if (isStreaming || selectionMode) return@pointerInput
                     // Telegram gestures: swipe RIGHT = reply, swipe LEFT =
                     // delete. Accumulate the drag (per-event deltas) and
                     // fire once past 90px; vertical scroll is untouched.
@@ -1699,6 +1823,28 @@ fun MessageBubble(
                 },
             horizontalArrangement = alignment
         ) {
+            // ── Selection-mode checkbox (Telegram's animated leading
+            //    checkbox; dims the bubble while selected) ──
+            if (selectionMode) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = true,
+                    enter = fadeIn() + slideInHorizontally { -it / 2 },
+                    exit = fadeOut() + slideOutHorizontally { -it / 2 }
+                ) {
+                    val checkColor = if (selected) HermesPrimary
+                    else MaterialTheme.colorScheme.outlineVariant
+                    Icon(
+                        imageVector = if (selected) Icons.Filled.CheckCircleOutline
+                        else Icons.Filled.RadioButtonUnchecked,
+                        contentDescription = if (selected) "Selected" else "Not selected",
+                        tint = checkColor,
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .size(22.dp)
+                            .alpha(if (selected) 1f else 0.55f)
+                    )
+                }
+            }
             // Box so the tail can OVERLAY the bubble's top corner (a Column
             // child would render below the bubble instead).
             // Telegram-style: Hermes avatar on the LAST message of an
@@ -1718,6 +1864,9 @@ fun MessageBubble(
             Column(
                 modifier = Modifier
                     .widthIn(max = bubbleMax)
+                    // Telegram selection: dim the bubble while selected
+                    // (checkbox stays bright).
+                    .alpha(if (selected) 0.55f else 1f)
             ) {
             // Telegram-style: sender name above the FIRST message of an
             // assistant group.
