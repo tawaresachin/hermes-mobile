@@ -481,6 +481,38 @@ class HermesApiService @Inject constructor(
         }
     }
 
+    // ─── Session status/source badges (server truth) ───
+
+    /** Fetch the server's per-session status (idle/working/done/error) +
+     * source (app/voice/swarm) — the local DB has no such fields. */
+    suspend fun fetchServerSessionStatus(): Map<String, Pair<String, String>> {
+        val baseUrl = config?.baseUrl ?: return emptyMap()
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder().url("$baseUrl/api/sessions").get().build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use emptyMap()
+                    val arr = JSONArray(response.body?.string() ?: return@use emptyMap())
+                    buildMap {
+                        for (i in 0 until arr.length()) {
+                            val s = arr.getJSONObject(i)
+                            val id = s.optString("id", "")
+                            if (id.isNotBlank()) {
+                                put(
+                                    id,
+                                    s.optString("status", "idle") to
+                                        s.optString("source", "app")
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { emptyMap() }
+        }
+    }
+
     // ─── Switch Model (via chat command) ───
 
     suspend fun switchModel(sessionId: String, modelName: String, global: Boolean = false): Boolean {

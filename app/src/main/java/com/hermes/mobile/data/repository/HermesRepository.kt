@@ -406,6 +406,12 @@ class HermesRepository @Inject constructor(
         sessionDao.incrementMessageCount(sessionId)
     }
 
+    // ─── Session status/source badges (server truth) ───
+
+    suspend fun fetchServerSessionStatus(): Map<String, Pair<String, String>> {
+        return apiService.fetchServerSessionStatus()
+    }
+
     // ─── Server Connection ───
 
     fun saveConfig(config: ServerConfig) {

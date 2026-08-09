@@ -68,6 +68,13 @@ class SessionsViewModel @Inject constructor(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
+    // ── Server session status/source badges (Cursor-style inbox) ──
+    // The server tracks lifecycle (idle/working/done/error) + source
+    // (app/voice/swarm); the local DB has no such fields, so we poll.
+    private val _serverStatus =
+        MutableStateFlow<Map<String, Pair<String, String>>>(emptyMap())
+    val serverStatus: StateFlow<Map<String, Pair<String, String>>> = _serverStatus.asStateFlow()
+
     /** The most recently deleted session — held for potential undo. */
     private var lastDeletedSession: Session? = null
 
@@ -143,9 +150,33 @@ class SessionsViewModel @Inject constructor(
         viewModelScope.launch {
             _isRefreshing.value = true
             _refreshTrigger.emit(Unit)
+            refreshServerStatus()
             // Brief delay so the spinner is always visible even on fast DB reads
             kotlinx.coroutines.delay(300)
             _isRefreshing.value = false
+        }
+    }
+
+    /** Poll the server's session status/source map (used on open + every
+     * 10s while the tab is alive — cheap, one small GET). */
+    fun refreshServerStatus() {
+        viewModelScope.launch {
+            try {
+                val m = repository.fetchServerSessionStatus()
+                if (m.isNotEmpty()) _serverStatus.value = m
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { }
+        }
+    }
+
+    init {
+        // Live badges: poll the server status while the tab exists.
+        viewModelScope.launch {
+            while (true) {
+                refreshServerStatus()
+                kotlinx.coroutines.delay(10_000)
+            }
         }
     }
 
@@ -300,6 +331,7 @@ fun SessionsScreen(
                 )
             } else {
                 val pinnedIds by viewModel.pinnedSessions.collectAsState()
+                val serverStatus by viewModel.serverStatus.collectAsState()
                 // Draft map: read once per composition (drafts are tiny).
                 val drafts = remember(sessions) {
                     com.hermes.mobile.data.local.DraftStore.init(context)
@@ -308,6 +340,7 @@ fun SessionsScreen(
                 SessionsList(
                     sessions = sessions,
                     pinnedIds = pinnedIds,
+                    serverStatus = serverStatus,
                     onSessionSelected = onSessionSelected,
                     onDeleteSession = viewModel::deleteSession,
                     onTogglePin = viewModel::togglePin,
@@ -429,6 +462,7 @@ private fun SessionsTopBar(
 private fun SessionsList(
     sessions: List<Session>,
     pinnedIds: Set<String>,
+    serverStatus: Map<String, Pair<String, String>>,
     onSessionSelected: (String) -> Unit,
     onDeleteSession: (Session) -> Unit,
     onTogglePin: (String) -> Unit,
@@ -469,7 +503,9 @@ private fun SessionsList(
                         onLongClick = { onRenameSession(session) },
                         isPinned = session.id in pinnedIds,
                         onTogglePin = { onTogglePin(session.id) },
-                        draftText = drafts[session.id] ?: ""
+                        draftText = drafts[session.id] ?: "",
+                        status = serverStatus[session.id]?.first,
+                        source = serverStatus[session.id]?.second
                     )
                     // Telegram-style thin divider between rows
                     if (index < sessions.lastIndex) {
@@ -536,6 +572,54 @@ private fun SwipeDeleteBackground() {
 //  session icon, title, date, and message count
 // ═══════════════════════════════════════════════════════════════
 
+/** Tiny live-status badge on a session row (Cursor-style inbox): a colored
+ * dot/icon for working/done/error + a mini-chip for the source. */
+@Composable
+private fun StatusBadge(status: String?, source: String?) {
+    if (status.isNullOrBlank() && source.isNullOrBlank()) return
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(start = 6.dp)
+    ) {
+        when (status) {
+            "working" -> Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFB44DFF))
+            )
+            "done" -> Icon(
+                imageVector = Icons.Filled.CheckCircleOutline,
+                contentDescription = "done",
+                tint = Color(0xFF34A853),
+                modifier = Modifier.size(14.dp)
+            )
+            "error" -> Icon(
+                imageVector = Icons.Filled.ErrorOutline,
+                contentDescription = "error",
+                tint = Color(0xFFEA4335),
+                modifier = Modifier.size(14.dp)
+            )
+            else -> {}
+        }
+        if (source == "voice" || source == "swarm") {
+            Spacer(modifier = Modifier.width(4.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    text = source,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+        }
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SessionCard(
@@ -544,7 +628,9 @@ private fun SessionCard(
     onLongClick: () -> Unit,
     isPinned: Boolean = false,
     onTogglePin: (() -> Unit)? = null,
-    draftText: String = ""
+    draftText: String = "",
+    status: String? = null,
+    source: String? = null
 ) {
     val dateText = remember(session.updatedAt) {
         formatTimestamp(session.updatedAt)
@@ -598,14 +684,19 @@ private fun SessionCard(
 
                 // ── Title + metadata ──
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = titleText,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = titleText,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        // ── Live status badge (server truth) ──
+                        StatusBadge(status = status, source = source)
+                    }
 
                     Spacer(modifier = Modifier.height(4.dp))
 

@@ -7,8 +7,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -28,22 +31,56 @@ import com.hermes.mobile.MainActivity
  */
 class ResponseWatcherService : Service() {
 
+    private val handler = Handler(Looper.getMainLooper())
+    private var startedAt = 0L
+    private var currentSession = ""
+
+    /** Live-progress ticker (Cursor-style Live Activities analog): updates
+     * the ongoing notification with the elapsed time once per second. */
+    private val ticker = object : Runnable {
+        override fun run() {
+            val secs = (SystemClock.elapsedRealtime() - startedAt) / 1000
+            updateNotification(secs)
+            handler.postDelayed(this, 1000)
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val sessionId = intent?.getStringExtra(EXTRA_SESSION_ID).orEmpty()
-        startForeground(NOTIF_ID_ONGOING, ongoingNotification(sessionId))
+        currentSession = intent?.getStringExtra(EXTRA_SESSION_ID).orEmpty()
+        startedAt = SystemClock.elapsedRealtime()
+        startForeground(NOTIF_ID_ONGOING, ongoingNotification(currentSession, 0))
+        handler.removeCallbacks(ticker)
+        handler.postDelayed(ticker, 1000)
         return START_NOT_STICKY
     }
 
-    private fun ongoingNotification(sessionId: String): Notification {
+    override fun onDestroy() {
+        handler.removeCallbacks(ticker)
+        super.onDestroy()
+    }
+
+    private fun updateNotification(elapsedSecs: Long) {
+        if (currentSession.isBlank()) return
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        try {
+            nm.notify(NOTIF_ID_ONGOING, ongoingNotification(currentSession, elapsedSecs))
+        } catch (_: Exception) {
+            // MIUI/restricted apps can throw on notify — never crash the watcher.
+        }
+    }
+
+    private fun ongoingNotification(sessionId: String, elapsedSecs: Long): Notification {
         val pi = tapIntent(sessionId)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle("Hermes is working…")
-            .setContentText("Generating your response")
+            .setContentText("Generating your response · ${elapsedSecs}s")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            // Indeterminate spinner — the user sees live progress.
+            .setProgress(0, 0, true)
             .setContentIntent(pi)
             .build()
     }

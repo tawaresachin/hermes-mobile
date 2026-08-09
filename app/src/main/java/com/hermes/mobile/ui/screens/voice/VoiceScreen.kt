@@ -128,6 +128,20 @@ class VoiceViewModel @Inject constructor(
             .edit().putBoolean("full_response_mode", on).apply()
     }
 
+    // ── Hands-free loop (Cursor-style dictation): ON = keep listening after
+    // each reply (default); OFF = single-shot, stop after one exchange. ──
+    private val _handsFree = MutableStateFlow(
+        context.getSharedPreferences("voice_prefs", Context.MODE_PRIVATE)
+            .getBoolean("hands_free", true)
+    )
+    val handsFree: StateFlow<Boolean> = _handsFree.asStateFlow()
+
+    fun setHandsFree(on: Boolean) {
+        _handsFree.value = on
+        context.getSharedPreferences("voice_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean("hands_free", on).apply()
+    }
+
     // ── Model selection (same live picker as chat — server-side active model) ──
     private val _currentModel = MutableStateFlow("")
     val currentModel: StateFlow<String> = _currentModel.asStateFlow()
@@ -313,6 +327,15 @@ class VoiceViewModel @Inject constructor(
                         ttsQueue.close()
                     }
                     ttsPlaybackJob?.join()
+
+                    // ── Hands-free OFF (single-shot): stop after one reply ──
+                    if (!_handsFree.value) {
+                        disarmBargeInMonitor()
+                        voiceRunning = false
+                        setVoiceModeState(SphereState.IDLE)
+                        _voiceTranscript.value = ""
+                        return@launch
+                    }
 
                     // ── AWAITING (brief pause before re-arming; skip if the
                     // user already interrupted playback to speak) ──
@@ -984,6 +1007,7 @@ fun VoiceScreen(
     val availableModels by vm.availableModels.collectAsState()
     val modelsLoading by vm.modelsLoading.collectAsState()
     val fullResponseMode by vm.fullResponseMode.collectAsState()
+    val handsFree by vm.handsFree.collectAsState()
 
     var showModelPicker by remember { mutableStateOf(false) }
 
@@ -1046,6 +1070,8 @@ fun VoiceScreen(
         },
         fullResponseMode = fullResponseMode,
         onToggleFullResponse = { vm.setFullResponseMode(!fullResponseMode) },
+        handsFree = handsFree,
+        onToggleHandsFree = { vm.setHandsFree(!handsFree) },
         onTap = {
             when (state) {
                 SphereState.SPEAKING -> vm.interruptTts()
@@ -1202,7 +1228,9 @@ fun JarvisSphere(
     currentModel: String = "",
     onOpenModelPicker: () -> Unit = {},
     fullResponseMode: Boolean = false,
+    handsFree: Boolean = true,
     onToggleFullResponse: () -> Unit = {},
+    onToggleHandsFree: () -> Unit = {},
     onTap: () -> Unit,
     onExit: () -> Unit,
     modifier: Modifier = Modifier
@@ -1528,6 +1556,31 @@ fun JarvisSphere(
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = if (fullResponseMode) FontWeight.SemiBold else FontWeight.Normal,
                     color = if (fullResponseMode) Color.White else chipText
+                )
+            }
+
+            // Hands-free chip — Cursor-style dictation: ON keeps listening
+            // after each reply; OFF stops after one exchange.
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(
+                        if (handsFree) Color(0xFF8A3BFF).copy(alpha = if (isDark) 0.35f else 0.16f)
+                        else chipBg
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = if (handsFree) Color(0xFFB44DFF) else chipBorder,
+                        shape = RoundedCornerShape(50)
+                    )
+                    .clickable { onToggleHandsFree() }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = if (handsFree) "Hands-free" else "Single",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (handsFree) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (handsFree) Color.White else chipText
                 )
             }
 

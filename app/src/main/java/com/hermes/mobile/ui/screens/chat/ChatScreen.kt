@@ -491,6 +491,27 @@ class ChatViewModel @Inject constructor(
             }
         }
 
+        /** Send an image the user annotated in the markup editor: upload the
+         * flattened PNG, then send it as a normal image attachment. */
+        fun sendMarkedImage(text: String, file: java.io.File, replyTo: Message?) {
+            val sid = _sessionId.value ?: return
+            viewModelScope.launch {
+                val url = try {
+                    repository.uploadFile(file, file.name, "image/png")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    _errorMessage.value = "Upload failed: ${e.message}"
+                    null
+                } finally {
+                    file.delete()
+                }
+                if (url != null) {
+                    sendMessage(text, url, "image", replyTo = replyTo)
+                }
+            }
+        }
+
         // ── Telegram-style message actions ──
         fun deleteMessage(message: Message) {
             viewModelScope.launch {
@@ -621,6 +642,9 @@ fun ChatScreen(
 
     var inputText by remember { mutableStateOf("") }
     var pendingAttachment by remember { mutableStateOf<PendingAttachment?>(null) }
+    // Image awaiting annotation in the markup editor (Cursor-style visual
+    // direction — draw on the photo before the agent sees it).
+    var markupTarget by remember { mutableStateOf<PendingAttachment?>(null) }
     // Local in-chat search over the loaded messages.
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -1265,6 +1289,7 @@ fun ChatScreen(
             onAttach = { showAttachSheet = true },
             pendingAttachment = pendingAttachment,
             onRemoveAttachment = { pendingAttachment = null },
+            onMarkup = { pendingAttachment?.let { markupTarget = it } },
             isStreaming = isStreaming,
             showEmojiPicker = showEmojiPicker,
             onToggleEmojiPicker = { vm.toggleEmojiPicker() },
@@ -1279,6 +1304,19 @@ fun ChatScreen(
                 modelsLoading = modelsLoading,
                 onSelect = { modelId, global -> vm.switchModel(modelId, global = global) },
                 onDismiss = { showModelPicker = false }
+            )
+        }
+
+        // ── Markup editor (draw on the image before sending) ──
+        markupTarget?.let { target ->
+            com.hermes.mobile.ui.components.MarkupEditorDialog(
+                attachment = target,
+                onDismiss = { markupTarget = null },
+                onSend = { flattenedFile ->
+                    markupTarget = null
+                    pendingAttachment = null
+                    vm.sendMarkedImage(inputText.trim(), flattenedFile, pendingReply)
+                }
             )
         }
 
@@ -2313,7 +2351,8 @@ fun ToolCallCard(toolCall: ToolCallInfo) {
 @Composable
 fun AttachmentPreview(
     attachment: PendingAttachment,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onMarkup: (() -> Unit)? = null
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -2366,6 +2405,12 @@ fun AttachmentPreview(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
+            }
+            // Mark up button — only for images (Cursor-style visual direction)
+            if (onMarkup != null && attachment.attachType == "image") {
+                IconButton(onClick = onMarkup, modifier = Modifier.size(32.dp)) {
+                    Text("✏️", fontSize = 16.sp)
+                }
             }
             IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
                 Icon(
@@ -2488,6 +2533,7 @@ fun InputBar(
     onAttach: () -> Unit,
     pendingAttachment: PendingAttachment?,
     onRemoveAttachment: () -> Unit,
+    onMarkup: (() -> Unit)? = null,
     isStreaming: Boolean,
     showEmojiPicker: Boolean,
     onToggleEmojiPicker: () -> Unit,
@@ -2520,7 +2566,8 @@ fun InputBar(
             if (pendingAttachment != null) {
                 AttachmentPreview(
                     attachment = pendingAttachment,
-                    onRemove = onRemoveAttachment
+                    onRemove = onRemoveAttachment,
+                    onMarkup = onMarkup
                 )
             }
 
