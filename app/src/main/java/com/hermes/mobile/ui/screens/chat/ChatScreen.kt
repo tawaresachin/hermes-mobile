@@ -324,6 +324,15 @@ class ChatViewModel @Inject constructor(
                                 ) else it
                             }
                         }
+                    },
+                    onModelReverted = { reverted ->
+                        // Server auto-reverted this session to a working
+                        // model after a hard provider failure — update the
+                        // header chip instantly.
+                        if (gen == streamGeneration && reverted.isNotBlank()) {
+                            _currentModel.value = reverted
+                            _errorMessage.value = "Model failed — switched back to $reverted"
+                        }
                     }
                 )
                 _isStreaming.value = false

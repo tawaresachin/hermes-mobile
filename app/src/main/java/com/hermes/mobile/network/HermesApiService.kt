@@ -207,6 +207,7 @@ class HermesApiService @Inject constructor(
         onChunk: (String) -> Unit,
         onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
         onToolResult: (String, String) -> Unit = { _, _ -> },
+        onModelReverted: (String) -> Unit = {},
         onOpen: () -> Unit = {},
         attachmentUrl: String = "",
         attachType: String = "",
@@ -276,6 +277,11 @@ class HermesApiService @Inject constructor(
                                 val output = json.optString("output", "")
                                 val error = json.optString("error", "")
                                 onToolResult(tcId, output.ifEmpty { error })
+                            }
+                            // Server auto-reverted this session's model to
+                            // the default after a hard provider failure.
+                            "model_reverted" -> {
+                                onModelReverted(json.optString("content", ""))
                             }
                             "error" -> {
                                 val msg = json.optString("content", "Unknown error")
