@@ -255,28 +255,11 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, multiAgent: Boolean = false, replyTo: Message? = null) {
         val sid = _sessionId.value ?: return
-
-        // ─── Follow-up on a RUNNING agent (Cursor-style) ───
-        // While a stream is active, a new message is QUEUED onto the same
-        // connection and answered as the NEXT TURN — the agent is not
-        // cancelled (Cursor: 'send follow-ups to a running agent'). The
-        // user bubble appears locally; the server persists its own copy.
-        if (_isStreaming.value && attachmentUrl.isNullOrBlank()) {
-            viewModelScope.launch {
-                try {
-                    // Only show the bubble when the server ACCEPTED the
-                    // follow-up — a 409 (run just ended) must not leave a
-                    // phantom message that never gets answered.
-                    if (repository.sendFollowUp(sid, query)) {
-                        repository.insertLocalUserMessage(sid, query)
-                    }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (_: Exception) { }
-            }
-            return
-        }
-
+        // TELEGRAM MODEL: one message → ONE complete response. Sending while
+        // a stream is active supersedes it (a fresh turn for the new query)
+        // — no mid-stream follow-up queue, no interleaved half-answers. The
+        // push channel (response_ready) still delivers the saved response if
+        // the stream ever dies.
         val gen = ++streamGeneration
 
         // Cancel previous stream and save pending content
@@ -419,11 +402,11 @@ class ChatViewModel @Inject constructor(
     private var pollJob: kotlinx.coroutines.Job? = null
     private var subActive = false
 
-    private fun applyResponse(content: String) {
+    private fun applyResponse(content: String, ts: Long) {
         val sid = _sessionId.value ?: return
         viewModelScope.launch {
             val changed = try {
-                repository.applyServerResponse(sid, content)
+                repository.applyServerResponse(sid, content, ts)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -446,7 +429,7 @@ class ChatViewModel @Inject constructor(
             try { eventSource?.cancel() } catch (_: Exception) { }
             eventSource = repository.subscribeSessionEvents(
                 sid,
-                onResponseReady = { content -> applyResponse(content) },
+                onResponseReady = { content, ts -> applyResponse(content, ts) },
                 onFailure = { subActive = false }
             )
             subActive = eventSource != null

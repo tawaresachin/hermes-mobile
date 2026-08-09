@@ -282,13 +282,19 @@ class HermesRepository @Inject constructor(
     /** Apply a server response to the local chat (shared by the push
      * subscription and the catch-up poll). Fills a streaming placeholder
      * or inserts the missing assistant response. Idempotent: skips when
-     * the local tail already matches. Returns true when the chat changed. */
-    suspend fun applyServerResponse(sessionId: String, content: String): Boolean {
+     * the local tail already matches. [ts] is the server save time — a
+     * STALE response (superseded stream finishing late) is rejected so it
+     * can't clobber a newer turn. Returns true when the chat changed. */
+    suspend fun applyServerResponse(sessionId: String, content: String, ts: Long = 0): Boolean {
         try {
             if (content.isBlank()) return false
             val local = messageDao.getMessagesOnce(sessionId)
             val localTail = local.lastOrNull() ?: return false
             if (localTail.content == content) return false
+            // Stale-guard: the response is older than the newest local row
+            // (e.g. a superseded stream saved late) — never overwrite a
+            // newer turn with it.
+            if (ts > 0 && ts < localTail.timestamp) return false
             if (localTail.role == MessageRole.ASSISTANT && localTail.isStreaming) {
                 // The stream died mid-answer — fill the placeholder with the
                 // server's complete response.
@@ -320,7 +326,11 @@ class HermesRepository @Inject constructor(
             val serverMsgs = apiService.fetchSessionMessages(sessionId) ?: return false
             val tail = serverMsgs.lastOrNull() ?: return false
             if (tail.optString("role") != "assistant") return false
-            return applyServerResponse(sessionId, tail.optString("content"))
+            return applyServerResponse(
+                sessionId,
+                tail.optString("content"),
+                tail.optLong("timestamp", 0L)
+            )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -331,7 +341,7 @@ class HermesRepository @Inject constructor(
     /** Subscribe to the session's push channel (primary response delivery). */
     fun subscribeSessionEvents(
         sessionId: String,
-        onResponseReady: (String) -> Unit,
+        onResponseReady: (String, Long) -> Unit,
         onFailure: (Throwable?) -> Unit
     ): okhttp3.sse.EventSource? {
         return apiService.subscribeSessionEvents(sessionId, onResponseReady, onFailure)
