@@ -1345,11 +1345,28 @@ private fun startVoiceDictation(
 
 @Composable
 fun ConnectionStatusBar(connectionStatus: ConnectionStatus) {
-    val (text, color, icon) = when (connectionStatus) {
+    // Telegram-style debounced state machine: a connection blip (Tailscale
+    // drop that recovers in <400ms) must NOT flash the red banner. The
+    // transient state only shows once the status has been non-connected
+    // for the debounce window (LaunchedEffect restarts on every change, so
+    // a quick recovery cancels the pending show).
+    var displayStatus by remember { mutableStateOf(connectionStatus) }
+    LaunchedEffect(connectionStatus) {
+        if (connectionStatus == ConnectionStatus.CONNECTED) {
+            displayStatus = ConnectionStatus.CONNECTED
+        } else {
+            kotlinx.coroutines.delay(400)
+            displayStatus = connectionStatus
+        }
+    }
+    // Soft transient wording: a drop after a live connection is
+    // "Reconnecting…" (amber, the VM polls every 5s to recover) — only a
+    // hard error goes red. No alarm on recoverable blips.
+    val (text, color, icon) = when (displayStatus) {
         ConnectionStatus.CONNECTED -> Triple("Connected", SuccessGreen, Icons.Filled.CheckCircle)
         ConnectionStatus.CONNECTING -> Triple("Connecting…", WarningAmber, Icons.Filled.Sync)
-        ConnectionStatus.DISCONNECTED -> Triple("Disconnected", ErrorRed, Icons.Filled.CloudOff)
-        ConnectionStatus.ERROR -> Triple("Connection Error", ErrorRed, Icons.Filled.Error)
+        ConnectionStatus.DISCONNECTED -> Triple("Reconnecting…", WarningAmber, Icons.Filled.Sync)
+        ConnectionStatus.ERROR -> Triple("Connection lost — retrying", ErrorRed, Icons.Filled.Error)
     }
 
     AnimatedVisibility(

@@ -1,9 +1,11 @@
 package com.hermes.mobile.data.repository
 
+import android.content.Context
 import com.hermes.mobile.data.local.MessageDao
 import com.hermes.mobile.data.local.SessionDao
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.network.HermesApiService
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -15,7 +17,9 @@ import javax.inject.Singleton
 class HermesRepository @Inject constructor(
     private val apiService: HermesApiService,
     private val sessionDao: SessionDao,
-    private val messageDao: MessageDao
+    private val messageDao: MessageDao,
+    @ApplicationContext
+    private val context: Context
 ) {
     // ─── Sessions ───
 
@@ -106,8 +110,13 @@ class HermesRepository @Inject constructor(
         val msgId = messageDao.insertMessage(assistantMsg)
 
         val fullResponse = StringBuilder()
+        // Foreground watcher: keeps the process alive while generating and
+        // notifies when the answer lands while the app is backgrounded.
+        // Start on EVERY attempt (idempotent), stop in the finally below.
+        com.hermes.mobile.notifications.ResponseWatcherService.start(context, sessionId)
         try {
-            apiService.streamChat(
+            try {
+                apiService.streamChat(
                 query = query,
                 sessionId = sessionId,
                 onOpen = {
@@ -221,6 +230,18 @@ class HermesRepository @Inject constructor(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) { }
+        }
+
+            // Success — ping the user if the app is backgrounded.
+            if (!fullResponse.startsWith("⚠️ Connection error")) {
+                com.hermes.mobile.notifications.ResponseWatcherService.notifyReady(
+                    context, sessionId, fullResponse.toString()
+                )
+            }
+        } finally {
+            // Always drop the watcher: success, failure, retry (the retried
+            // attempt restarts it) and cancellation.
+            com.hermes.mobile.notifications.ResponseWatcherService.stop(context)
         }
 
         return fullResponse.toString()

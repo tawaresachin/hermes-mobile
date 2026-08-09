@@ -66,12 +66,20 @@ val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Voice, Screen.Ses
 @Composable
 fun MainNavigation(
     isLoggedIn: Boolean,
+    initialSessionId: String? = null,
     navController: NavHostController = rememberNavController()
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
     // Haptic feedback for tab switches
     val haptic = LocalHapticFeedback.current
+
+    // Deep link from the "response ready" notification: open the session.
+    LaunchedEffect(initialSessionId, isLoggedIn) {
+        if (initialSessionId != null && isLoggedIn) {
+            openChat(navController, initialSessionId)
+        }
+    }
 
     // Security: leave gated screens (Chat/Voice/Sessions) IMMEDIATELY when
     // the user signs out — an already-open screen must not stay usable.

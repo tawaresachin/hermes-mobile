@@ -29,6 +29,19 @@ class HermesApp : Application(), ImageLoaderFactory {
         DiagLog.init(this)
         DiagLog.i("APP", "onCreate version=${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
         installCrashHandler()
+        // Foreground tracking for the response-notification (only ping when
+        // the user is NOT looking at the app).
+        registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: android.app.Activity) =
+                com.hermes.mobile.notifications.AppForeground.onActivityStarted()
+            override fun onActivityStopped(activity: android.app.Activity) =
+                com.hermes.mobile.notifications.AppForeground.onActivityStopped()
+            override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
+            override fun onActivityResumed(activity: android.app.Activity) {}
+            override fun onActivityPaused(activity: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) {}
+            override fun onActivityDestroyed(activity: android.app.Activity) {}
+        })
     }
 
     override fun newImageLoader(): ImageLoader {

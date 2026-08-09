@@ -26,6 +26,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Notification permission (Android 13+) for "response ready" pings.
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 42)
+        }
+        // Deep link from the "response ready" notification → open the session.
+        val deepLinkSession = intent.getStringExtra(EXTRA_SESSION_ID)
         // Silent re-auth: refresh token first, else the paired device account.
         // Best-effort — never blocks UI, never crashes on failure.
         lifecycleScope.launch {
@@ -71,9 +80,13 @@ class MainActivity : ComponentActivity() {
             val loggedIn by authManager.isLoggedIn.collectAsState()
             CompositionLocalProvider(LocalDarkTheme provides actualDark) {
                 HermesMobileTheme(darkTheme = actualDark) {
-                    MainNavigation(isLoggedIn = loggedIn)
+                    MainNavigation(isLoggedIn = loggedIn, initialSessionId = deepLinkSession)
                 }
             }
         }
+    }
+
+    companion object {
+        const val EXTRA_SESSION_ID = "session_id"
     }
 }
