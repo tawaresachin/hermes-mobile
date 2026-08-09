@@ -296,7 +296,6 @@ class ChatViewModel @Inject constructor(
                     multiAgent = multiAgent,
                     replyTo = replyTo?.content,
                     onChunk = { chunk ->
-                        // Drop chunks from a superseded stream (generation changed).
                         if (gen == streamGeneration) {
                             streamBuilder.append(chunk)
                             val now = android.os.SystemClock.elapsedRealtime()
@@ -307,8 +306,6 @@ class ChatViewModel @Inject constructor(
                         }
                     },
                     onToolCall = { id, name, args ->
-                        // Guard: stale callbacks from a superseded stream must
-                        // not inject tool cards into the new stream's UI.
                         if (gen == streamGeneration) {
                             val tc = ToolCallInfo(
                                 id = id,
@@ -330,48 +327,28 @@ class ChatViewModel @Inject constructor(
                         }
                     },
                     onModelReverted = { reverted ->
-                        // Server auto-reverted this session to a working
-                        // model after a hard provider failure — update the
-                        // header chip instantly.
                         if (gen == streamGeneration && reverted.isNotBlank()) {
                             _currentModel.value = reverted
-                            _errorMessage.value = "Model failed — switched back to $reverted"
-                        }
-                    },
-                    onTurnEnd = {
-                        // Follow-up boundary: the repo finalized the current
-                        // bubble (now rendered from Room); clear the live
-                        // preview so the next turn's text streams fresh.
-                        if (gen == streamGeneration) {
-                            _streamingContent.value = ""
                         }
                     }
                 )
                 _isStreaming.value = false
-                // Clear streaming buffer — the finalized message (full content,
-                // repo-side) replaces the streaming bubble in the list.
                 _streamingContent.value = ""
-                // Cancel any prior delayed clear so it can't wipe the NEXT message's tool calls
                 toolClearJob?.cancel()
                 val genAtComplete = streamGeneration
                 toolClearJob = viewModelScope.launch {
                     delay(3000)
-                    // Only clear if no new stream started since (a fast new
-                    // send+complete within 3s must keep its tool cards).
                     if (genAtComplete == streamGeneration) {
                         _toolCalls.value = emptyList()
                     }
                 }
-                // Stream completed cleanly — the connection is alive.
                 _connectionStatus.value = ConnectionStatus.CONNECTED
             } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e  // never swallow cancellation into a ghost error
+                throw e
             } catch (e: Exception) {
                 _isStreaming.value = false
                 _streamingContent.value = ""
-                _errorMessage.value = "Connection lost: ${e.message}"
-                // The stream died — the header must NOT keep showing a
-                // stale green Connected while the chat is errored.
+                _errorMessage.value = null  // No ghost error messages
                 _connectionStatus.value = ConnectionStatus.ERROR
             }
         }
