@@ -279,6 +279,64 @@ class HermesRepository @Inject constructor(
         return messageDao.getMessagesOnce(sessionId)
     }
 
+    /** Apply a server response to the local chat (shared by the push
+     * subscription and the catch-up poll). Fills a streaming placeholder
+     * or inserts the missing assistant response. Idempotent: skips when
+     * the local tail already matches. Returns true when the chat changed. */
+    suspend fun applyServerResponse(sessionId: String, content: String): Boolean {
+        try {
+            if (content.isBlank()) return false
+            val local = messageDao.getMessagesOnce(sessionId)
+            val localTail = local.lastOrNull() ?: return false
+            if (localTail.content == content) return false
+            if (localTail.role == MessageRole.ASSISTANT && localTail.isStreaming) {
+                // The stream died mid-answer — fill the placeholder with the
+                // server's complete response.
+                messageDao.updateMessage(localTail.id, content, false)
+            } else {
+                // Genuinely new server-side response (detached run / follow-up
+                // answered after the client disconnected) — append it.
+                messageDao.insertMessage(
+                    Message(
+                        sessionId = sessionId,
+                        role = MessageRole.ASSISTANT,
+                        content = content
+                    )
+                )
+            }
+            return true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return false
+        }
+    }
+
+    /** Poll the server for a response the local stream may have missed
+     * (dead SSE connection, detached/backgrounded run). Used as the
+     * catch-up + fallback channel; the push subscription is primary. */
+    suspend fun pollServerResponse(sessionId: String): Boolean {
+        try {
+            val serverMsgs = apiService.fetchSessionMessages(sessionId) ?: return false
+            val tail = serverMsgs.lastOrNull() ?: return false
+            if (tail.optString("role") != "assistant") return false
+            return applyServerResponse(sessionId, tail.optString("content"))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return false
+        }
+    }
+
+    /** Subscribe to the session's push channel (primary response delivery). */
+    fun subscribeSessionEvents(
+        sessionId: String,
+        onResponseReady: (String) -> Unit,
+        onFailure: (Throwable?) -> Unit
+    ): okhttp3.sse.EventSource? {
+        return apiService.subscribeSessionEvents(sessionId, onResponseReady, onFailure)
+    }
+
     /**
      * Repair a lost last response. If the session's newest local row is a
      * BLANK assistant message (placeholder left by a stream that died when

@@ -132,7 +132,6 @@ class ChatViewModel @Inject constructor(
     // ── Connection status ──
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.DISCONNECTED)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
-
     // ── Model selection ──
     private val _currentModel = MutableStateFlow("")
     val currentModel: StateFlow<String> = _currentModel.asStateFlow()
@@ -411,6 +410,94 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    // ── Response delivery (push-first, poll as fallback) ──
+    // Primary: a per-session SSE subscription — the server PUSHES
+    // 'response_ready' the instant a response is saved (instant, idle).
+    // Catch-up: one poll on open (covers responses saved while away).
+    // Fallback: a 5s poll ONLY while the subscription is down + retry.
+    private var eventSource: okhttp3.sse.EventSource? = null
+    private var pollJob: kotlinx.coroutines.Job? = null
+    private var subActive = false
+
+    private fun applyResponse(content: String) {
+        val sid = _sessionId.value ?: return
+        viewModelScope.launch {
+            val changed = try {
+                repository.applyServerResponse(sid, content)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            }
+            if (changed) {
+                // Patched from the push channel — drop stale live state.
+                _streamingContent.value = ""
+                _isStreaming.value = false
+                _messages.value = repository.resumeSession(sid)
+            }
+        }
+    }
+
+    fun startResponsePolling() {
+        pollJob?.cancel()
+        val sid = _sessionId.value ?: return
+
+        fun resubscribe() {
+            try { eventSource?.cancel() } catch (_: Exception) { }
+            eventSource = repository.subscribeSessionEvents(
+                sid,
+                onResponseReady = { content -> applyResponse(content) },
+                onFailure = { subActive = false }
+            )
+            subActive = eventSource != null
+        }
+
+        pollJob = viewModelScope.launch {
+            // Catch-up: pull once on open (a response may have been saved
+            // while the chat was closed — no event is replayed).
+            val caughtUp = try {
+                repository.pollServerResponse(sid)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            }
+            if (caughtUp) {
+                _streamingContent.value = ""
+                _isStreaming.value = false
+                _messages.value = repository.resumeSession(sid)
+            }
+            resubscribe()
+            while (true) {
+                kotlinx.coroutines.delay(5_000)
+                if (!subActive) {
+                    // Subscription down — pull fallback + try to resubscribe.
+                    val changed = try {
+                        repository.pollServerResponse(sid)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (changed) {
+                        _streamingContent.value = ""
+                        _isStreaming.value = false
+                        _messages.value = repository.resumeSession(sid)
+                    }
+                    resubscribe()
+                }
+            }
+        }
+    }
+
+    fun stopResponsePolling() {
+        pollJob?.cancel()
+        pollJob = null
+        try { eventSource?.cancel() } catch (_: Exception) { }
+        eventSource = null
+        subActive = false
+    }
+
     // ── Clear session ──
     fun clearSession() {
         val sid = _sessionId.value ?: return
@@ -635,7 +722,11 @@ fun ChatScreen(
     // Kill any in-flight dictation recognizer when the screen leaves —
     // otherwise the mic service keeps running (a leak).
     DisposableEffect(Unit) {
-        onDispose { stopActiveDictation() }
+        onDispose {
+            stopActiveDictation()
+            // Stop the 5s response poller when leaving the chat.
+            vm.stopResponsePolling()
+        }
     }
 
     val messages by vm.messages.collectAsState()
@@ -800,6 +891,9 @@ fun ChatScreen(
             vm.loadModels()
             DraftStore.init(context)
             inputText = DraftStore.get(sessionIdState!!)
+            // Start the 5s server-response poller — the session always
+            // catches up with responses the stream missed.
+            vm.startResponsePolling()
         }
     }
 

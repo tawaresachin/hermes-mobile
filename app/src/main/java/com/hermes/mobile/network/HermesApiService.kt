@@ -513,6 +513,43 @@ class HermesApiService @Inject constructor(
         }
     }
 
+    // ─── Per-session push channel (response_ready) ───
+
+    /** Subscribe to the session's SSE event channel. The server PUSHES a
+     * 'response_ready' event the moment a response is saved — the chat
+     * patches instantly instead of polling. Returns the source (cancel it
+     * to stop); keepalive comments are ignored by the SSE parser. */
+    fun subscribeSessionEvents(
+        sessionId: String,
+        onResponseReady: (String) -> Unit,
+        onFailure: (Throwable?) -> Unit
+    ): okhttp3.sse.EventSource? {
+        val baseUrl = config?.baseUrl ?: return null
+        val request = Request.Builder()
+            .url("$baseUrl/api/sessions/$sessionId/events")
+            .header("Accept", "text/event-stream")
+            .build()
+        val factory = EventSources.createFactory(client)
+        return factory.newEventSource(request, object : EventSourceListener() {
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                try {
+                    val json = JSONObject(data)
+                    if (json.optString("type") == "response_ready") {
+                        val content = json.optString("content", "")
+                        if (content.isNotBlank()) onResponseReady(content)
+                    }
+                } catch (_: Exception) { }
+            }
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                onFailure(t)
+            }
+            override fun onClosed(eventSource: EventSource) {
+                // Treat close as down — the fallback poll + resubscribe kick in.
+                onFailure(null)
+            }
+        })
+    }
+
     // ─── Switch Model (via chat command) ───
 
     suspend fun switchModel(sessionId: String, modelName: String, global: Boolean = false): Boolean {
