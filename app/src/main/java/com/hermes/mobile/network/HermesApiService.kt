@@ -395,6 +395,55 @@ class HermesApiService @Inject constructor(
         }
     }
 
+    // ─── Keep Computer Awake (platform-generic) ───
+
+    data class SystemStatus(
+        val os: String,
+        val platform: String,
+        val python: String,
+        val awake: Boolean,
+        val awakeMechanism: String?
+    )
+
+    suspend fun getSystemStatus(): SystemStatus? {
+        val baseUrl = config?.baseUrl ?: return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder().url("$baseUrl/api/system/status").get().build()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val json = JSONObject(response.body?.string() ?: return@use null)
+                        SystemStatus(
+                            os = json.optString("os", ""),
+                            platform = json.optString("platform", ""),
+                            python = json.optString("python", ""),
+                            awake = json.optBoolean("awake", false),
+                            awakeMechanism = json.optString("awake_mechanism", "").ifBlank { null }
+                        )
+                    } else null
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { null }
+        }
+    }
+
+    suspend fun setSystemAwake(awake: Boolean): Boolean {
+        val baseUrl = config?.baseUrl ?: return false
+        return withContext(Dispatchers.IO) {
+            try {
+                val payload = JSONObject().put("awake", awake)
+                val request = Request.Builder()
+                    .url("$baseUrl/api/system/awake")
+                    .post(payload.toString().toRequestBody(jsonMediaType))
+                    .build()
+                client.newCall(request).execute().use { it.isSuccessful }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { false }
+        }
+    }
+
     // ─── Switch Model (via chat command) ───
 
     suspend fun switchModel(sessionId: String, modelName: String, global: Boolean = false): Boolean {

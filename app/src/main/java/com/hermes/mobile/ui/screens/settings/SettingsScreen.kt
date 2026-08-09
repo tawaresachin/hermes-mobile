@@ -58,6 +58,9 @@ data class SettingsUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val errorDetail: String? = null,
     val isDarkTheme: Boolean = false,
+    // Keep Computer Awake (platform-generic: works on any host OS)
+    val keepAwake: Boolean = false,
+    val awakeMechanism: String? = null,
     // Auth fields
     val email: String = "",
     val password: String = "",
@@ -102,6 +105,44 @@ class SettingsViewModel @Inject constructor(
         }
         _diagUploadResult.value = if (ok) "Uploaded ✓" else "Upload failed — sharing anyway"
         return ok
+    }
+
+    // ─── Keep Computer Awake ───
+
+    /** Load the host's keep-awake state when the Settings screen opens. */
+    fun loadSystemStatus() {
+        viewModelScope.launch {
+            try {
+                val st = repository.fetchSystemStatus()
+                if (st != null) {
+                    _uiState.update {
+                        it.copy(keepAwake = st.awake, awakeMechanism = st.awakeMechanism)
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { }
+        }
+    }
+
+    fun toggleKeepAwake() {
+        val target = !_uiState.value.keepAwake
+        // Optimistic flip; revert on failure.
+        _uiState.update { it.copy(keepAwake = target) }
+        viewModelScope.launch {
+            val ok = try {
+                repository.setKeepAwake(target)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            }
+            if (!ok) {
+                _uiState.update { it.copy(keepAwake = !target) }
+            } else {
+                loadSystemStatus()  // refresh mechanism label
+            }
+        }
     }
 
     init {
@@ -365,6 +406,10 @@ fun SettingsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
     val context = LocalContext.current
+
+    // Load the host computer's keep-awake state on screen open (idempotent,
+    // silent when not connected yet).
+    LaunchedEffect(Unit) { viewModel.loadSystemStatus() }
 
     /** Private/Tailscale/LAN-only guard for QR-derived bridge URLs. */
     fun isTrustedBridgeHost(rawUrl: String): Boolean {
@@ -819,7 +864,26 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ─── 4. APPEARANCE ───
+            // ─── 4. COMPUTER (platform-generic — works on Android/Termux,
+            // Linux, Windows, macOS hosts; the server picks the mechanism) ───
+            SettingsSection("Computer") {
+                SettingsToggle(
+                    icon = Icons.Filled.PowerSettingsNew,
+                    title = "Keep Computer Awake",
+                    subtitle = if (uiState.keepAwake) {
+                        "Holding the computer awake" +
+                            (uiState.awakeMechanism?.let { " ($it)" } ?: "")
+                    } else {
+                        "Holds the host computer awake while the bridge runs"
+                    },
+                    checked = uiState.keepAwake,
+                    onCheckedChange = { viewModel.toggleKeepAwake() }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ─── 5. APPEARANCE ───
             SettingsSection("Appearance") {
                 SettingsToggle(
                     icon = Icons.Filled.DarkMode,
@@ -832,7 +896,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ─── 5. ABOUT ───
+            // ─── 6. ABOUT ───
             SettingsSection("About") {
                 SettingsInfoRow("Version", LocalContext.current.let { ctx ->
                     try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?" }

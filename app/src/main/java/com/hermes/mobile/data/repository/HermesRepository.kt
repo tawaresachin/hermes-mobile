@@ -350,6 +350,16 @@ class HermesRepository @Inject constructor(
         return apiService.uploadDiagLog(device, version, log)
     }
 
+    // ─── Keep Computer Awake (platform-generic) ───
+
+    suspend fun fetchSystemStatus(): HermesApiService.SystemStatus? {
+        return apiService.getSystemStatus()
+    }
+
+    suspend fun setKeepAwake(awake: Boolean): Boolean {
+        return apiService.setSystemAwake(awake)
+    }
+
     // ─── Server Connection ───
 
     fun saveConfig(config: ServerConfig) {
