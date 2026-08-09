@@ -265,8 +265,12 @@ class ChatViewModel @Inject constructor(
         if (_isStreaming.value && attachmentUrl.isNullOrBlank()) {
             viewModelScope.launch {
                 try {
-                    repository.sendFollowUp(sid, query)
-                    repository.insertLocalUserMessage(sid, query)
+                    // Only show the bubble when the server ACCEPTED the
+                    // follow-up — a 409 (run just ended) must not leave a
+                    // phantom message that never gets answered.
+                    if (repository.sendFollowUp(sid, query)) {
+                        repository.insertLocalUserMessage(sid, query)
+                    }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Exception) { }
@@ -376,11 +380,17 @@ class ChatViewModel @Inject constructor(
                         _toolCalls.value = emptyList()
                     }
                 }
+                // Stream completed cleanly — the connection is alive.
+                _connectionStatus.value = ConnectionStatus.CONNECTED
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e  // never swallow cancellation into a ghost error
             } catch (e: Exception) {
                 _isStreaming.value = false
-                _errorMessage.value = e.message
+                _streamingContent.value = ""
+                _errorMessage.value = "Connection lost: ${e.message}"
+                // The stream died — the header must NOT keep showing a
+                // stale green Connected while the chat is errored.
+                _connectionStatus.value = ConnectionStatus.ERROR
             }
         }
     }

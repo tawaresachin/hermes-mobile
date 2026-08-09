@@ -53,7 +53,7 @@ class HermesApiService @Inject constructor(
         /** A stream that stays silent this long is dead (hung provider,
          *  silently dropped connection) — kill it instead of waiting out
          *  the 300s OkHttp read timeout. */
-        private const val STREAM_IDLE_TIMEOUT_MS = 45_000L
+        private const val STREAM_IDLE_TIMEOUT_MS = 90_000L
         private const val WATCHDOG_POLL_MS = 2_000L
         private const val KEY_DARK_THEME = "dark_theme"
     }

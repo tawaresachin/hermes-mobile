@@ -42,11 +42,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.ui.screens.chat.PendingAttachment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.math.min
 import java.io.File
 import java.io.FileOutputStream
 
@@ -83,6 +85,10 @@ fun MarkupEditorDialog(
     val strokes = remember { mutableStateListOf<MarkStroke>() }
     var currentStroke by remember { mutableStateOf<MarkStroke?>(null) }
     var markColor by remember { mutableStateOf(MARK_COLORS.first()) }
+    // The image is drawn ContentScale.Fit — strokes are in DISPLAY coords.
+    // fitRect = the image's on-screen rect, used to map strokes into bitmap
+    // coords when flattening (display pixels ≠ bitmap pixels in general).
+    var fitRect by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
 
     // Decode the picked image ONCE, downscaled so the editor is 1:1
     // (display pixels == bitmap pixels — flattening needs no scaling).
@@ -150,11 +156,28 @@ fun MarkupEditorDialog(
                 }
             }
 
-            // Canvas: image + strokes overlay (1:1 pixels)
+            // Canvas: image + strokes overlay (display coords; flattened
+            // back into bitmap coords on send via the fit rect)
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .onSizeChanged { size ->
+                        if (bmp.width > 0 && bmp.height > 0 && size.width > 0 && size.height > 0) {
+                            val scale = min(
+                                size.width / bmp.width.toFloat(),
+                                size.height / bmp.height.toFloat()
+                            )
+                            val dw = bmp.width * scale
+                            val dh = bmp.height * scale
+                            fitRect = androidx.compose.ui.geometry.Rect(
+                                left = (size.width - dw) / 2f,
+                                top = (size.height - dh) / 2f,
+                                right = (size.width + dw) / 2f,
+                                bottom = (size.height + dh) / 2f
+                            )
+                        }
+                    }
                     .pointerInput(bmp.width, bmp.height) {
                         detectDragGestures(
                             onDragStart = { start ->
@@ -223,9 +246,19 @@ fun MarkupEditorDialog(
                     onClick = {
                         val b = bmp
                         scope.launch(Dispatchers.IO) {
-                            // Flatten strokes onto a copy of the bitmap.
+                            // Flatten strokes onto a copy of the bitmap,
+                            // mapping DISPLAY coords → BITMAP coords via the
+                            // fitted image rect (ContentScale.Fit ≠ 1:1).
                             val out = b.copy(Bitmap.Config.ARGB_8888, true)
                             val canvas = android.graphics.Canvas(out)
+                            val fr = fitRect
+                            val matrix = if (fr != null && fr.width > 0f && fr.height > 0f) {
+                                android.graphics.Matrix().apply {
+                                    setScale(b.width / fr.width, b.height / fr.height)
+                                    postTranslate(-fr.left * (b.width / fr.width), -fr.top * (b.height / fr.height))
+                                }
+                            } else null
+                            if (matrix != null) canvas.concat(matrix)  // API 1
                             strokes.forEach { s ->
                                 val paint = AndroidPaint().apply {
                                     isAntiAlias = true
