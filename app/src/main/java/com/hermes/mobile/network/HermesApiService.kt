@@ -208,6 +208,7 @@ class HermesApiService @Inject constructor(
         onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
         onToolResult: (String, String) -> Unit = { _, _ -> },
         onModelReverted: (String) -> Unit = {},
+        onTurnEnd: () -> Unit = {},
         onOpen: () -> Unit = {},
         attachmentUrl: String = "",
         attachType: String = "",
@@ -282,6 +283,11 @@ class HermesApiService @Inject constructor(
                             // the default after a hard provider failure.
                             "model_reverted" -> {
                                 onModelReverted(json.optString("content", ""))
+                            }
+                            // Follow-up turn boundary: previous bubble is
+                            // complete, a fresh one starts for the next turn.
+                            "turn_end" -> {
+                                onTurnEnd()
                             }
                             "error" -> {
                                 val msg = json.optString("content", "Unknown error")
@@ -418,7 +424,9 @@ class HermesApiService @Inject constructor(
                             platform = json.optString("platform", ""),
                             python = json.optString("python", ""),
                             awake = json.optBoolean("awake", false),
-                            awakeMechanism = json.optString("awake_mechanism", "").ifBlank { null }
+                            awakeMechanism = json.optString("awake_mechanism", "")
+                                .ifBlank { null }
+                                .takeUnless { it == "null" }
                         )
                     } else null
                 }
@@ -428,13 +436,42 @@ class HermesApiService @Inject constructor(
         }
     }
 
-    suspend fun setSystemAwake(awake: Boolean): Boolean {
-        val baseUrl = config?.baseUrl ?: return false
+    suspend fun setSystemAwake(awake: Boolean): String? {
+        val baseUrl = config?.baseUrl ?: return null
         return withContext(Dispatchers.IO) {
             try {
                 val payload = JSONObject().put("awake", awake)
                 val request = Request.Builder()
                     .url("$baseUrl/api/system/awake")
+                    .post(payload.toString().toRequestBody(jsonMediaType))
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val m = JSONObject(response.body?.string() ?: "{}")
+                            .optString("mechanism", "")
+                        // org.json quirk: JSON null surfaces as the string "null"
+                        if (m.isBlank() || m == "null") null else m
+                    } else null
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { null }
+        }
+    }
+
+    // ─── Follow-up to a running agent (Cursor-style) ───
+
+    /** Queue a follow-up on the session's ACTIVE stream (returns 409 if none). */
+    suspend fun sendFollowUp(sessionId: String, query: String): Boolean {
+        val baseUrl = config?.baseUrl ?: return false
+        return withContext(Dispatchers.IO) {
+            try {
+                val payload = JSONObject().apply {
+                    put("session_id", sessionId)
+                    put("query", query)
+                }
+                val request = Request.Builder()
+                    .url("$baseUrl/api/chat/followup")
                     .post(payload.toString().toRequestBody(jsonMediaType))
                     .build()
                 client.newCall(request).execute().use { it.isSuccessful }

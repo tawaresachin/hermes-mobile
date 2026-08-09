@@ -73,6 +73,7 @@ class HermesRepository @Inject constructor(
         onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
         onToolResult: (String, String) -> Unit = { _, _ -> },
         onModelReverted: (String) -> Unit = {},
+        onTurnEnd: () -> Unit = {},
         attempt: Int = 1,
         attachmentUrl: String = "",
         attachType: String = "",
@@ -149,6 +150,31 @@ class HermesRepository @Inject constructor(
                 onToolCall = onToolCall,
                 onToolResult = onToolResult,
                 onModelReverted = onModelReverted,
+                onTurnEnd = {
+                    // Follow-up turn boundary: persist the accumulated text
+                    // into the CURRENT placeholder, open a fresh placeholder
+                    // for the next turn, reset the builder (so [DONE] writes
+                    // only THIS turn), and tell the VM to clear its live
+                    // preview (the finalized bubble now renders from Room).
+                    val text = fullResponse.toString()
+                    fullResponse.setLength(0)
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        try {
+                            messageDao.updateLastStreamingMessage(sessionId, text)
+                            messageDao.insertMessage(
+                                Message(
+                                    sessionId = sessionId,
+                                    role = MessageRole.ASSISTANT,
+                                    content = "",
+                                    isStreaming = true
+                                )
+                            )
+                            onTurnEnd()
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (_: Exception) { }
+                    }
+                },
                 attachmentUrl = attachmentUrl,
                 attachType = attachType,
                 multiAgent = multiAgent,
@@ -356,8 +382,28 @@ class HermesRepository @Inject constructor(
         return apiService.getSystemStatus()
     }
 
-    suspend fun setKeepAwake(awake: Boolean): Boolean {
+    suspend fun setKeepAwake(awake: Boolean): String? {
         return apiService.setSystemAwake(awake)
+    }
+
+    // ─── Follow-ups to a running agent (Cursor-style) ───
+
+    suspend fun sendFollowUp(sessionId: String, query: String): Boolean {
+        return apiService.sendFollowUp(sessionId, query)
+    }
+
+    /** Local user bubble for a queued follow-up (the server persists its
+     * own copy as the backup; the local row drives the UI). */
+    suspend fun insertLocalUserMessage(sessionId: String, content: String) {
+        messageDao.insertMessage(
+            Message(
+                sessionId = sessionId,
+                role = MessageRole.USER,
+                content = content,
+                status = MessageStatus.SENT
+            )
+        )
+        sessionDao.incrementMessageCount(sessionId)
     }
 
     // ─── Server Connection ───

@@ -130,17 +130,20 @@ class SettingsViewModel @Inject constructor(
         // Optimistic flip; revert on failure.
         _uiState.update { it.copy(keepAwake = target) }
         viewModelScope.launch {
-            val ok = try {
+            val mech = try {
                 repository.setKeepAwake(target)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {
-                false
+                null
             }
-            if (!ok) {
-                _uiState.update { it.copy(keepAwake = !target) }
+            if (mech == null && target) {
+                // POST failed — flip back.
+                _uiState.update { it.copy(keepAwake = false) }
             } else {
-                loadSystemStatus()  // refresh mechanism label
+                // Use the mechanism straight from the POST response — no
+                // second fetch, no stale "(null)" from the initial load.
+                _uiState.update { it.copy(awakeMechanism = mech) }
             }
         }
     }

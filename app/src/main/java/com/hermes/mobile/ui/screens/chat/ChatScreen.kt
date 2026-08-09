@@ -256,6 +256,24 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, multiAgent: Boolean = false, replyTo: Message? = null) {
         val sid = _sessionId.value ?: return
+
+        // ─── Follow-up on a RUNNING agent (Cursor-style) ───
+        // While a stream is active, a new message is QUEUED onto the same
+        // connection and answered as the NEXT TURN — the agent is not
+        // cancelled (Cursor: 'send follow-ups to a running agent'). The
+        // user bubble appears locally; the server persists its own copy.
+        if (_isStreaming.value && attachmentUrl.isNullOrBlank()) {
+            viewModelScope.launch {
+                try {
+                    repository.sendFollowUp(sid, query)
+                    repository.insertLocalUserMessage(sid, query)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) { }
+            }
+            return
+        }
+
         val gen = ++streamGeneration
 
         // Cancel previous stream and save pending content
@@ -332,6 +350,14 @@ class ChatViewModel @Inject constructor(
                         if (gen == streamGeneration && reverted.isNotBlank()) {
                             _currentModel.value = reverted
                             _errorMessage.value = "Model failed — switched back to $reverted"
+                        }
+                    },
+                    onTurnEnd = {
+                        // Follow-up boundary: the repo finalized the current
+                        // bubble (now rendered from Room); clear the live
+                        // preview so the next turn's text streams fresh.
+                        if (gen == streamGeneration) {
+                            _streamingContent.value = ""
                         }
                     }
                 )
