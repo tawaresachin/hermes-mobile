@@ -66,6 +66,32 @@ class HermesRepository @Inject constructor(
         sendMessage(sessionId = sessionId, query = content, onChunk = {})
     }
 
+    /** Insert the user's message locally (SENDING tick) WITHOUT starting a
+     * stream. Used by the Telegram-style queue: when the agent is busy the
+     * message shows immediately and its turn starts after the current
+     * response completes. Returns the row id (passed back via
+     * [sendMessage]'s userMsgId so the turn advances THIS row's ticks). */
+    suspend fun insertLocalUserMessage(
+        sessionId: String,
+        content: String,
+        attachmentUrl: String? = null,
+        attachType: String? = null,
+        replyTo: String? = null
+    ): Long {
+        val userMsg = Message(
+            sessionId = sessionId,
+            role = MessageRole.USER,
+            content = content,
+            attachmentUrl = attachmentUrl?.ifBlank { null },
+            attachmentType = attachType?.ifBlank { null },
+            replyToText = replyTo?.take(300),
+            status = MessageStatus.SENDING
+        )
+        val id = messageDao.insertMessage(userMsg)
+        sessionDao.incrementMessageCount(sessionId)
+        return id
+    }
+
     suspend fun sendMessage(
         sessionId: String,
         query: String,
@@ -79,26 +105,20 @@ class HermesRepository @Inject constructor(
         attachType: String = "",
         multiAgent: Boolean = false,
         replyTo: String? = null,
+        // Pre-inserted row (queued messages) — reuse it for the tick chain
+        // instead of creating a duplicate user message.
+        userMsgId: Long? = null,
     ): String {
         // Save user message ONLY on first attempt (retries must not duplicate it)
-        var userMsgId: Long? = null
-        if (attempt == 1) {
-            val userMsg = Message(
-                sessionId = sessionId,
-                role = MessageRole.USER,
-                content = query,
-                attachmentUrl = attachmentUrl.ifBlank { null },
-                attachmentType = attachType.ifBlank { null },
-                replyToText = replyTo?.take(300),
-                // Telegram-style tick: SENDING until the server acknowledges.
-                status = MessageStatus.SENDING
+        var userMsgIdFinal: Long? = userMsgId
+        if (attempt == 1 && userMsgId == null) {
+            userMsgIdFinal = insertLocalUserMessage(
+                sessionId, query, attachmentUrl, attachType, replyTo
             )
-            userMsgId = messageDao.insertMessage(userMsg)
-            sessionDao.incrementMessageCount(sessionId)
-        } else {
+        } else if (attempt > 1 && userMsgId == null) {
             // Retry: the user row already exists — reuse it so the tick
             // chain (SENT → READ) still advances on the retried attempt.
-            userMsgId = messageDao.getMessagesOnce(sessionId)
+            userMsgIdFinal = messageDao.getMessagesOnce(sessionId)
                 .lastOrNull { it.role == MessageRole.USER }?.id
         }
 
@@ -123,10 +143,10 @@ class HermesRepository @Inject constructor(
                 sessionId = sessionId,
                 onOpen = {
                     // Server accepted + opened the stream → SENT.
-                    if (userMsgId != null) {
+                    if (userMsgIdFinal != null) {
                         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                             try {
-                                messageDao.updateMessageStatus(userMsgId!!, MessageStatus.SENT)
+                                messageDao.updateMessageStatus(userMsgIdFinal!!, MessageStatus.SENT)
                             } catch (e: kotlinx.coroutines.CancellationException) {
                                 throw e
                             } catch (_: Exception) { }
@@ -136,10 +156,10 @@ class HermesRepository @Inject constructor(
                 onChunk = { chunk ->
                     fullResponse.append(chunk)
                     // First content → the agent is answering → READ.
-                    if (fullResponse.length == chunk.length && userMsgId != null) {
+                    if (fullResponse.length == chunk.length && userMsgIdFinal != null) {
                         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                             try {
-                                messageDao.updateMessageStatus(userMsgId!!, MessageStatus.READ)
+                                messageDao.updateMessageStatus(userMsgIdFinal!!, MessageStatus.READ)
                             } catch (e: kotlinx.coroutines.CancellationException) {
                                 throw e
                             } catch (_: Exception) { }
@@ -233,9 +253,9 @@ class HermesRepository @Inject constructor(
             }
             fullResponse.append("⚠️ Connection error: ${e.message}")
             // Tick → FAILED: the send did not complete after retries.
-            if (userMsgId != null) {
+            if (userMsgIdFinal != null) {
                 try {
-                    messageDao.updateMessageStatus(userMsgId!!, MessageStatus.FAILED)
+                    messageDao.updateMessageStatus(userMsgIdFinal!!, MessageStatus.FAILED)
                 } catch (e2: kotlinx.coroutines.CancellationException) {
                     throw e2
                 } catch (_: Exception) { }
@@ -252,9 +272,9 @@ class HermesRepository @Inject constructor(
         // tick. Any completed turn with real content = read. (The FAILED
         // path already marked FAILED above and starts with the error
         // marker — never override it.)
-        if (userMsgId != null && !fullResponse.startsWith("⚠️ Connection error")) {
+        if (userMsgIdFinal != null && !fullResponse.startsWith("⚠️ Connection error")) {
             try {
-                messageDao.updateMessageStatus(userMsgId!!, MessageStatus.READ)
+                messageDao.updateMessageStatus(userMsgIdFinal!!, MessageStatus.READ)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) { }

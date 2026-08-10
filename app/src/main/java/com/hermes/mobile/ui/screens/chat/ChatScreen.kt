@@ -255,42 +255,68 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, multiAgent: Boolean = false, replyTo: Message? = null) {
         val sid = _sessionId.value ?: return
-        // TELEGRAM MODEL: one message → ONE complete response. Sending while
-        // a stream is active supersedes it (a fresh turn for the new query)
-        // — no mid-stream follow-up queue, no interleaved half-answers. The
-        // push channel (response_ready) still delivers the saved response if
-        // the stream ever dies.
-        val gen = ++streamGeneration
-
-        // Cancel previous stream and save pending content
-        streamingJob?.cancel()
-        val pendingContent = _streamingContent.value
-        streamingJob = viewModelScope.launch {
-            // Supersede the previous stream's placeholder. With text: finalize
-            // it into a completed message. Without text (tool-call-only or the
-            // throttled snapshot had nothing yet): DELETE it — finalizing blank
-            // would leave an empty bubble, and leaving it isStreaming=1 makes
-            // TWO rows render the next stream's text (the two-bubbles bug).
-            if (pendingContent.isNotBlank()) {
-                repository.finalizePendingMessage(sid, pendingContent)
-            } else {
-                repository.deletePendingMessage(sid)
+        // TELEGRAM QUEUE MODEL: one message → ONE complete response, and
+        // NO QUERY IS EVER DISCARDED. If the agent is already working, the
+        // new message is saved locally + queued; it gets its own turn the
+        // moment the current response completes (FIFO). Nothing is
+        // cancelled, nothing is dropped, responses never interleave.
+        if (_isStreaming.value) {
+            viewModelScope.launch {
+                try {
+                    val uid = repository.insertLocalUserMessage(
+                        sid, query,
+                        attachmentUrl ?: "", attachType ?: "",
+                        replyTo?.content
+                    )
+                    pendingQueue.addLast(
+                        QueuedMessage(query, attachmentUrl, attachType, multiAgent, replyTo, uid)
+                    )
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) { }
             }
+            return
+        }
+        startStream(sid, query, attachmentUrl, attachType, multiAgent, replyTo, null)
+    }
 
-            _isStreaming.value = true
-            _streamingContent.value = ""
-            _toolCalls.value = emptyList()
-            _errorMessage.value = null
+    private data class QueuedMessage(
+        val query: String,
+        val attachmentUrl: String?,
+        val attachType: String?,
+        val multiAgent: Boolean,
+        val replyTo: Message?,
+        val userMsgId: Long?
+    )
 
-            // StringBuilder avoids O(n²) re-concat per chunk; emissions are
-            // time-throttled (≤20/s) so the UI doesn't recompose per chunk.
-            val streamBuilder = StringBuilder()
-            var lastEmitMs = 0L
+    private val pendingQueue = ArrayDeque<QueuedMessage>()
 
+    private fun startStream(
+        sid: String,
+        query: String,
+        attachmentUrl: String?,
+        attachType: String?,
+        multiAgent: Boolean,
+        replyTo: Message?,
+        userMsgId: Long?
+    ) {
+        val gen = ++streamGeneration
+        _isStreaming.value = true
+        _streamingContent.value = ""
+        _toolCalls.value = emptyList()
+        _errorMessage.value = null
+
+        // StringBuilder avoids O(n²) re-concat per chunk; emissions are
+        // time-throttled (≤20/s) so the UI doesn't recompose per chunk.
+        val streamBuilder = StringBuilder()
+        var lastEmitMs = 0L
+
+        streamingJob = viewModelScope.launch {
             try {
                 repository.sendMessage(
                     sessionId = sid,
                     query = query,
+                    userMsgId = userMsgId,
                     attachmentUrl = attachmentUrl ?: "",
                     attachType = attachType ?: "",
                     multiAgent = multiAgent,
@@ -332,7 +358,6 @@ class ChatViewModel @Inject constructor(
                         }
                     }
                 )
-                _isStreaming.value = false
                 _streamingContent.value = ""
                 toolClearJob?.cancel()
                 val genAtComplete = streamGeneration
@@ -346,10 +371,18 @@ class ChatViewModel @Inject constructor(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
+                _errorMessage.value = null
+                _connectionStatus.value = ConnectionStatus.ERROR
+            } finally {
                 _isStreaming.value = false
                 _streamingContent.value = ""
-                _errorMessage.value = null  // No ghost error messages
-                _connectionStatus.value = ConnectionStatus.ERROR
+                // Drain the queue: the next queued message gets its turn
+                // now that this response completed (or failed). FIFO —
+                // every message eventually gets its own complete response.
+                val next = pendingQueue.removeFirstOrNull()
+                if (next != null) {
+                    startStream(sid, next.query, next.attachmentUrl, next.attachType, next.multiAgent, next.replyTo, next.userMsgId)
+                }
             }
         }
     }
