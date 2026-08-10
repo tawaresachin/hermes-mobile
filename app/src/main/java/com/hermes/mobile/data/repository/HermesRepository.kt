@@ -124,6 +124,7 @@ class HermesRepository @Inject constructor(
         onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
         onToolResult: (String, String) -> Unit = { _, _ -> },
         onModelReverted: (String) -> Unit = {},
+        onAttachment: (String, String) -> Unit = { _, _ -> },
         onTurnEnd: () -> Unit = {},
         attempt: Int = 1,
         attachmentUrl: String = "",
@@ -197,6 +198,24 @@ class HermesRepository @Inject constructor(
                 onToolCall = onToolCall,
                 onToolResult = onToolResult,
                 onModelReverted = onModelReverted,
+                onAttachment = { url, type ->
+                    // In-stream attachment (Telegram: media+caption arrive
+                    // together) — apply the image/file to THIS bubble now.
+                    val clean = stripUploadUrls(sessionId, url)
+                    if (clean.isNotBlank() && msgId != null) {
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                            try {
+                                messageDao.updateMessageWithAttachment(
+                                    msgId, fullResponse.toString(), true, clean, type,
+                                    clean.substringAfterLast('/').takeIf { it.isNotBlank() }
+                                )
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (_: Exception) { }
+                        }
+                    }
+                    onAttachment(url, type)
+                },
                 onTurnEnd = {
                     // Follow-up turn boundary: persist the accumulated text
                     // into the CURRENT placeholder, open a fresh placeholder

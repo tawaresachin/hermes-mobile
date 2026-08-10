@@ -407,6 +407,22 @@ class ChatViewModel @Inject constructor(
                         if (gen == streamGeneration && reverted.isNotBlank()) {
                             _currentModel.value = reverted
                         }
+                    },
+                    onAttachment = { url, _ ->
+                        if (gen == streamGeneration && url.isNotBlank()) {
+                            // In-stream attachment — refresh so the image/
+                            // file bubble renders immediately (Telegram:
+                            // media + caption arrive together).
+                            kotlinx.coroutines.CoroutineScope(
+                                kotlinx.coroutines.Dispatchers.IO
+                            ).launch {
+                                try {
+                                    _messages.value = repository.resumeSession(sid)
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
+                                } catch (_: Exception) { }
+                            }
+                        }
                     }
                 )
                 _streamingContent.value = ""

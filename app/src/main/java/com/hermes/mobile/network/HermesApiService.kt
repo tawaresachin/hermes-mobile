@@ -208,6 +208,7 @@ class HermesApiService @Inject constructor(
         onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
         onToolResult: (String, String) -> Unit = { _, _ -> },
         onModelReverted: (String) -> Unit = {},
+        onAttachment: (String, String) -> Unit = { _, _ -> },
         onTurnEnd: () -> Unit = {},
         onOpen: () -> Unit = {},
         attachmentUrl: String = "",
@@ -283,6 +284,16 @@ class HermesApiService @Inject constructor(
                             // the default after a hard provider failure.
                             "model_reverted" -> {
                                 onModelReverted(json.optString("content", ""))
+                            }
+                            // Telegram: media + caption arrive together. The
+                            // server emits this in-stream (before [DONE])
+                            // when the reply includes a session upload —
+                            // apply the image/file to the bubble NOW.
+                            "attachment" -> {
+                                onAttachment(
+                                    json.optString("url", ""),
+                                    json.optString("attach_type", "")
+                                )
                             }
                             // Follow-up turn boundary: previous bubble is
                             // complete, a fresh one starts for the next turn.
