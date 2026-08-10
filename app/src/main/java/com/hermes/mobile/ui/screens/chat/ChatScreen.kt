@@ -466,11 +466,11 @@ class ChatViewModel @Inject constructor(
     private var pollJob: kotlinx.coroutines.Job? = null
     private var subActive = false
 
-    private fun applyResponse(content: String, ts: Long) {
+    private fun applyResponse(content: String, ts: Long, attachmentUrl: String = "", attachmentType: String = "") {
         val sid = _sessionId.value ?: return
         viewModelScope.launch {
             val changed = try {
-                repository.applyServerResponse(sid, content, ts)
+                repository.applyServerResponse(sid, content, ts, attachmentUrl, attachmentType)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -493,7 +493,9 @@ class ChatViewModel @Inject constructor(
             try { eventSource?.cancel() } catch (_: Exception) { }
             eventSource = repository.subscribeSessionEvents(
                 sid,
-                onResponseReady = { content, ts -> applyResponse(content, ts) },
+                onResponseReady = { content, ts, attachUrl, attachType ->
+                    applyResponse(content, ts, attachUrl, attachType)
+                },
                 onFailure = { subActive = false }
             )
             subActive = eventSource != null

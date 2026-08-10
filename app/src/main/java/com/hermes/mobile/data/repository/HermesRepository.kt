@@ -329,7 +329,13 @@ class HermesRepository @Inject constructor(
      * the local tail already matches. [ts] is the server save time — a
      * STALE response (superseded stream finishing late) is rejected so it
      * can't clobber a newer turn. Returns true when the chat changed. */
-    suspend fun applyServerResponse(sessionId: String, content: String, ts: Long = 0): Boolean {
+    suspend fun applyServerResponse(
+        sessionId: String,
+        content: String,
+        ts: Long = 0,
+        attachmentUrl: String = "",
+        attachmentType: String = ""
+    ): Boolean {
         try {
             if (content.isBlank()) return false
             val local = messageDao.getMessagesOnce(sessionId)
@@ -347,7 +353,16 @@ class HermesRepository @Inject constructor(
                 // Same turn (streaming placeholder, finalized partial, or a
                 // completed bubble that the server re-delivered) — patch in
                 // place. Inserting would duplicate or misalign the bubble.
-                messageDao.updateMessage(newestAssistant.id, content, false)
+                // Attachment fields ride along when the server attached a
+                // session upload (image preview / file row instead of a
+                // bare /uploads/... link in the text).
+                if (attachmentUrl.isNotBlank()) {
+                    messageDao.updateMessageWithAttachment(
+                        newestAssistant.id, content, false, attachmentUrl, attachmentType
+                    )
+                } else {
+                    messageDao.updateMessage(newestAssistant.id, content, false)
+                }
                 // Tick → READ. The STREAM path advances the request's tick
                 // on the first chunk; the PUSH/poll path (stream died,
                 // response delivered later) must do the same — otherwise
@@ -367,7 +382,9 @@ class HermesRepository @Inject constructor(
                     Message(
                         sessionId = sessionId,
                         role = MessageRole.ASSISTANT,
-                        content = content
+                        content = content,
+                        attachmentUrl = attachmentUrl.ifBlank { null },
+                        attachmentType = attachmentType.ifBlank { null }
                     )
                 )
             }
@@ -390,7 +407,9 @@ class HermesRepository @Inject constructor(
             return applyServerResponse(
                 sessionId,
                 tail.optString("content"),
-                tail.optLong("timestamp", 0L)
+                tail.optLong("timestamp", 0L),
+                tail.optString("attachment_url", ""),
+                tail.optString("attachment_type", "")
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -402,7 +421,7 @@ class HermesRepository @Inject constructor(
     /** Subscribe to the session's push channel (primary response delivery). */
     fun subscribeSessionEvents(
         sessionId: String,
-        onResponseReady: (String, Long) -> Unit,
+        onResponseReady: (String, Long, String, String) -> Unit,
         onFailure: (Throwable?) -> Unit
     ): okhttp3.sse.EventSource? {
         return apiService.subscribeSessionEvents(sessionId, onResponseReady, onFailure)

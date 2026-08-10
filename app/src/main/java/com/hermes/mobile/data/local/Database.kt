@@ -43,6 +43,18 @@ interface MessageDao {
     @Query("UPDATE messages SET content = :content, isStreaming = :isStreaming WHERE id = :messageId")
     suspend fun updateMessage(messageId: Long, content: String, isStreaming: Boolean = false)
 
+    @Query(
+        "UPDATE messages SET content = :content, isStreaming = :isStreaming, " +
+            "attachmentUrl = :attachmentUrl, attachmentType = :attachmentType WHERE id = :messageId"
+    )
+    suspend fun updateMessageWithAttachment(
+        messageId: Long,
+        content: String,
+        isStreaming: Boolean,
+        attachmentUrl: String,
+        attachmentType: String
+    )
+
     @Query("UPDATE messages SET status = :status WHERE id = :messageId")
     suspend fun updateMessageStatus(messageId: Long, status: com.hermes.mobile.data.model.MessageStatus)
 

@@ -543,7 +543,7 @@ class HermesApiService @Inject constructor(
      * to stop); keepalive comments are ignored by the SSE parser. */
     fun subscribeSessionEvents(
         sessionId: String,
-        onResponseReady: (String, Long) -> Unit,
+        onResponseReady: (String, Long, String, String) -> Unit,
         onFailure: (Throwable?) -> Unit
     ): okhttp3.sse.EventSource? {
         val baseUrl = config?.baseUrl ?: return null
@@ -559,7 +559,12 @@ class HermesApiService @Inject constructor(
                     if (json.optString("type") == "response_ready") {
                         val content = json.optString("content", "")
                         if (content.isNotBlank()) {
-                            onResponseReady(content, json.optLong("ts", 0L))
+                            onResponseReady(
+                                content,
+                                json.optLong("ts", 0L),
+                                json.optString("attachment_url", ""),
+                                json.optString("attachment_type", "")
+                            )
                         }
                     }
                 } catch (_: Exception) { }
