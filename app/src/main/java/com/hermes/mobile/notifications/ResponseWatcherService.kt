@@ -134,7 +134,11 @@ class ResponseWatcherService : Service() {
                 )
             )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.hermes_notif_icon)
+            // The ACTUAL Hermes logo — MIUI's shade shows the small icon in
+            // the avatar slot; a white glyph was invisible on white cards.
+            // The launcher adaptive icon IS the girl logo, so the shade now
+            // shows the real image, exactly like a Telegram contact photo.
+            .setSmallIcon(R.drawable.hermes_logo_circle)
             .setLargeIcon(hermesAvatarBitmap())
             // Telegram: the accent color tints the small icon + time.
             .setColor(0xFF0088CC.toInt())
@@ -250,7 +254,9 @@ class ResponseWatcherService : Service() {
                     )
                 )
             val notif = NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.drawable.hermes_notif_icon)
+                // The ACTUAL Hermes logo (same as the ongoing notification) —
+                // the shade shows the real girl image, Telegram-contact style.
+                .setSmallIcon(R.drawable.hermes_logo_circle)
                 .setLargeIcon(avatar)
                 .setColor(0xFF0088CC.toInt())
                 .setContentTitle("Hermes")
