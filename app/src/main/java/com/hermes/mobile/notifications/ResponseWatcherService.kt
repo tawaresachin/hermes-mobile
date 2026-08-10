@@ -46,11 +46,12 @@ class ResponseWatcherService : Service() {
     private var currentSession = ""
     private var currentQuery = ""
 
-    /** Live ticker: keeps the "Hermes is typing…" text fresh (the elapsed
-     * time is NOT shown — Telegram doesn't show one; the tick just keeps
-     * the notification alive so MIUI doesn't freeze the elapsed snapshot). */
+    /** Live ticker: refreshes the ongoing notification. STOPS the moment a
+     * ready notification replaces it — otherwise it would re-post the
+     * "is typing…" bubble over the reply (the bug the user caught). */
     private val ticker = object : Runnable {
         override fun run() {
+            if (readyPosted) return
             updateNotification()
             handler.postDelayed(this, 1000)
         }
@@ -70,6 +71,21 @@ class ResponseWatcherService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
+        // If the ready reply replaced the ongoing notification, keep it
+        // visible after the service stops (DETACH = drop foreground status
+        // but leave the notification). Otherwise remove it cleanly — a
+        // plain stop must not leave a stale "is typing…" bubble.
+        try {
+            if (readyPosted) {
+                if (android.os.Build.VERSION.SDK_INT >= 24) {
+                    stopForeground(Service.STOP_FOREGROUND_DETACH)
+                } else {
+                    stopForeground(false)
+                }
+            } else {
+                stopForeground(true)
+            }
+        } catch (_: Exception) { }
         super.onDestroy()
     }
 
@@ -154,8 +170,15 @@ class ResponseWatcherService : Service() {
         const val CHANNEL_ID = "agent_responses"
         const val EXTRA_SESSION_ID = "session_id"
         const val EXTRA_QUERY = "query"
+        // ONE id for both states: the ready reply REPLACES the ongoing
+        // "is typing…" notification in place. Two ids left the typing
+        // notification visible on top of the reply (user bug report).
         private const val NOTIF_ID_ONGOING = 1001
-        const val NOTIF_ID_READY = 1002
+
+        /** Set the moment a ready notification replaces the ongoing one —
+         * the ticker stops re-posting "is typing…" over the reply. */
+        @Volatile
+        private var readyPosted = false
 
         fun ensureChannel(context: Context) {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -172,6 +195,7 @@ class ResponseWatcherService : Service() {
 
         fun start(context: Context, sessionId: String, query: String = "") {
             if (sessionId.isBlank()) return
+            readyPosted = false
             ensureChannel(context)
             val intent = Intent(context, ResponseWatcherService::class.java)
                 .putExtra(EXTRA_SESSION_ID, sessionId)
@@ -180,7 +204,8 @@ class ResponseWatcherService : Service() {
         }
 
         /** Stream finished (or failed). Stop the watcher; if the app is
-         *  backgrounded, post the "ready" notification for the user. */
+         *  backgrounded, REPLACE the ongoing notification with the reply
+         *  (same id — no stale "is typing…" bubble left behind). */
         fun notifyReady(context: Context, sessionId: String, preview: String, query: String = "") {
             if (AppForeground.isForeground) return
             if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
@@ -234,6 +259,9 @@ class ResponseWatcherService : Service() {
                 .setShowWhen(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .build()
+            // Stop the ticker BEFORE posting the reply so it can't overwrite
+            // it, then replace the ongoing notification IN PLACE (same id).
+            readyPosted = true
             // Wakes the screen briefly on phones that allow it; never
             // throws when the app is restricted (MIUI battery saver).
             val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -244,7 +272,7 @@ class ResponseWatcherService : Service() {
                 }
             } catch (_: Exception) { }
             try {
-                NotificationManagerCompat.from(context).notify(NOTIF_ID_READY, notif)
+                NotificationManagerCompat.from(context).notify(NOTIF_ID_ONGOING, notif)
             } catch (_: SecurityException) { }
         }
 
