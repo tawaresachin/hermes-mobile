@@ -271,6 +271,7 @@ class ChatViewModel @Inject constructor(
                     pendingQueue.addLast(
                         QueuedMessage(query, attachmentUrl, attachType, multiAgent, replyTo, uid)
                     )
+                    _queuedIds.value = _queuedIds.value + uid
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Exception) { }
@@ -291,6 +292,29 @@ class ChatViewModel @Inject constructor(
 
     private val pendingQueue = ArrayDeque<QueuedMessage>()
 
+    /** Room ids of messages currently WAITING in the queue (not yet sent to
+     * the server). Each shows its own Stop square — cancelling one removes
+     * it from the queue and ticks it FAILED locally. */
+    private val _queuedIds = MutableStateFlow<Set<Long>>(emptySet())
+    val queuedIds: StateFlow<Set<Long>> = _queuedIds.asStateFlow()
+
+    /** Cancel ONE queued message (its Stop square): remove it from the FIFO
+     * and tick it FAILED locally — the server never sees it, nothing is
+     * lost, the remaining queue keeps draining normally. */
+    fun stopQueuedMessage(msgId: Long) {
+        val sid = _sessionId.value ?: return
+        pendingQueue.removeAll { it.userMsgId == msgId }
+        _queuedIds.value = _queuedIds.value - msgId
+        viewModelScope.launch {
+            try {
+                repository.markMessageFailed(msgId)
+                _messages.value = repository.resumeSession(sid)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { }
+        }
+    }
+
     /** Telegram INTERRUPT mode — the Stop button. Cancels the current run
      * (server saves whatever text arrived), finalizes the placeholder, and
      * clears the queue. Queued messages stay in the chat with SENDING ticks
@@ -308,6 +332,7 @@ class ChatViewModel @Inject constructor(
             // finalizes the placeholder with whatever text arrived.
             streamingJob?.cancel()
             pendingQueue.clear()
+            _queuedIds.value = emptySet()
             _isStreaming.value = false
             _streamingContent.value = ""
             _toolCalls.value = emptyList()
@@ -407,6 +432,9 @@ class ChatViewModel @Inject constructor(
                 // every message eventually gets its own complete response.
                 val next = pendingQueue.removeFirstOrNull()
                 if (next != null) {
+                    if (next.userMsgId != null) {
+                        _queuedIds.value = _queuedIds.value - next.userMsgId
+                    }
                     startStream(sid, next.query, next.attachmentUrl, next.attachType, next.multiAgent, next.replyTo, next.userMsgId)
                 }
             }
@@ -751,6 +779,7 @@ fun ChatScreen(
     val messages by vm.messages.collectAsState()
     val streamingContent by vm.streamingContent.collectAsState()
     val isStreaming by vm.isStreaming.collectAsState()
+    val queuedIds by vm.queuedIds.collectAsState()
     val connectionStatus by vm.connectionStatus.collectAsState()
     val toolCalls by vm.toolCalls.collectAsState()
     val errorMessage by vm.errorMessage.collectAsState()
@@ -1265,17 +1294,24 @@ fun ChatScreen(
                                 isFirstInGroup = isGroupStart,
                                 isLastInGroup = isGroupEnd,
                                 onStop = if (
-                                    isStreaming &&
                                     message.role == MessageRole.USER &&
-                                    // The REQUEST bubble: the newest user
-                                    // message in the chat while a stream is
-                                    // active. (Can't use the placeholder
-                                    // neighbor trick — the streaming bubble
-                                    // is FILTERED from the list while the
-                                    // agent is "thinking", content empty.)
-                                    messages.lastOrNull { it.role == MessageRole.USER }?.id == message.id
+                                    (
+                                        // The ACTIVE request: newest user
+                                        // message while a stream runs.
+                                        (isStreaming &&
+                                            messages.lastOrNull { it.role == MessageRole.USER }?.id == message.id) ||
+                                        // A QUEUED message: waiting in the
+                                        // FIFO — stop = remove from queue.
+                                        queuedIds.contains(message.id)
+                                        )
                                 ) {
-                                    { vm.stopStreaming() }
+                                    {
+                                        if (queuedIds.contains(message.id)) {
+                                            vm.stopQueuedMessage(message.id)
+                                        } else {
+                                            vm.stopStreaming()
+                                        }
+                                    }
                                 } else null,
                                 selectionMode = selectionMode,
                                 selected = message.id in selectedIds,

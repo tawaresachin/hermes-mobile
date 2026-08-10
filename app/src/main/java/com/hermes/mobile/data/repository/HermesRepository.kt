@@ -55,6 +55,12 @@ class HermesRepository @Inject constructor(
         messageDao.deleteMessage(msgId)
     }
 
+    /** Tick a single local message FAILED (a queued message cancelled via
+     * its Stop square — the server never saw it). */
+    suspend fun markMessageFailed(msgId: Long) {
+        messageDao.updateMessageStatus(msgId, MessageStatus.FAILED)
+    }
+
     /** Telegram-style reaction (👍) — stored locally per message. */
     suspend fun setReaction(messageId: Long, reaction: String?) {
         messageDao.updateReaction(messageId, reaction)
