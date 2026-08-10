@@ -2179,9 +2179,11 @@ fun MessageBubble(
                             )
                         }
                     }
-                    // Edit affordance for finished user messages — loads the
-                    // text back into the input to resend in the SAME session.
-                    if (onEdit != null && !isStreaming && isUser && displayContent.isNotBlank()) {
+                    // Actions row (Telegram-style, end-aligned): Edit (pencil)
+                    // and Stop (square) SIDE BY SIDE — icons only, no labels.
+                    val showEditAction = onEdit != null && !isStreaming && isUser && displayContent.isNotBlank()
+                    val showStopAction = onStop != null && isUser
+                    if (showEditAction || showStopAction) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2189,56 +2191,32 @@ fun MessageBubble(
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "Edit",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = textColor.copy(alpha = 0.6f)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            IconButton(
-                                onClick = onEdit,
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Edit,
-                                    contentDescription = "Edit message",
-                                    tint = textColor.copy(alpha = 0.6f),
-                                    modifier = Modifier.size(14.dp)
-                                )
+                            if (showEditAction) {
+                                IconButton(
+                                    onClick = onEdit,
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Edit,
+                                        contentDescription = "Edit message",
+                                        tint = textColor.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
                             }
-                        }
-                    }
-                    // Stop affordance on the REQUEST (user) bubble while its
-                    // response streams — same row where Edit sits, so the
-                    // action is exactly where the user's eye is (Telegram
-                    // interrupt: cancel the run, keep the partial reply).
-                    // NOTE: gate ONLY on onStop != null — the caller decides
-                    // (streaming + newer neighbor is the placeholder). The
-                    // bubble's own isStreaming flag is false for user rows.
-                    if (onStop != null && isUser) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 4.dp),
-                            horizontalArrangement = Arrangement.End,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Stop",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            IconButton(
-                                onClick = onStop,
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = "Stop generating",
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(14.dp)
-                                )
+                            if (showStopAction) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = onStop,
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Stop,
+                                        contentDescription = "Stop generating",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
                             }
                         }
                     }
