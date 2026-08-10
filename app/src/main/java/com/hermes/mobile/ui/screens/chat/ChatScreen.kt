@@ -1207,8 +1207,8 @@ fun ChatScreen(
                             // shows the animated "thinking…" subtitle
                             // (Telegram's top-bar placement). The list never
                             // shifts during streaming; tool cards remain.
-                            // The Stop chip is the Telegram INTERRUPT control
-                            // — cancels the run, keeps the partial response.
+                            // The Stop control lives in the composer slot
+                            // (send button → Stop while streaming).
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1216,29 +1216,6 @@ fun ChatScreen(
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
-                                Surface(
-                                    onClick = { vm.stopStreaming() },
-                                    shape = RoundedCornerShape(14.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Close,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp),
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            text = "Stop",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
                             }
                         }
                     }
@@ -1430,6 +1407,7 @@ fun ChatScreen(
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
             },
+            onStop = { vm.stopStreaming() },
             onEmoji = { emoji ->
                 inputText += emoji
                 vm.hideEmojiPicker()
@@ -2676,6 +2654,7 @@ fun InputBar(
     inputText: String,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
+    onStop: () -> Unit,
     onVoice: () -> Unit,
     onEmoji: (String) -> Unit,
     onAttach: () -> Unit,
@@ -2793,8 +2772,27 @@ fun InputBar(
                         )
                     }
 
-                    // ── 4. Mic / Send (alternate in the same slot — like Telegram) ──
+                    // ── 4. Mic / Send / Stop (alternate in the same slot — like Telegram) ──
+                    // Streaming → Stop (interrupt the run, keep partial).
                     // Empty input → mic; text/attachment present → send replaces it.
+                    if (isStreaming) {
+                        FilledIconButton(
+                            onClick = onStop,
+                            modifier = Modifier.size(40.dp),
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = Color.White
+                            ),
+                            enabled = true
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Stop",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    } else {
                     val hasContent = inputText.isNotBlank() || pendingAttachment != null
                     if (hasContent) {
                         FilledIconButton(
@@ -2830,6 +2828,7 @@ fun InputBar(
                                 modifier = Modifier.size(20.dp)
                             )
                         }
+                    }
                     }
             }
         }
