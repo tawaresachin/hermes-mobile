@@ -201,7 +201,23 @@ class HermesRepository @Inject constructor(
                 replyTo = replyTo,
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e  // cancelled send must not write a ghost error message
+            // Interrupted (Stop button / interrupt mode): the server saved
+            // the partial via its CancelledError path + push channel, but
+            // THIS placeholder row is still isStreaming=1 in Room. Finalize
+            // it with whatever text arrived (or drop it if nothing did) so
+            // no blank bubble survives. Then rethrow — cancellation must
+            // never write a ghost error message.
+            val partial = fullResponse.toString()
+            try {
+                if (partial.isBlank()) {
+                    messageDao.deleteMessage(msgId)
+                } else {
+                    messageDao.updateMessage(msgId, partial, false)
+                }
+            } catch (e2: kotlinx.coroutines.CancellationException) {
+                throw e2
+            } catch (_: Exception) { }
+            throw e
         } catch (e: Exception) {
             val errorMsg = e.message ?: ""
             // Transparent retry on 401 — don't save error, don't show in UI
@@ -315,9 +331,12 @@ class HermesRepository @Inject constructor(
             // (e.g. a superseded stream saved late) — never overwrite a
             // newer turn with it.
             if (ts > 0 && ts < localTail.timestamp) return false
-            if (localTail.role == MessageRole.ASSISTANT && localTail.isStreaming) {
-                // The stream died mid-answer — fill the placeholder with the
-                // server's complete response.
+            if (localTail.role == MessageRole.ASSISTANT) {
+                // Same turn (streaming placeholder OR already-finalized
+                // partial from an interrupt) — patch in place. Inserting
+                // would duplicate the bubble. The stream died mid-answer
+                // (or Stop was hit): this row holds the partial; replace
+                // it with the server's complete response.
                 messageDao.updateMessage(localTail.id, content, false)
             } else {
                 // Genuinely new server-side response (detached run / follow-up
@@ -365,6 +384,11 @@ class HermesRepository @Inject constructor(
         onFailure: (Throwable?) -> Unit
     ): okhttp3.sse.EventSource? {
         return apiService.subscribeSessionEvents(sessionId, onResponseReady, onFailure)
+    }
+
+    /** INTERRUPT the running agent (Telegram interrupt mode — Stop button). */
+    suspend fun cancelChat(sessionId: String): Boolean {
+        return apiService.cancelChat(sessionId)
     }
 
     /**

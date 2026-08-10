@@ -481,6 +481,28 @@ class HermesApiService @Inject constructor(
         }
     }
 
+    /** INTERRUPT the running agent (Telegram interrupt mode): the server
+     * cancels the agent task, saves the partial response, and closes the
+     * stream. The app's Stop button calls this while streaming. */
+    suspend fun cancelChat(sessionId: String): Boolean {
+        val baseUrl = config?.baseUrl ?: return false
+        return withContext(Dispatchers.IO) {
+            try {
+                val payload = JSONObject().apply {
+                    put("session_id", sessionId)
+                    put("query", "")
+                }
+                val request = Request.Builder()
+                    .url("$baseUrl/api/chat/cancel")
+                    .post(payload.toString().toRequestBody(jsonMediaType))
+                    .build()
+                client.newCall(request).execute().use { it.isSuccessful }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { false }
+        }
+    }
+
     // ─── Session status/source badges (server truth) ───
 
     /** Fetch the server's per-session status (idle/working/done/error) +

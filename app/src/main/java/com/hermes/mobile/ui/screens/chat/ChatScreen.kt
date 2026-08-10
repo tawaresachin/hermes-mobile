@@ -291,6 +291,32 @@ class ChatViewModel @Inject constructor(
 
     private val pendingQueue = ArrayDeque<QueuedMessage>()
 
+    /** Telegram INTERRUPT mode — the Stop button. Cancels the current run
+     * (server saves whatever text arrived), finalizes the placeholder, and
+     * clears the queue. Queued messages stay in the chat with SENDING ticks
+     * but do NOT auto-fire: the operator chose to stop, not to batch-send. */
+    fun stopStreaming() {
+        val sid = _sessionId.value ?: return
+        val gen = streamGeneration
+        viewModelScope.launch {
+            try {
+                repository.cancelChat(sid)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { }
+            // Cancel the local stream; the repo's sendMessage finally-path
+            // finalizes the placeholder with whatever text arrived.
+            streamingJob?.cancel()
+            pendingQueue.clear()
+            _isStreaming.value = false
+            _streamingContent.value = ""
+            _toolCalls.value = emptyList()
+            if (gen == streamGeneration) {
+                _connectionStatus.value = ConnectionStatus.CONNECTED
+            }
+        }
+    }
+
     private fun startStream(
         sid: String,
         query: String,
@@ -1181,6 +1207,8 @@ fun ChatScreen(
                             // shows the animated "thinking…" subtitle
                             // (Telegram's top-bar placement). The list never
                             // shifts during streaming; tool cards remain.
+                            // The Stop chip is the Telegram INTERRUPT control
+                            // — cancels the run, keeps the partial response.
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1188,6 +1216,29 @@ fun ChatScreen(
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 toolCalls.forEach { toolCall -> ToolCallCard(toolCall = toolCall) }
+                                Surface(
+                                    onClick = { vm.stopStreaming() },
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = "Stop",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
