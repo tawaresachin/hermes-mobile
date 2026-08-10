@@ -72,6 +72,25 @@ class HermesRepository @Inject constructor(
         sendMessage(sessionId = sessionId, query = content, onChunk = {})
     }
 
+    /** Strip session-upload URLs from displayed text. The attachment bubble
+     * (image preview / file row) replaces the URL — Telegram never shows raw
+     * media links. Applied at FINALIZE time (full text available) because
+     * streamed chunks split the URL across events, defeating per-chunk
+     * stripping on the server. */
+    private fun stripUploadUrls(sessionId: String, text: String): String {
+        if (text.isBlank()) return text
+        val ext = "(?:\\.png|\\.jpe?g|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.webm|\\.mov|\\.mkv" +
+            "|\\.mp3|\\.wav|\\.ogg|\\.m4a|\\.opus|\\.flac|\\.pdf|\\.zip|\\.docx?|\\.xlsx?" +
+            "|\\.pptx?|\\.txt|\\.md|\\.csv|\\.json|\\.log|\\.bin)"
+        val re = Regex("/uploads/" + java.util.regex.Pattern.quote(sessionId) + "/[^\\s)\\]]*?" + ext)
+        return text.replace(re, "").replace(Regex("\\s+"), " ").trim()
+    }
+
+    /** Finalize a streamed turn: strip upload URLs before persisting. */
+    private suspend fun finalizeMessage(msgId: Long, sessionId: String, content: String) {
+        messageDao.updateMessage(msgId, stripUploadUrls(sessionId, content), false)
+    }
+
     /** Insert the user's message locally (SENDING tick) WITHOUT starting a
      * stream. Used by the Telegram-style queue: when the agent is busy the
      * message shows immediately and its turn starts after the current
@@ -220,7 +239,7 @@ class HermesRepository @Inject constructor(
                 if (partial.isBlank()) {
                     messageDao.deleteMessage(msgId)
                 } else {
-                    messageDao.updateMessage(msgId, partial, false)
+                    finalizeMessage(msgId, sessionId, partial)
                 }
             } catch (e2: kotlinx.coroutines.CancellationException) {
                 throw e2
@@ -286,8 +305,9 @@ class HermesRepository @Inject constructor(
             }
         }
 
-        // Finalize message
-        messageDao.updateMessage(msgId, fullResponse.toString(), false)
+        // Finalize message (strip upload URLs — the attachment bubble
+        // replaces them, Telegram never shows raw media links)
+        finalizeMessage(msgId, sessionId, fullResponse.toString())
         sessionDao.incrementMessageCount(sessionId)
 
         // Tick → READ once the response COMPLETED. The first-text-chunk
@@ -337,7 +357,7 @@ class HermesRepository @Inject constructor(
         attachmentType: String = ""
     ): Boolean {
         try {
-            if (content.isBlank()) return false
+            if (content.isBlank() && attachmentUrl.isBlank()) return false
             val local = messageDao.getMessagesOnce(sessionId)
             if (local.isEmpty()) return false
             // Anchor to the newest ASSISTANT row — the active turn's bubble.
@@ -349,6 +369,7 @@ class HermesRepository @Inject constructor(
             // Stale-guard: the response is older than the turn bubble it
             // would patch (a superseded/late stream) — never overwrite.
             if (newestAssistant != null && ts > 0 && ts < newestAssistant.timestamp) return false
+            val attachName = attachmentUrl.substringAfterLast('/').takeIf { it.isNotBlank() }
             if (newestAssistant != null) {
                 // Same turn (streaming placeholder, finalized partial, or a
                 // completed bubble that the server re-delivered) — patch in
@@ -356,12 +377,13 @@ class HermesRepository @Inject constructor(
                 // Attachment fields ride along when the server attached a
                 // session upload (image preview / file row instead of a
                 // bare /uploads/... link in the text).
+                val cleanContent = stripUploadUrls(sessionId, content)
                 if (attachmentUrl.isNotBlank()) {
                     messageDao.updateMessageWithAttachment(
-                        newestAssistant.id, content, false, attachmentUrl, attachmentType
+                        newestAssistant.id, cleanContent, false, attachmentUrl, attachmentType, attachName
                     )
                 } else {
-                    messageDao.updateMessage(newestAssistant.id, content, false)
+                    messageDao.updateMessage(newestAssistant.id, cleanContent, false)
                 }
                 // Tick → READ. The STREAM path advances the request's tick
                 // on the first chunk; the PUSH/poll path (stream died,
@@ -382,9 +404,10 @@ class HermesRepository @Inject constructor(
                     Message(
                         sessionId = sessionId,
                         role = MessageRole.ASSISTANT,
-                        content = content,
+                        content = stripUploadUrls(sessionId, content),
                         attachmentUrl = attachmentUrl.ifBlank { null },
-                        attachmentType = attachmentType.ifBlank { null }
+                        attachmentType = attachmentType.ifBlank { null },
+                        attachmentName = attachName
                     )
                 )
             }

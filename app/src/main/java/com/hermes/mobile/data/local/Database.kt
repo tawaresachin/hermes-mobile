@@ -45,14 +45,16 @@ interface MessageDao {
 
     @Query(
         "UPDATE messages SET content = :content, isStreaming = :isStreaming, " +
-            "attachmentUrl = :attachmentUrl, attachmentType = :attachmentType WHERE id = :messageId"
+            "attachmentUrl = :attachmentUrl, attachmentType = :attachmentType, " +
+            "attachmentName = :attachmentName WHERE id = :messageId"
     )
     suspend fun updateMessageWithAttachment(
         messageId: Long,
         content: String,
         isStreaming: Boolean,
         attachmentUrl: String,
-        attachmentType: String
+        attachmentType: String,
+        attachmentName: String?
     )
 
     @Query("UPDATE messages SET status = :status WHERE id = :messageId")
