@@ -331,22 +331,36 @@ class HermesRepository @Inject constructor(
         try {
             if (content.isBlank()) return false
             val local = messageDao.getMessagesOnce(sessionId)
-            val localTail = local.lastOrNull() ?: return false
-            if (localTail.content == content) return false
-            // Stale-guard: the response is older than the newest local row
-            // (e.g. a superseded stream saved late) — never overwrite a
-            // newer turn with it.
-            if (ts > 0 && ts < localTail.timestamp) return false
-            if (localTail.role == MessageRole.ASSISTANT) {
-                // Same turn (streaming placeholder OR already-finalized
-                // partial from an interrupt) — patch in place. Inserting
-                // would duplicate the bubble. The stream died mid-answer
-                // (or Stop was hit): this row holds the partial; replace
-                // it with the server's complete response.
-                messageDao.updateMessage(localTail.id, content, false)
+            if (local.isEmpty()) return false
+            // Anchor to the newest ASSISTANT row — the active turn's bubble.
+            // (NOT the newest row overall: a queued user message may sit
+            // above it locally while this response was still in flight —
+            // inserting after THAT would misalign the conversation, e.g.
+            // the answer to "how are you?" landing after "model?"/"date?".)
+            val newestAssistant = local.lastOrNull { it.role == MessageRole.ASSISTANT }
+            // Stale-guard: the response is older than the turn bubble it
+            // would patch (a superseded/late stream) — never overwrite.
+            if (newestAssistant != null && ts > 0 && ts < newestAssistant.timestamp) return false
+            if (newestAssistant != null) {
+                // Same turn (streaming placeholder, finalized partial, or a
+                // completed bubble that the server re-delivered) — patch in
+                // place. Inserting would duplicate or misalign the bubble.
+                messageDao.updateMessage(newestAssistant.id, content, false)
+                // Tick → READ. The STREAM path advances the request's tick
+                // on the first chunk; the PUSH/poll path (stream died,
+                // response delivered later) must do the same — otherwise
+                // the request stays on single ✓ forever even though its
+                // answer landed. Tick the user row that owns this turn
+                // (the newest user message NOT above the patched bubble).
+                local.lastOrNull {
+                    it.role == MessageRole.USER && it.timestamp <= newestAssistant.timestamp
+                }?.let { user ->
+                    messageDao.updateMessageStatus(user.id, MessageStatus.READ)
+                }
             } else {
-                // Genuinely new server-side response (detached run / follow-up
-                // answered after the client disconnected) — append it.
+                // No assistant row at all — genuinely new server-side
+                // response (detached run answered after the client
+                // disconnected) — append it.
                 messageDao.insertMessage(
                     Message(
                         sessionId = sessionId,
