@@ -141,7 +141,9 @@ class HermesRepository @Inject constructor(
         // Foreground watcher: keeps the process alive while generating and
         // notifies when the answer lands while the app is backgrounded.
         // Start on EVERY attempt (idempotent), stop in the finally below.
-        com.hermes.mobile.notifications.ResponseWatcherService.start(context, sessionId)
+        // The query is passed so the notification shows the message stack
+        // (Telegram-style: user bubble + Hermes reply under the logo).
+        com.hermes.mobile.notifications.ResponseWatcherService.start(context, sessionId, query)
         try {
             try {
                 apiService.streamChat(
@@ -305,7 +307,7 @@ class HermesRepository @Inject constructor(
             // Success — ping the user if the app is backgrounded.
             if (!fullResponse.startsWith("⚠️ Connection error")) {
                 com.hermes.mobile.notifications.ResponseWatcherService.notifyReady(
-                    context, sessionId, fullResponse.toString()
+                    context, sessionId, fullResponse.toString(), query
                 )
             }
         } finally {
