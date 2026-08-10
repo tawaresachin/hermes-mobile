@@ -201,13 +201,16 @@ class HermesRepository @Inject constructor(
                 onAttachment = { url, type ->
                     // In-stream attachment (Telegram: media+caption arrive
                     // together) — apply the image/file to THIS bubble now.
-                    val clean = stripUploadUrls(sessionId, url)
-                    if (clean.isNotBlank() && msgId != null) {
+                    // NOTE: store the URL AS-IS (relative /uploads/... path).
+                    // stripUploadUrls strips upload paths from TEXT content —
+                    // applying it to the URL itself would blank it out and
+                    // the bubble would never render (zero /uploads GETs).
+                    if (url.isNotBlank() && msgId != null) {
                         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                             try {
                                 messageDao.updateMessageWithAttachment(
-                                    msgId, fullResponse.toString(), true, clean, type,
-                                    clean.substringAfterLast('/').takeIf { it.isNotBlank() }
+                                    msgId, fullResponse.toString(), true, url, type,
+                                    url.substringAfterLast('/').takeIf { it.isNotBlank() }
                                 )
                             } catch (e: kotlinx.coroutines.CancellationException) {
                                 throw e
