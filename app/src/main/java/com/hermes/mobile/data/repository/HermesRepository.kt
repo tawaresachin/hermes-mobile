@@ -362,6 +362,40 @@ class HermesRepository @Inject constructor(
         return messageDao.getMessagesOnce(sessionId)
     }
 
+    /** Backfill attachment fields from the server onto local assistant rows
+     * that are MISSING them (rows created before in-stream attachments, or
+     * after a client update). Telegram keeps media on every bubble forever —
+     * a reopen must show it. Matches by content; only patches rows whose
+     * attachment fields are empty. Best-effort; never throws. */
+    suspend fun backfillAttachments(sessionId: String) {
+        try {
+            val serverMsgs = apiService.fetchSessionMessages(sessionId) ?: return
+            val local = messageDao.getMessagesOnce(sessionId)
+            if (local.isEmpty()) return
+            for (sm in serverMsgs) {
+                if (sm.optString("role") != "assistant") continue
+                val url = sm.optString("attachment_url", "")
+                if (url.isBlank()) continue
+                val type = sm.optString("attachment_type", "")
+                val content = sm.optString("content", "")
+                // Find the matching local row: same content, no attachment yet.
+                val target = local.lastOrNull {
+                    it.role == MessageRole.ASSISTANT &&
+                        it.attachmentUrl.isNullOrBlank() &&
+                        it.content == content
+                } ?: continue
+                val name = url.substringAfterLast('/').takeIf { it.isNotBlank() }
+                messageDao.updateMessageWithAttachment(
+                    target.id, content, false, url, type, name
+                )
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Best-effort — reopening must never fail because of this.
+        }
+    }
+
     /** Apply a server response to the local chat (shared by the push
      * subscription and the catch-up poll). Fills a streaming placeholder
      * or inserts the missing assistant response. Idempotent: skips when

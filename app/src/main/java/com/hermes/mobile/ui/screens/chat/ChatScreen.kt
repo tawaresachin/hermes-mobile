@@ -226,6 +226,12 @@ class ChatViewModel @Inject constructor(
             // Safety net: if the LAST response was lost (stream died while
             // the user was away), recover it from the server.
             repository.repairBlankAssistantResponse(sessionId)
+            // Backfill attachment fields from the server onto local rows
+            // created before in-stream attachments — Telegram keeps media
+            // on every bubble forever; reopening must show it.
+            repository.backfillAttachments(sessionId)
+            // Re-read so backfilled bubbles render without a manual refresh.
+            _messages.value = repository.resumeSession(sessionId)
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Legitimate cancellation when scope is torn down — suppress
         } catch (e: Exception) {
