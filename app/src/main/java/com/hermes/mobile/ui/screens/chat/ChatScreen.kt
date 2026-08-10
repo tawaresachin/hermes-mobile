@@ -1264,6 +1264,16 @@ fun ChatScreen(
                                 baseUrl = vm.getBaseUrl(),
                                 isFirstInGroup = isGroupStart,
                                 isLastInGroup = isGroupEnd,
+                                onStop = if (
+                                    isStreaming &&
+                                    message.role == MessageRole.USER &&
+                                    // The REQUEST bubble: the newer neighbor
+                                    // (index-1, below) is the streaming
+                                    // assistant placeholder answering it.
+                                    displayMessages.getOrNull(index - 1)?.isStreaming == true
+                                ) {
+                                    { vm.stopStreaming() }
+                                } else null,
                                 selectionMode = selectionMode,
                                 selected = message.id in selectedIds,
                                 onToggleSelect = if (selectionMode) {
@@ -1407,7 +1417,6 @@ fun ChatScreen(
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
             },
-            onStop = { vm.stopStreaming() },
             onEmoji = { emoji ->
                 inputText += emoji
                 vm.hideEmojiPicker()
@@ -1942,6 +1951,7 @@ fun MessageBubble(
     isStreaming: Boolean,
     baseUrl: String = "",
     onEdit: (() -> Unit)? = null,
+    onStop: (() -> Unit)? = null,
     onReply: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
@@ -2190,6 +2200,37 @@ fun MessageBubble(
                                     imageVector = Icons.Filled.Edit,
                                     contentDescription = "Edit message",
                                     tint = textColor.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                    }
+                    // Stop affordance on the REQUEST (user) bubble while its
+                    // response streams — same row where Edit sits, so the
+                    // action is exactly where the user's eye is (Telegram
+                    // interrupt: cancel the run, keep the partial reply).
+                    if (onStop != null && isStreaming && isUser) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Stop",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            IconButton(
+                                onClick = onStop,
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Stop generating",
+                                    tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(14.dp)
                                 )
                             }
@@ -2654,7 +2695,6 @@ fun InputBar(
     inputText: String,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
-    onStop: () -> Unit,
     onVoice: () -> Unit,
     onEmoji: (String) -> Unit,
     onAttach: () -> Unit,
@@ -2772,27 +2812,8 @@ fun InputBar(
                         )
                     }
 
-                    // ── 4. Mic / Send / Stop (alternate in the same slot — like Telegram) ──
-                    // Streaming → Stop (interrupt the run, keep partial).
+                    // ── 4. Mic / Send (alternate in the same slot — like Telegram) ──
                     // Empty input → mic; text/attachment present → send replaces it.
-                    if (isStreaming) {
-                        FilledIconButton(
-                            onClick = onStop,
-                            modifier = Modifier.size(40.dp),
-                            shape = CircleShape,
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.error,
-                                contentColor = Color.White
-                            ),
-                            enabled = true
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Close,
-                                contentDescription = "Stop",
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    } else {
                     val hasContent = inputText.isNotBlank() || pendingAttachment != null
                     if (hasContent) {
                         FilledIconButton(
@@ -2828,7 +2849,6 @@ fun InputBar(
                                 modifier = Modifier.size(20.dp)
                             )
                         }
-                    }
                     }
             }
         }
