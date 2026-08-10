@@ -139,7 +139,10 @@ class ResponseWatcherService : Service() {
             // Telegram: the accent color tints the small icon + time.
             .setColor(0xFF0088CC.toInt())
             .setContentTitle("Hermes")
-            .setContentText(if (currentQuery.isNotBlank()) currentQuery else "is typing…")
+            // Collapsed summary MUST show the typing state (Telegram shows
+            // "Hermes: is typing…" in the shade) — NOT the user's own
+            // message, which made the thinking indicator disappear.
+            .setContentText("is typing…")
             .setStyle(style)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
