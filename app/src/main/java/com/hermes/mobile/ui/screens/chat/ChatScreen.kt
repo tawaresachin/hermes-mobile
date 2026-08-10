@@ -1267,10 +1267,13 @@ fun ChatScreen(
                                 onStop = if (
                                     isStreaming &&
                                     message.role == MessageRole.USER &&
-                                    // The REQUEST bubble: the newer neighbor
-                                    // (index-1, below) is the streaming
-                                    // assistant placeholder answering it.
-                                    displayMessages.getOrNull(index - 1)?.isStreaming == true
+                                    // The REQUEST bubble: the newest user
+                                    // message in the chat while a stream is
+                                    // active. (Can't use the placeholder
+                                    // neighbor trick — the streaming bubble
+                                    // is FILTERED from the list while the
+                                    // agent is "thinking", content empty.)
+                                    messages.lastOrNull { it.role == MessageRole.USER }?.id == message.id
                                 ) {
                                     { vm.stopStreaming() }
                                 } else null,
@@ -2209,7 +2212,10 @@ fun MessageBubble(
                     // response streams — same row where Edit sits, so the
                     // action is exactly where the user's eye is (Telegram
                     // interrupt: cancel the run, keep the partial reply).
-                    if (onStop != null && isStreaming && isUser) {
+                    // NOTE: gate ONLY on onStop != null — the caller decides
+                    // (streaming + newer neighbor is the placeholder). The
+                    // bubble's own isStreaming flag is false for user rows.
+                    if (onStop != null && isUser) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
