@@ -681,10 +681,91 @@ class ChatViewModel @Inject constructor(
         }
 
         // ── Telegram-style message actions ──
+        // Snackbar + Undo — matches session delete UX. A long-press menu
+        // or left-swipe delete is destructive, so the row comes back when
+        // the user taps Undo (exact same Message, same id via REPLACE).
+        private val _lastDeletedMessage = MutableStateFlow<Message?>(null)
+        val lastDeletedMessage: StateFlow<Message?> = _lastDeletedMessage.asStateFlow()
+
         fun deleteMessage(message: Message) {
             viewModelScope.launch {
                 repository.deleteMessage(message.sessionId, message.id)
                 _messages.value = _messages.value.filterNot { it.id == message.id }
+                _lastDeletedMessage.value = message
+            }
+        }
+
+        fun restoreLastDeletedMessage() {
+            val msg = _lastDeletedMessage.value ?: return
+            _lastDeletedMessage.value = null
+            viewModelScope.launch {
+                repository.restoreMessage(msg)
+                _messages.value = repository.resumeSession(msg.sessionId).sortedBy { it.timestamp }
+            }
+        }
+
+        /** Telegram-style tap-to-open: download the attachment bytes (Bearer
+         * attached), save to the device (MediaStore gallery for images,
+         * Downloads otherwise), then launch the system viewer. */
+        fun openAttachment(context: android.content.Context, message: Message) {
+            val url = message.attachmentUrl ?: return
+            viewModelScope.launch {
+                val bytes = repository.downloadAttachment(url) ?: run {
+                    _errorMessage.value = "Download failed"
+                    return@launch
+                }
+                val name = message.attachmentName
+                    ?: url.substringAfterLast('/').ifBlank { "attachment" }
+                val mime = message.attachmentType?.let { t ->
+                    if (t.startsWith("image")) "image/*" else t
+                } ?: "*/*"
+                try {
+                    // ── Save to the device (MediaStore — API 29+ friendly) ──
+                    val values = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
+                    }
+                    val collection = if (message.attachmentType?.startsWith("image") == true)
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    else
+                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                    val uri = context.contentResolver.insert(collection, values)
+                    if (uri != null) {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(bytes)
+                        }
+                        // ── Open with the system viewer ──
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, mime)
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        runCatching { context.startActivity(intent) }
+                            .onFailure { _errorMessage.value = "Saved — open the file from Downloads" }
+                        return@launch
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // MediaStore insert failed — fall back to app cache + FileProvider
+                }
+                // ── Fallback: cache file + FileProvider share intent ──
+                try {
+                    val dir = java.io.File(context.cacheDir, "attachments").apply { mkdirs() }
+                    val f = java.io.File(dir, name)
+                    f.writeBytes(bytes)
+                    val fpUri = androidx.core.content.FileProvider.getUriForFile(
+                        context, "${context.packageName}.fileprovider", f)
+                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                        setDataAndType(fpUri, mime)
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    runCatching { context.startActivity(intent) }
+                        .onFailure { _errorMessage.value = "Saved to cache" }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    _errorMessage.value = "Could not open attachment"
+                }
             }
         }
 
@@ -812,6 +893,22 @@ fun ChatScreen(
     val currentModel by vm.currentModel.collectAsState()
     val availableModels by vm.availableModels.collectAsState()
     val modelsLoading by vm.modelsLoading.collectAsState()
+
+    // ── Telegram-style delete snackbar (same UX as session delete:
+    //    destructive actions get an Undo, never instant removal) ──
+    val snackbarHostState = remember { SnackbarHostState() }
+    val lastDeletedMsg by vm.lastDeletedMessage.collectAsState()
+    LaunchedEffect(lastDeletedMsg?.id) {
+        val msg = lastDeletedMsg ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = "Message deleted",
+            actionLabel = "Undo",
+            duration = SnackbarDuration.Short
+        )
+        if (result == SnackbarResult.ActionPerformed) {
+            vm.restoreLastDeletedMessage()
+        }
+    }
 
     var inputText by remember { mutableStateOf("") }
     var pendingAttachment by remember { mutableStateOf<PendingAttachment?>(null) }
@@ -1367,7 +1464,14 @@ fun ChatScreen(
                                 onReact = if (isStreamingThis || message.role == MessageRole.USER) null else {
                                     { vm.toggleReaction(message) }
                                 },
-                                highlighted = message.id == highlightId
+                                highlighted = message.id == highlightId,
+                                onAttachmentTap = { msg ->
+                                    // Telegram: tap attachment bubble = download
+                                    // + open (image → gallery, file → viewer).
+                                    scope.launch {
+                                        vm.openAttachment(context, msg)
+                                    }
+                                }
                             )
                         } // Column (date pill + bubble) — reverseLayout, no flip
                     }
@@ -1428,6 +1532,15 @@ fun ChatScreen(
                     }
                 }
             }
+        }
+
+        // ── Telegram-style delete confirmation (Undo snackbar) ──
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+        ) {
+            SnackbarHost(hostState = snackbarHostState)
         }
 
         // ── Telegram-style reply bar (quote above the input) ──
@@ -2024,7 +2137,9 @@ fun MessageBubble(
     isLastInGroup: Boolean = true,
     selectionMode: Boolean = false,
     selected: Boolean = false,
-    onToggleSelect: (() -> Unit)? = null
+    onToggleSelect: (() -> Unit)? = null,
+    // Telegram: tap an attachment bubble to open/save the file
+    onAttachmentTap: ((Message) -> Unit)? = null
 ) {
     val isUser = message.role == MessageRole.USER
     val isDark = LocalDarkTheme.current
@@ -2077,17 +2192,18 @@ fun MessageBubble(
                 )
                 .pointerInput(onReply, onDelete, isStreaming, selectionMode) {
                     if (isStreaming || selectionMode) return@pointerInput
-                    // Telegram gestures: swipe RIGHT = reply, swipe LEFT =
-                    // delete. Accumulate the drag (per-event deltas) and
-                    // fire once past 90px; vertical scroll is untouched.
+                    // Telegram gestures: swipe LEFT = reply (hint_swipe_reply),
+                    // swipe RIGHT = delete. Accumulate the drag (per-event
+                    // deltas) and fire once past 90px; vertical scroll is
+                    // untouched.
                     var acc = 0f
                     detectHorizontalDragGestures { change, dragAmount ->
                         change.consume()
                         acc += dragAmount
-                        if (acc > 90f && onReply != null) {
+                        if (acc < -90f && onReply != null) {
                             onReply()
                             acc = 0f
-                        } else if (acc < -90f && onDelete != null) {
+                        } else if (acc > 90f && onDelete != null) {
                             onDelete()
                             acc = 0f
                         }
@@ -2186,10 +2302,14 @@ fun MessageBubble(
                         AsyncImage(
                             model = absoluteImageUrl,
                             contentDescription = message.attachmentName ?: "Image",
+                            // Telegram: tap a media bubble = open/save it
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp)
-                                .clip(RoundedCornerShape(8.dp)),
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(enabled = !isStreaming) {
+                                    onAttachmentTap?.invoke(message)
+                                },
                             contentScale = ContentScale.FillWidth
                         )
                     }
@@ -2197,7 +2317,8 @@ fun MessageBubble(
                     if (message.attachmentUrl != null && (message.attachmentType == null || !message.attachmentType!!.startsWith("image"))) {
                         FileAttachmentRow(
                             name = message.attachmentName ?: message.attachmentUrl ?: "File",
-                            modifier = Modifier.padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp)
+                            modifier = Modifier.padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp),
+                            onClick = { onAttachmentTap?.invoke(message) }
                         )
                     }
                     // ── Text content ──
@@ -2332,12 +2453,17 @@ fun MessageBubble(
 
 // ── File attachment row ──
 @Composable
-fun FileAttachmentRow(name: String, modifier: Modifier = Modifier) {
+fun FileAttachmentRow(
+    name: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {}
+) {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .clickable(onClick = onClick)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2355,6 +2481,13 @@ fun FileAttachmentRow(name: String, modifier: Modifier = Modifier) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
+        )
+        // Telegram: download affordance on every file bubble
+        Icon(
+            imageVector = Icons.Filled.Download,
+            contentDescription = "Download",
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.primary
         )
     }
 }

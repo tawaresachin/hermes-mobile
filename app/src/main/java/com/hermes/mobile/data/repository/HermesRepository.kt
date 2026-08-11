@@ -55,6 +55,12 @@ class HermesRepository @Inject constructor(
         messageDao.deleteMessage(msgId)
     }
 
+    /** Restore a message after an Undo — re-insert the exact row (same id
+     * via REPLACE), keeping the conversation position intact. */
+    suspend fun restoreMessage(message: Message) {
+        messageDao.insertMessage(message)  // REPLACE on same primary key
+    }
+
     /** Tick a single local message FAILED (a queued message cancelled via
      * its Stop square — the server never saw it). */
     suspend fun markMessageFailed(msgId: Long) {
@@ -601,6 +607,12 @@ class HermesRepository @Inject constructor(
 
     suspend fun uploadFile(file: java.io.File, fileName: String, mimeType: String): String? {
         return apiService.uploadFile(file, fileName, mimeType)
+    }
+
+    /** Telegram-style: tap a media/file bubble → download the attachment
+     * bytes (Bearer attached automatically) so the UI can save/open it. */
+    suspend fun downloadAttachment(relUrl: String): ByteArray? {
+        return apiService.downloadAttachment(relUrl)
     }
 
     /** Upload the on-device diag log to the bridge (stored under STORE_PATH/logs/). */

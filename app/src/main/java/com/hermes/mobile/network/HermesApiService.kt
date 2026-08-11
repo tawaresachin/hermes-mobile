@@ -797,4 +797,25 @@ class HermesApiService @Inject constructor(
             }
         }
     }
+
+    /** Download a session attachment (e.g. /uploads/...) as raw bytes.
+     * Telegram-style: tapping a media/file bubble downloads it — the same
+     * AuthInterceptor attaches the Bearer token automatically. Returns null
+     * on any failure. */
+    suspend fun downloadAttachment(relUrl: String): ByteArray? {
+        val baseUrl = config?.baseUrl ?: return null
+        val url = if (relUrl.startsWith("http")) relUrl else baseUrl.trimEnd('/') + relUrl
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder().url(url).get().build()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) response.body?.bytes() else null
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
 }
