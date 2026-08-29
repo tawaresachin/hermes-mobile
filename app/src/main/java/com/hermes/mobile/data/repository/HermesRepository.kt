@@ -8,6 +8,7 @@ import com.hermes.mobile.network.HermesApiService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.UUID
 import javax.inject.Inject
@@ -53,6 +54,11 @@ class HermesRepository @Inject constructor(
     /** Telegram-style per-message delete (local history only). */
     suspend fun deleteMessage(sessionId: String, msgId: Long) {
         messageDao.deleteMessage(msgId)
+    }
+
+    /** Edit a user message (update content + editedAt timestamp). */
+    suspend fun editMessage(messageId: Long, newContent: String) {
+        messageDao.updateMessageEdit(messageId, newContent, System.currentTimeMillis())
     }
 
     /** Restore a message after an Undo — re-insert the exact row (same id
@@ -140,6 +146,7 @@ class HermesRepository @Inject constructor(
         // Pre-inserted row (queued messages) — reuse it for the tick chain
         // instead of creating a duplicate user message.
         userMsgId: Long? = null,
+        model: String? = null,
     ): String {
         // Save user message ONLY on first attempt (retries must not duplicate it)
         var userMsgIdFinal: Long? = userMsgId
@@ -175,6 +182,7 @@ class HermesRepository @Inject constructor(
                 apiService.streamChat(
                 query = query,
                 sessionId = sessionId,
+                model = model,
                 onOpen = {
                     // Server accepted + opened the stream → SENT.
                     if (userMsgIdFinal != null) {
@@ -720,5 +728,32 @@ class HermesRepository @Inject constructor(
     /** Whisper STT via the bridge (null → caller falls back to system). */
     suspend fun transcribeAudio(wav: ByteArray, lang: String? = null): String? {
         return apiService.transcribeAudio(wav, lang)
+    }
+
+    // ─── Usage Stats ───
+
+    data class UsageStats(
+        val sessionsCount: Int,
+        val messagesCount: Int,
+        val tokensUsed: Long
+    )
+
+    suspend fun getUsageStats(): UsageStats {
+        return try {
+            val sessions = sessionDao.getAllSessions().first()
+            val sessionsCount = sessions.size
+            var messagesCount = 0
+            var tokensUsed = 0L
+            for (session in sessions) {
+                val msgs = messageDao.getMessagesOnce(session.id)
+                messagesCount += msgs.size
+                for (msg in msgs) {
+                    if (msg.tokens > 0) tokensUsed += msg.tokens
+                }
+            }
+            UsageStats(sessionsCount, messagesCount, tokensUsed)
+        } catch (_: Exception) {
+            UsageStats(0, 0, 0)
+        }
     }
 }

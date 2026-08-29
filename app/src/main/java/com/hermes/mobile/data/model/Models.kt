@@ -32,7 +32,11 @@ data class Message(
     // Telegram-style reaction (👍) — stored locally per message.
     val reaction: String? = null,
     // Telegram-style delivery tick (user messages only; null = SENT).
-    val status: MessageStatus? = null
+    val status: MessageStatus? = null,
+    // When this message was last edited (0 = never).
+    val editedAt: Long = 0,
+    // Token count for this message (for usage stats).
+    val tokens: Long = 0
 )
 
 // ─── Session Models ───

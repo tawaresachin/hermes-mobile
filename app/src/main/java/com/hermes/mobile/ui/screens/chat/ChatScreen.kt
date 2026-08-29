@@ -142,6 +142,13 @@ class ChatViewModel @Inject constructor(
     private val _modelsLoading = MutableStateFlow(false)
     val modelsLoading: StateFlow<Boolean> = _modelsLoading.asStateFlow()
 
+    // Current model name + provider for header display
+    private val _selectedModelName = MutableStateFlow("AI Assistant")
+    val selectedModelName: StateFlow<String> = _selectedModelName.asStateFlow()
+
+    private val _selectedModelProvider = MutableStateFlow("")
+    val selectedModelProvider: StateFlow<String> = _selectedModelProvider.asStateFlow()
+
     // ── Emoji picker ──
     var showEmojiPicker = MutableStateFlow(false)
         private set
@@ -261,6 +268,7 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, multiAgent: Boolean = false, replyTo: Message? = null) {
         val sid = _sessionId.value ?: return
+        val model = _currentModel.value
         // TELEGRAM QUEUE MODEL: one message → ONE complete response, and
         // NO QUERY IS EVER DISCARDED. If the agent is already working, the
         // new message is saved locally + queued; it gets its own turn the
@@ -284,7 +292,7 @@ class ChatViewModel @Inject constructor(
             }
             return
         }
-        startStream(sid, query, attachmentUrl, attachType, multiAgent, replyTo, null)
+        startStream(sid, query, attachmentUrl, attachType, multiAgent, replyTo, null, model)
     }
 
     private data class QueuedMessage(
@@ -355,7 +363,8 @@ class ChatViewModel @Inject constructor(
         attachType: String?,
         multiAgent: Boolean,
         replyTo: Message?,
-        userMsgId: Long?
+        userMsgId: Long?,
+        model: String? = null,
     ) {
         val gen = ++streamGeneration
         _isStreaming.value = true
@@ -378,6 +387,7 @@ class ChatViewModel @Inject constructor(
                     attachType = attachType ?: "",
                     multiAgent = multiAgent,
                     replyTo = replyTo?.content,
+                    model = model ?: _currentModel.value,
                     onChunk = { chunk ->
                         if (gen == streamGeneration) {
                             streamBuilder.append(chunk)
@@ -457,7 +467,7 @@ class ChatViewModel @Inject constructor(
                     if (next.userMsgId != null) {
                         _queuedIds.value = _queuedIds.value - next.userMsgId
                     }
-                    startStream(sid, next.query, next.attachmentUrl, next.attachType, next.multiAgent, next.replyTo, next.userMsgId)
+                    startStream(sid, next.query, next.attachmentUrl, next.attachType, next.multiAgent, next.replyTo, next.userMsgId, _currentModel.value)
                 }
             }
         }
@@ -591,6 +601,11 @@ class ChatViewModel @Inject constructor(
                 if (response != null) {
                     _availableModels.value = response.models
                     _currentModel.value = response.current
+                    // Find model name and provider for header display
+                    val currentId = response.current
+                    val found = response.models.firstOrNull { it.id == currentId }
+                    _selectedModelName.value = found?.name ?: currentId.substringAfterLast("/").take(20)
+                    _selectedModelProvider.value = found?.provider ?: ""
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -605,6 +620,10 @@ class ChatViewModel @Inject constructor(
             val success = repository.switchModel(sid, modelId, global)
             if (success) {
                 _currentModel.value = modelId
+                // Update display name
+                val found = _availableModels.value.firstOrNull { it.id == modelId }
+                _selectedModelName.value = found?.name ?: modelId.substringAfterLast("/").take(20)
+                _selectedModelProvider.value = found?.provider ?: ""
                 if (global) {
                     // Reload to show the new global default
                     loadModels()
@@ -692,6 +711,17 @@ class ChatViewModel @Inject constructor(
                 repository.deleteMessage(message.sessionId, message.id)
                 _messages.value = _messages.value.filterNot { it.id == message.id }
                 _lastDeletedMessage.value = message
+            }
+        }
+
+        /** Edit a user message (local only). */
+        fun editMessage(message: Message, newContent: String) {
+            viewModelScope.launch {
+                repository.editMessage(message.id, newContent)
+                _messages.value = _messages.value.map { msg ->
+                    if (msg.id == message.id) msg.copy(content = newContent, editedAt = System.currentTimeMillis())
+                    else msg
+                }
             }
         }
 
@@ -893,6 +923,8 @@ fun ChatScreen(
     val currentModel by vm.currentModel.collectAsState()
     val availableModels by vm.availableModels.collectAsState()
     val modelsLoading by vm.modelsLoading.collectAsState()
+    val selectedModelName by vm.selectedModelName.collectAsState()
+    val selectedModelProvider by vm.selectedModelProvider.collectAsState()
 
     // ── Telegram-style delete snackbar (same UX as session delete:
     //    destructive actions get an Undo, never instant removal) ──
@@ -936,6 +968,8 @@ fun ChatScreen(
     // ── Telegram-style interactions ──
     var pendingReply by remember { mutableStateOf<Message?>(null) }
     var menuTarget by remember { mutableStateOf<Message?>(null) }
+    // ── Edit mode: editing a user message ──
+    var editingMessageId by remember { mutableStateOf<Long?>(null) }
     // ── Telegram-style selection mode (batch copy/delete) ──
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<Long>()) }
@@ -948,6 +982,9 @@ fun ChatScreen(
     // ── Search jump-to + highlight ──
     var highlightId by remember { mutableStateOf<Long?>(null) }
     var searchIndex by remember { mutableStateOf(0) }
+    // ── Full-screen image viewer (Telegram style) ──
+    var showImageViewer by remember { mutableStateOf<String?>(null) }
+    var imageViewerUrl by remember { mutableStateOf<String?>(null) }
 
     // ── Gallery picker (Telegram-style attach sheet) ──
     val galleryLauncher = rememberLauncherForActivityResult(
@@ -1119,9 +1156,8 @@ fun ChatScreen(
                             // an animated "thinking…" instead of the model.
                             text = if (isStreaming && streamingContent.isBlank())
                                 ThinkingSubtitle()
-                            else if (currentModel.isNotBlank())
-                                currentModel.substringAfterLast("/").take(20)
-                            else "AI Assistant",
+                            else
+                                selectedModelName,
                             style = MaterialTheme.typography.bodySmall,
                             color = HermesPrimary,
                             maxLines = 1,
@@ -1414,6 +1450,10 @@ fun ChatScreen(
                                 baseUrl = vm.getBaseUrl(),
                                 isFirstInGroup = isGroupStart,
                                 isLastInGroup = isGroupEnd,
+                                onImageTap = { url ->
+                                    imageViewerUrl = url
+                                    showImageViewer = url
+                                },
                                 onStop = if (
                                     message.role == MessageRole.USER &&
                                     (
@@ -1444,6 +1484,8 @@ fun ChatScreen(
                                 } else null,
                                 onEdit = if (message.role == MessageRole.USER && !isStreamingThis) {
                                     {
+                                        // Enter edit mode: populate input with message content
+                                        editingMessageId = message.id
                                         inputText = message.content
                                         showSearch = false
                                         searchQuery = ""
@@ -1472,6 +1514,13 @@ fun ChatScreen(
                                         vm.openAttachment(context, msg)
                                     }
                                 }
+                            )
+                            // Full-width table overlay for assistant messages
+                            FullWidthTableOverlay(
+                                message = message,
+                                displayContent = displayContent,
+                                isStreaming = isStreamingThis,
+                                isDark = LocalDarkTheme.current
                             )
                         } // Column (date pill + bubble) — reverseLayout, no flip
                     }
@@ -1549,6 +1598,28 @@ fun ChatScreen(
                 message = replyMsg,
                 onCancel = { pendingReply = null }
             )
+        }
+
+        // ── Edit mode bar ──
+        editingMessageId?.let { msgId ->
+            val editMsg = messages.find { it.id == msgId }
+            if (editMsg != null) {
+                EditBar(
+                    message = editMsg,
+                    onCancel = { editingMessageId = null; inputText = "" },
+                    onSend = {
+                        val trimmed = inputText.trim()
+                        if (trimmed.isNotBlank()) {
+                            vm.editMessage(editMsg, trimmed)
+                            editingMessageId = null
+                            inputText = ""
+                        }
+                    }
+                )
+            } else {
+                editingMessageId = null
+                inputText = ""
+            }
         }
 
         InputBar(
@@ -1658,6 +1729,14 @@ fun ChatScreen(
                     forwardTarget = null
                 },
                 onDismiss = { forwardTarget = null }
+            )
+        }
+
+        // ── Full-screen image viewer (Telegram style) ──
+        if (showImageViewer != null && imageViewerUrl != null) {
+            ImageViewerDialog(
+                url = imageViewerUrl!!,
+                onDismiss = { showImageViewer = null; imageViewerUrl = null }
             )
         }
 
@@ -1978,6 +2057,59 @@ private fun SuggestionChip(onClick: () -> Unit, label: String) {
 
 // ── Telegram-style date separators ──
 
+/** Telegram-style edit bar (above input when editing a message). */
+@Composable
+private fun EditBar(message: Message, onCancel: () -> Unit, onSend: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .width(4.dp)
+                .height(32.dp)
+                .background(HermesPrimary, RoundedCornerShape(2.dp))
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Editing your message",
+                style = MaterialTheme.typography.labelSmall,
+                color = HermesPrimary,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = "Tap send to save changes",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        IconButton(onClick = onCancel, modifier = Modifier.size(32.dp)) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Cancel",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        FilledIconButton(
+            onClick = onSend,
+            modifier = Modifier.size(32.dp),
+            shape = CircleShape,
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = HermesPrimary)
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.Send,
+                contentDescription = "Send",
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    }
+}
+
 /** Telegram-style forward dialog: pick the target session. */
 @Composable
 private fun ForwardDialog(
@@ -2065,6 +2197,11 @@ private fun datePillLabel(timestamp: Long): String {
     return java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()).format(java.util.Date(timestamp))
 }
 
+/** Format timestamp as HH:MM for display under bubbles. */
+private fun formatTime(timestamp: Long): String {
+    return java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(timestamp))
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Message bubble
 // ═══════════════════════════════════════════════════════════════
@@ -2139,7 +2276,9 @@ fun MessageBubble(
     selected: Boolean = false,
     onToggleSelect: (() -> Unit)? = null,
     // Telegram: tap an attachment bubble to open/save the file
-    onAttachmentTap: ((Message) -> Unit)? = null
+    onAttachmentTap: ((Message) -> Unit)? = null,
+    // Telegram: tap image to open full-screen viewer
+    onImageTap: ((String) -> Unit)? = null
 ) {
     val isUser = message.role == MessageRole.USER
     val isDark = LocalDarkTheme.current
@@ -2299,44 +2438,82 @@ fun MessageBubble(
                     }
                     // ── Image attachment ──
                     if (absoluteImageUrl != null && message.attachmentType?.startsWith("image") == true) {
-                        AsyncImage(
-                            model = absoluteImageUrl,
-                            contentDescription = message.attachmentName ?: "Image",
-                            // Telegram: tap a media bubble = open/save it
+                        val isGif = message.attachmentType == "image/gif"
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(enabled = !isStreaming) {
-                                    onAttachmentTap?.invoke(message)
-                                },
-                            contentScale = ContentScale.FillWidth
-                        )
+                        ) {
+                            if (isGif) {
+                                // GIF: use Coil with animation enabled
+                                AsyncImage(
+                                    model = absoluteImageUrl,
+                                    contentDescription = message.attachmentName ?: "GIF",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(300.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable(enabled = !isStreaming) {
+                                            onImageTap?.invoke(absoluteImageUrl)
+                                        },
+                                    contentScale = ContentScale.Fit
+                                )
+                            } else {
+                                // Static image
+                                AsyncImage(
+                                    model = absoluteImageUrl,
+                                    contentDescription = message.attachmentName ?: "Image",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 100.dp, max = 400.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable(enabled = !isStreaming) {
+                                            onImageTap?.invoke(absoluteImageUrl)
+                                        },
+                                    contentScale = ContentScale.FillWidth
+                                )
+                            }
+                        }
                     }
                     // ── File attachment (non-image) ──
                     if (message.attachmentUrl != null && (message.attachmentType == null || !message.attachmentType!!.startsWith("image"))) {
-                        FileAttachmentRow(
-                            name = message.attachmentName ?: message.attachmentUrl ?: "File",
-                            modifier = Modifier.padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp),
-                            onClick = { onAttachmentTap?.invoke(message) }
-                        )
+                        // Video support
+                        if (message.attachmentType?.startsWith("video") == true) {
+                            VideoAttachmentRow(
+                                name = message.attachmentName ?: "Video",
+                                url = message.attachmentUrl,
+                                onClick = { onImageTap?.invoke(message.attachmentUrl) }
+                            )
+                        } else {
+                            FileAttachmentRow(
+                                name = message.attachmentName ?: message.attachmentUrl ?: "File",
+                                modifier = Modifier.padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp),
+                                onClick = { onAttachmentTap?.invoke(message) }
+                            )
+                        }
                     }
                     // ── Text content ──
                     if (displayContent.isNotBlank()) {
-                        if (isStreaming) {
-                            StreamingText(
-                                text = displayContent,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = textColor,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                        // Check if content contains a table
+                        val tableRows = parseMarkdownTable(displayContent)
+                        if (tableRows != null && tableRows.size >= 2) {
+                            // Tables rendered outside bubble at full width (handled below)
                         } else {
-                            MarkdownText(
-                                text = displayContent,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = textColor,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            if (isStreaming) {
+                                StreamingText(
+                                    text = displayContent,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = textColor,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            } else {
+                                MarkdownText(
+                                    text = displayContent,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = textColor,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                         }
                     }
                     // The old blinking cursor bar is REMOVED — the header's
@@ -2416,6 +2593,72 @@ fun MessageBubble(
                             )
                         }
                     }
+                    // ── Telegram-style: timestamp + edit indicator + delivery ticks ──
+                    if (!isFirstInGroup || !isLastInGroup) {
+                        // Show timestamp for non-grouped or mid-group messages
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (message.editedAt > 0) {
+                                Text(
+                                    text = "edited",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isUser) Color.White.copy(alpha = 0.45f)
+                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Text(
+                                text = formatTime(message.timestamp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isUser) Color.White.copy(alpha = 0.65f)
+                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            )
+                            if (message.isStreaming) {
+                                // Tiny streaming indicator
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(4.dp)
+                                        .background(HermesPrimary, CircleShape)
+                                )
+                            }
+                            if (isUser && !isStreaming) {
+                                // Delivery status ticks (Telegram style)
+                                Spacer(modifier = Modifier.width(2.dp))
+                                when (message.status) {
+                                    MessageStatus.SENDING -> Icon(
+                                        Icons.Filled.Schedule,
+                                        contentDescription = "Sending",
+                                        modifier = Modifier.size(12.dp),
+                                        tint = Color.White.copy(alpha = 0.5f)
+                                    )
+                                    MessageStatus.SENT -> Icon(
+                                        Icons.Filled.Check,
+                                        contentDescription = "Sent",
+                                        modifier = Modifier.size(12.dp),
+                                        tint = Color.White.copy(alpha = 0.65f)
+                                    )
+                                    MessageStatus.READ -> Icon(
+                                        Icons.Filled.DoneAll,
+                                        contentDescription = "Read",
+                                        modifier = Modifier.size(12.dp),
+                                        tint = Color(0xFF4FC3F7) // Light blue for read
+                                    )
+                                    MessageStatus.FAILED -> Icon(
+                                        Icons.Filled.Refresh,
+                                        contentDescription = "Failed",
+                                        modifier = Modifier.size(12.dp),
+                                        tint = ErrorRed
+                                    )
+                                    else -> {}
+                                }
+                            }
+                        }
+                    }
                 }
             }
             } // Column (bubble)
@@ -2448,6 +2691,28 @@ fun MessageBubble(
             }
             } // Box (tail overlay)
         }
+    }
+}
+
+// ── Full-width table overlay for assistant AND user messages ──
+@Composable
+fun FullWidthTableOverlay(
+    message: Message,
+    displayContent: String,
+    isStreaming: Boolean,
+    isDark: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val tableRows = parseMarkdownTable(displayContent)
+    android.util.Log.d("TableParse", "FullWidthTableOverlay: message.role=${message.role}, isStreaming=$isStreaming, tableRows=${tableRows?.size ?: 0}")
+    if (tableRows == null || tableRows.size < 2 || isStreaming) return
+    
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp)
+    ) {
+        MarkdownTable(tableRows, isDark)
     }
 }
 
@@ -2781,12 +3046,14 @@ private val SLASH_COMMANDS = listOf(
     SlashCommand("/help", "Show available commands and tips"),
     SlashCommand("/reset", "Start a fresh conversation (clears history)"),
     SlashCommand("/new", "Same as /reset"),
-    SlashCommand("/retry", "Regenerate the last response"),
     SlashCommand("/model", "Show the current AI model"),
-    SlashCommand("/clear", "Clear the current session"),
     SlashCommand("/skills", "List available Hermes skills"),
     SlashCommand("/version", "Show version info"),
     SlashCommand("/info", "Show session info"),
+    SlashCommand("/stats", "Show usage statistics"),
+    SlashCommand("/archive", "Archive/unarchive a session"),
+    SlashCommand("/export", "Export session data"),
+    SlashCommand("/cron", "List cron jobs"),
 )
 
 @Composable
@@ -3056,9 +3323,20 @@ fun MarkdownText(
 /**
  * Parse basic markdown into AnnotatedString.
  * Supports: **bold**, *italic*, `inline code`, ```fenced code blocks```,
- * and `> quote` lines (italic + accent color).
+ * `> quote` lines, and |tables|.
  */
 private fun parseMarkdown(
+    text: String,
+    style: TextStyle,
+    baseColor: Color
+): AnnotatedString {
+    // No table detection here - tables are handled by FullWidthTableOverlay
+    // Parse normal markdown only
+    return parseMarkdownBody(text, style, baseColor)
+}
+
+/** Parse the markdown body without table detection. */
+private fun parseMarkdownBody(
     text: String,
     style: TextStyle,
     baseColor: Color
@@ -3141,6 +3419,147 @@ private fun parseMarkdown(
             }
             append(text[i])
             i++
+        }
+    }
+}
+
+/** Render a markdown table as formatted text. */
+
+
+/** Parse markdown and return table rows if present, null otherwise. */
+private fun parseMarkdownTable(text: String): List<List<String>>? {
+    val lines = text.split("\n")
+    var tableStart = -1
+
+    // Find first line that contains pipe characters
+    for ((idx, line) in lines.withIndex()) {
+        val trimmed = line.trim()
+        // Match lines containing pipe chars
+        if (trimmed.contains("|")) {
+            tableStart = idx
+            break
+        }
+    }
+
+    if (tableStart < 0) {
+        android.util.Log.d("TableParse", "No pipe chars found in ${lines.size} lines")
+        return null
+    }
+
+    // Find table end - stop at first empty line
+    var tableEnd = lines.size
+    for (idx in tableStart + 1 until lines.size) {
+        val trimmed = lines[idx].trim()
+        if (trimmed.isEmpty()) {
+            tableEnd = idx
+            break
+        }
+    }
+
+    // Parse table rows - extract only the pipe-delimited parts
+    val tableLines = lines.subList(tableStart, tableEnd)
+    android.util.Log.d("TableParse", "Table lines: ${tableLines.joinToString(", ")}")
+    val parsedRows = tableLines.mapNotNull { line ->
+        val trimmed = line.trim()
+        // Skip separator lines like |---|---| or |---|----------|----------------|
+        val parts = trimmed.split("|").map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.size >= 2 && parts.all { cell -> cell.matches("[-:| ]+".toRegex()) }) {
+            android.util.Log.d("TableParse", "Skipping separator: $trimmed")
+            return@mapNotNull null
+        }
+        // Extract the pipe-delimited portion (after any markdown like **bold**)
+        val pipeStart = trimmed.indexOf('|')
+        if (pipeStart < 0) {
+            android.util.Log.d("TableParse", "No pipe start in: $trimmed")
+            return@mapNotNull null
+        }
+        val pipeContent = trimmed.substring(pipeStart)
+        val cells = pipeContent.removePrefix("|").removeSuffix("|")
+            .split("|").map { cell -> cell.trim() }
+            .filter { it.isNotEmpty() }
+        android.util.Log.d("TableParse", "Parsed cells: $cells from: $trimmed")
+        if (cells.size >= 2) cells else null
+    }.filter { it.isNotEmpty() }
+
+    android.util.Log.d("TableParse", "Found ${parsedRows.size} rows, need >= 2")
+    // Need at least 2 rows (header + at least one data row)
+    return if (parsedRows.size >= 2) parsedRows else null
+}
+
+/** Telegram-style markdown table rendering as a proper Compose UI. */
+@Composable
+fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
+    val columnCount = tableRows.maxOfOrNull { it.size } ?: 0
+    if (columnCount == 0 || tableRows.size < 2) return
+
+    // Calculate column widths
+    val colWidths = IntArray(columnCount) { 0 }
+    tableRows.forEach { row ->
+        row.forEachIndexed { idx, cell ->
+            colWidths[idx] = maxOf(colWidths[idx], cell.length)
+        }
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (darkTheme) Color(0xFF2B3A4A) else Color(0xFFEEF2F7)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column {
+            tableRows.forEachIndexed { rowIdx, row ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (rowIdx == 1) Modifier
+                                .background(
+                                    if (darkTheme) Color(0xFF1E2D3D) else Color(0xFFDCE4ED),
+                                    shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
+                                )
+                            else Modifier
+                        )
+                ) {
+                    row.forEachIndexed { colIdx, cell ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .defaultMinSize(minWidth = 60.dp)
+                        ) {
+                            Text(
+                                text = cell,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = if (rowIdx == 0 || rowIdx == 1) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (rowIdx <= 1)
+                                        (if (darkTheme) Color.White else Color(0xFF1A1A1A))
+                                    else
+                                        (if (darkTheme) Color(0xFFB0BEC5) else Color(0xFF425262))
+                                ),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        // Vertical divider (except last column)
+                        if (colIdx < row.size - 1) {
+                            VerticalDivider(
+                                color = if (darkTheme) Color(0xFF3D4F60) else Color(0xFFC4CDD4),
+                                modifier = Modifier.height(24.dp)
+                            )
+                        }
+                    }
+                }
+                // Horizontal divider (except after header or last row)
+                if (rowIdx > 0 && rowIdx < tableRows.size - 1) {
+                    HorizontalDivider(
+                        color = if (darkTheme) Color(0xFF3D4F60) else Color(0xFFC4CDD4),
+                        thickness = 0.5.dp
+                    )
+                }
+            }
         }
     }
 }
@@ -3304,6 +3723,86 @@ private fun ChatSearchBar(
                 contentDescription = "Close search",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+// ── Telegram-style media viewers ──
+
+/** Full-screen image viewer (Telegram style with zoom). */
+@Composable
+private fun ImageViewerDialog(url: String, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = null,
+        text = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(400.dp)
+                    .background(MaterialTheme.colorScheme.surface),
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = url,
+                    contentDescription = "Image viewer",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(8.dp),
+                    contentScale = ContentScale.Fit
+                )
+            }
+        },
+        confirmButton = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+                TextButton(onClick = { /* TODO: download */ }) {
+                    Text("Save")
+                }
+            }
+        },
+        dismissButton = {}
+    )
+}
+
+/** Video attachment row (plays inline or opens player). */
+@Composable
+private fun VideoAttachmentRow(name: String, url: String, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.PlayCircle,
+                contentDescription = null,
+                tint = HermesPrimary,
+                modifier = Modifier.size(40.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = "Video",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

@@ -72,6 +72,12 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteMessage(messageId: Long)
 
+    @Query("UPDATE messages SET content = :content, editedAt = :editedAt WHERE id = :messageId")
+    suspend fun updateMessageEdit(messageId: Long, content: String, editedAt: Long)
+
+    @Query("SELECT * FROM messages WHERE id = :messageId")
+    suspend fun getMessage(messageId: Long): Message?
+
     @Query("""
         UPDATE messages SET content = :content, isStreaming = 0 
         WHERE id = (
@@ -91,7 +97,7 @@ interface MessageDao {
 
 @Database(
     entities = [Message::class, Session::class],
-    version = 3,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -114,13 +120,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v3 → v4: editedAt column for edited message indicator. */
+        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN editedAt INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** v4 → v5: tokens column for usage stats. */
+        val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun create(context: Context): AppDatabase {
             return Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
                 "hermes_mobile.db"
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 // NO fallbackToDestructiveMigration: a missed migration must
                 // crash LOUDLY at open (caught upstream) rather than silently
                 // wipe every session and message the user ever had.

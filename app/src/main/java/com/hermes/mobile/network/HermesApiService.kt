@@ -184,7 +184,7 @@ class HermesApiService @Inject constructor(
         return withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url("$baseUrl/health")
+                    .url("$baseUrl/api/plugins/hermes-mobile/health")
                     .get()
                     .build()
                 // response.use closes the body — a leaked body pins a socket
@@ -215,6 +215,7 @@ class HermesApiService @Inject constructor(
         attachType: String = "",
         multiAgent: Boolean = false,
         replyTo: String? = null,
+        model: String? = null,
     ): Unit = withContext(Dispatchers.IO) {
         suspendCancellableCoroutine { continuation ->
             val baseUrl = config?.baseUrl ?: "http://localhost:8080"
@@ -222,6 +223,7 @@ class HermesApiService @Inject constructor(
                 put("query", query)
                 put("session_id", sessionId)
                 put("stream", true)
+                if (model != null && model.isNotBlank()) put("model", model)
                 if (multiAgent) put("multi_agent", true)
                 if (replyTo.isNullOrBlank().not()) put("reply_to", replyTo)
                 if (attachmentUrl.isNotBlank()) put("attachment_url", attachmentUrl)
@@ -229,7 +231,7 @@ class HermesApiService @Inject constructor(
             }
 
             val request = Request.Builder()
-                .url("$baseUrl/api/chat/stream")
+                .url("$baseUrl/api/plugins/hermes-mobile/chat/stream")
                 .post(payload.toString().toRequestBody(jsonMediaType))
                 .header("Accept", "text/event-stream")
                 .build()
@@ -380,29 +382,52 @@ class HermesApiService @Inject constructor(
         val baseUrl = config?.baseUrl ?: return null
         return withContext(Dispatchers.IO) {
             try {
-                val url = "$baseUrl/api/models" + if (sessionId.isNotBlank()) "?session_id=$sessionId" else ""
+                val url = "$baseUrl/api/plugins/hermes-mobile/models" + if (sessionId.isNotBlank()) "?session_id=$sessionId" else ""
                 val request = Request.Builder().url(url).get().build()
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         val body = response.body?.string() ?: return@use null
-                        val json = JSONObject(body)
-                        val modelsArr = json.optJSONArray("models") ?: return@use null
-                        val models = (0 until modelsArr.length()).map { i ->
-                            val m = modelsArr.getJSONObject(i)
-                            ModelInfo(
-                                id = m.optString("id", ""),
-                                name = m.optString("name", ""),
-                                isVision = m.optBoolean("isVision", false),
-                                isFree = m.optBoolean("isFree", false),
-                                provider = m.optString("provider", ""),
-                                baseUrl = m.optString("baseUrl", "")
-                            )
+                        // Try parsing as array directly first (mobile plugin format)
+                        var models: List<ModelInfo>? = null
+                        var currentModel = ""
+                        try {
+                            val arr = JSONArray(body)
+                            models = (0 until arr.length()).map { i ->
+                                val m = arr.getJSONObject(i)
+                                ModelInfo(
+                                    id = m.optString("id", ""),
+                                    name = m.optString("name", ""),
+                                    isVision = m.optBoolean("isVision", false),
+                                    isFree = m.optBoolean("isFree", false),
+                                    provider = m.optString("provider", ""),
+                                    baseUrl = m.optString("baseUrl", "")
+                                )
+                            }
+                        } catch (_: Exception) {
+                            // Try parsing as object with "models" field (legacy format)
+                            val json = JSONObject(body)
+                            val modelsArr = json.optJSONArray("models")
+                            if (modelsArr != null) {
+                                models = (0 until modelsArr.length()).map { i ->
+                                    val m = modelsArr.getJSONObject(i)
+                                    ModelInfo(
+                                        id = m.optString("id", ""),
+                                        name = m.optString("name", ""),
+                                        isVision = m.optBoolean("isVision", false),
+                                        isFree = m.optBoolean("isFree", false),
+                                        provider = m.optString("provider", ""),
+                                        baseUrl = m.optString("baseUrl", "")
+                                    )
+                                }
+                                currentModel = json.optString("current", "")
+                            }
                         }
+                        if (models == null || models.isEmpty()) return@use null
                         ModelListResponse(
                             models = models,
-                            current = json.optString("current", ""),
-                            default = json.optString("default", ""),
-                            provider = json.optString("provider", "")
+                            current = currentModel,
+                            default = "",
+                            provider = ""
                         )
                     } else null
                 }
@@ -482,7 +507,7 @@ class HermesApiService @Inject constructor(
                     put("query", query)
                 }
                 val request = Request.Builder()
-                    .url("$baseUrl/api/chat/followup")
+                    .url("$baseUrl/api/plugins/hermes-mobile/chat/followup")
                     .post(payload.toString().toRequestBody(jsonMediaType))
                     .build()
                 client.newCall(request).execute().use { it.isSuccessful }
@@ -504,7 +529,7 @@ class HermesApiService @Inject constructor(
                     put("query", "")
                 }
                 val request = Request.Builder()
-                    .url("$baseUrl/api/chat/cancel")
+                    .url("$baseUrl/api/plugins/hermes-mobile/chat/cancel")
                     .post(payload.toString().toRequestBody(jsonMediaType))
                     .build()
                 client.newCall(request).execute().use { it.isSuccessful }
@@ -522,7 +547,7 @@ class HermesApiService @Inject constructor(
         val baseUrl = config?.baseUrl ?: return emptyMap()
         return withContext(Dispatchers.IO) {
             try {
-                val request = Request.Builder().url("$baseUrl/api/sessions").get().build()
+                val request = Request.Builder().url("$baseUrl/api/plugins/hermes-mobile/sessions").get().build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@use emptyMap()
                     val arr = JSONArray(response.body?.string() ?: return@use emptyMap())
@@ -559,7 +584,7 @@ class HermesApiService @Inject constructor(
     ): okhttp3.sse.EventSource? {
         val baseUrl = config?.baseUrl ?: return null
         val request = Request.Builder()
-            .url("$baseUrl/api/sessions/$sessionId/events")
+            .url("$baseUrl/api/plugins/hermes-mobile/sessions/$sessionId/events")
             .header("Accept", "text/event-stream")
             .build()
         val factory = EventSources.createFactory(client)
@@ -590,16 +615,31 @@ class HermesApiService @Inject constructor(
         })
     }
 
-    // ─── Switch Model (via chat command) ───
+    // ─── Switch Model (via dedicated endpoint) ───
 
     suspend fun switchModel(sessionId: String, modelName: String, global: Boolean = false): Boolean {
-        val query = "/model $modelName${if (global) " --global" else ""}"
-        return try {
-            val response = sendChat(query, sessionId)
-            response.contains("✅") || response.contains("switched")
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (_: Exception) { false }
+        val baseUrl = config?.baseUrl ?: return false
+        // Parse provider/model from modelName (format: "provider/model" or just "model")
+        val parts = modelName.split("/", limit = 2)
+        val provider = if (parts.size >= 2) parts[0] else null
+        val model = if (parts.size >= 2) parts[1] else parts[0]
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val payload = JSONObject().apply {
+                    put("model", model)
+                    if (provider != null) put("provider", provider)
+                }
+                val request = Request.Builder()
+                    .url("$baseUrl/api/plugins/hermes-mobile/models/switch")
+                    .post(payload.toString().toRequestBody(jsonMediaType))
+                    .build()
+                val response = client.newCall(request).execute()
+                response.isSuccessful
+            } catch (e: Exception) {
+                false
+            }
+        }
     }
 
     // ─── Simple Chat (non-streaming) ───
@@ -616,7 +656,7 @@ class HermesApiService @Inject constructor(
                 sessionId?.let { put("session_id", it) }
             }
             val request = Request.Builder()
-                .url("$baseUrl/api/chat")
+                .url("$baseUrl/api/plugins/hermes-mobile/chat")
                 .post(payload.toString().toRequestBody(jsonMediaType))
                 .build()
             val response = client.newCall(request).execute()
@@ -631,7 +671,7 @@ class HermesApiService @Inject constructor(
         return withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url("$baseUrl/api/sessions/$sessionId")
+                    .url("$baseUrl/api/plugins/hermes-mobile/sessions/$sessionId")
                     .delete()
                     .build()
                 val response = client.newCall(request).execute()
@@ -654,7 +694,7 @@ class HermesApiService @Inject constructor(
         return withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url("$baseUrl/api/sessions/$sessionId/messages")
+                    .url("$baseUrl/api/plugins/hermes-mobile/sessions/$sessionId/messages")
                     .get()
                     .build()
                 val response = client.newCall(request).execute()

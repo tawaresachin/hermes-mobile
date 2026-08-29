@@ -23,7 +23,7 @@ class AuthInterceptor @Inject constructor(
         val path = originalRequest.url.encodedPath
 
         // Don't add JWT to auth endpoints (login/register/refresh don't need it)
-        if (path.startsWith("/auth/")) {
+        if (path.startsWith("/auth/") || path.startsWith("/api/plugins/hermes-mobile/auth/") || path == "/health") {
             return chain.proceed(originalRequest)
         }
 

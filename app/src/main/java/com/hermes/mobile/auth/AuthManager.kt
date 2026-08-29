@@ -66,7 +66,7 @@ class AuthManager @Inject constructor(
     suspend fun register(serverUrl: String, email: String, password: String): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
-                val url = URL("$serverUrl/auth/register")
+                val url = URL("$serverUrl/api/plugins/hermes-mobile/auth/register")
                 val payload = JSONObject().apply {
                     put("email", email)
                     put("password", password)
@@ -91,9 +91,9 @@ class AuthManager @Inject constructor(
     suspend fun login(serverUrl: String, email: String, password: String): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
-                val url = URL("$serverUrl/auth/login")
+                val url = URL("$serverUrl/api/plugins/hermes-mobile/auth/login")
                 val payload = JSONObject().apply {
-                    put("email", email)
+                    put("username", email)
                     put("password", password)
                 }
                 val response = httpPost(url.toString(), payload.toString())
@@ -118,9 +118,9 @@ class AuthManager @Inject constructor(
         return refreshMutex.withLock {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    val url = URL("$serverUrl/auth/refresh")
+                    val url = URL("$serverUrl/api/plugins/hermes-mobile/auth/refresh")
                     val payload = JSONObject().apply {
-                        put("refresh_token", refreshTok)
+                        put("access_token", refreshTok)
                     }
                     httpPost(url.toString(), payload.toString())
                 }
@@ -154,8 +154,8 @@ class AuthManager @Inject constructor(
     suspend fun claimAccount(serverUrl: String, claimToken: String): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
-                val url = URL("$serverUrl/auth/claim")
-                val payload = JSONObject().apply { put("token", claimToken) }
+                val url = URL("$serverUrl/api/plugins/hermes-mobile/pair/verify")
+                val payload = JSONObject().apply { put("pairing_token", claimToken) }
                 val response = httpPost(url.toString(), payload.toString())
                 if (response.first == 200) {
                     storeTokens(JSONObject(response.second))
@@ -176,8 +176,7 @@ class AuthManager @Inject constructor(
 
     private fun storeTokens(json: JSONObject) {
         prefs.edit()
-            .putString(KEY_JWT, json.optString("token", ""))
-            .putString(KEY_REFRESH, json.optString("refresh_token", ""))
+            .putString(KEY_JWT, json.optString("access_token", ""))
             .putString(KEY_EMAIL, json.optString("email", ""))
             .apply()
         _isLoggedIn.value = true

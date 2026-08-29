@@ -260,7 +260,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
                 statePulse = 0.45 + 0.3 * (0.5 + 0.5 * sin(tm * 1.2));
             }
 
-            vec3 finalColor = (body + filaments * (0.55 + 0.9 * vol)) * statePulse
+            vec3 finalColor = (body + filament * (0.55 + 0.9 * vol)) * statePulse
                             + rim_glow * statePulse
                             + ringColor * statePulse
                             + core * statePulse
@@ -441,11 +441,12 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
 
         var buf = quadBuffer
         if (buf == null) {
+            // Quad with 4 floats per vertex (x, y, z, w) to match vec4 aPos
             val quad = floatArrayOf(
-                -1f, -1f, 0f,
-                 1f, -1f, 0f,
-                -1f,  1f, 0f,
-                 1f,  1f, 0f
+                -1f, -1f, 0f, 1f,
+                 1f, -1f, 0f, 1f,
+                -1f,  1f, 0f, 1f,
+                 1f,  1f, 0f, 1f
             )
             buf = ByteBuffer.allocateDirect(quad.size * 4)
                 .order(ByteOrder.nativeOrder()).asFloatBuffer()
@@ -457,7 +458,7 @@ class SphereGLRenderer : GLSurfaceView.Renderer {
         val aPos = aPosLoc
         GLES20.glEnableVertexAttribArray(aPos)
         buf.position(0)
-        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 0, buf)
+        GLES20.glVertexAttribPointer(aPos, 4, GLES20.GL_FLOAT, false, 0, buf)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GLES20.glDisableVertexAttribArray(aPos)
     }
