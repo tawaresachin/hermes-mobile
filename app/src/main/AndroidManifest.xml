@@ -3,59 +3,59 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Android 14+ requires this for local network access -->
+    <uses-permission android:name="android.permission.NEARBY_DEVICES" />
 
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <!-- Android 11+ package visibility: required to detect Tailscale via getPackageInfo -->
+    <queries>
+        <package android:name="com.tailscale.ipn" />
+    </queries>
 
     <application
-        android:name=".HermesMobileApp"
-        android:allowBackup="true"
+        android:name=".HermesApp"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.HermesMobile"
-        tools:targetApi="31">
+        android:networkSecurityConfig="@xml/network_security_config">
+
+        <!-- Holds the process at foreground priority while a response is
+             generating; posts the "response ready" notification when the
+             app is backgrounded and the stream completes. -->
+        <service
+            android:name=".notifications.ResponseWatcherService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Attachment viewer fallback: expose cache files to the system
+             viewer via content:// URIs (no storage permission needed). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.HermesMobile">
+            android:theme="@style/Theme.HermesMobile"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Deep linking for Hermes scheme -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="hermes" />
-            </intent-filter>
         </activity>
-
-        <activity
-            android:name=".ui.screens.auth.PairingActivity"
-            android:exported="true"
-            android:theme="@style/Theme.HermesMobile" />
-
-        <activity
-            android:name=".ui.screens.chat.ChatActivity"
-            android:exported="true"
-            android:theme="@style/Theme.HermesMobile" />
-
-        <activity
-            android:name=".ui.screens.settings.SettingsActivity"
-            android:exported="true"
-            android:theme="@style/Theme.HermesMobile" />
-
     </application>
 </manifest>

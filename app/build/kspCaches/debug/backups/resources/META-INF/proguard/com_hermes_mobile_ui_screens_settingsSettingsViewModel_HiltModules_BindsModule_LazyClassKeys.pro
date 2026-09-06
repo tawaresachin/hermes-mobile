@@ -1,0 +1,7 @@
+-keep,allowobfuscation,allowshrinking class com.hermes.mobile.ui.screens.chat.ChatViewModel
+-keep,allowobfuscation,allowshrinking class com.hermes.mobile.ui.screens.chat.ChatViewModel
+-keep,allowobfuscation,allowshrinking class com.hermes.mobile.ui.screens.home.HomeViewModel
+-keep,allowobfuscation,allowshrinking class com.hermes.mobile.ui.screens.home.HomeViewModel
+-keep,allowobfuscation,allowshrinking class com.hermes.mobile.ui.screens.sessions.SessionsViewModel
+-keep,allowobfuscation,allowshrinking class com.hermes.mobile.ui.screens.sessions.SessionsViewModel
+-keep,allowobfuscation,allowshrinking class com.hermes.mobile.ui.screens.settings.SettingsViewModel

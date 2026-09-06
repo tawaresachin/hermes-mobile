@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The app UI is Compose with inline strings; only app_name is
+         referenced (AndroidManifest android:label). -->
+    <string name="app_name">Hermes Mobile</string>
+</resources>

@@ -1,0 +1,2 @@
+-keep,allowobfuscation,allowshrinking class com.hermes.mobile.ui.screens.chat.ChatViewModel
+-keep,allowobfuscation,allowshrinking class com.hermes.mobile.ui.screens.chat.ChatViewModel

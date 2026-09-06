@@ -1,6 +1,9 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
+    id("com.google.dagger.hilt.android")
 }
 
 android {
@@ -15,8 +18,11 @@ android {
         versionName = "0.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        vectorDrawables {
-            useSupportLibrary = true
+
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments["room.schemaLocation"] = "$projectDir/schemas"
+            }
         }
     }
 
@@ -30,9 +36,24 @@ android {
             )
         }
         debug {
-            isMinifyEnabled = false
-            isDebuggable = true
+            // R8 on debug too — the delivered APK is the debug build, and
+            // without minify it ships ~8MB of dead dex (all 2000+ material
+            // icons, unused deps). Same signature, installs over existing.
+            // NOTE: isShrinkResources stays OFF here — with it on, AGP pads
+            // the APK with a ~15MB zero hole (zipalign/page-align artifact),
+            // making the file BIGGER than before.
+            isMinifyEnabled = true
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -44,65 +65,94 @@ android {
         jvmTarget = "17"
     }
 
-    buildFeatures {
-        compose = true
-        buildConfig = true
-    }
-
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.8"
-    }
-
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        // Compress the (tiny) native libs: page-aligned uncompressed libs
+        // cause AGP to pad the APK with a ~14MB zero hole after minify
+        // (libs get placed at a fixed offset far past the content).
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }
 
 dependencies {
-    // Android Core
-    implementation("androidx.core:core-ktx:1.12.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
-    implementation("androidx.activity:activity-compose:1.8.2")
-    
-    // Compose BOM
-    implementation(platform("androidx.compose:compose-bom:2023.10.01"))
+    // Compose BOM - use version that supports API 34
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
+    implementation(composeBom)
+
+    // Core - pinned versions that support API 34
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.activity:activity-compose:1.9.3")
+
+    // Compose UI
     implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.foundation:foundation")
-    
+
     // Navigation
-    implementation("androidx.navigation:navigation-compose:2.7.6")
-    
-    // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    
-    // Networking (Ktor)
-    implementation("io.ktor:ktor-client-android:2.3.7")
-    implementation("io.ktor:ktor-client-content-negotiation:2.3.7")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.7")
-    implementation("io.ktor:ktor-client-auth:2.3.7")
-    
-    // QR Scanning - Using lightweight solution
+    implementation("androidx.navigation:navigation-compose:2.8.5")
+
+    // Window size classes (adaptive layout)
+    implementation("androidx.compose.material3:material3-window-size-class")
+
+    // Lifecycle & ViewModel
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+
+    // Hilt DI
+    implementation("com.google.dagger:hilt-android:2.53.1")
+    ksp("com.google.dagger:hilt-android-compiler:2.53.1")
+    implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+
+    // Network - OkHttp (direct usage — Retrofit/Gson removed: zero references)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
+
+    // Room Database
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
+
+    // DataStore Preferences
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+
+    // Image loading
+    implementation("io.coil-kt:coil-compose:2.7.0")
+
+    // QR code scanning (zxing embedded scanner)
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-    
-    // DataStore
-    implementation("androidx.datastore:datastore-preferences:1.0.0")
-    
-    // ViewModel
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
-    
+
+    // Encrypted storage for secrets (tokens, device credentials)
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // Audio
+    implementation("androidx.media:media:1.7.0")
+
+    // Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test.ext:junit:1.1.5")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
-    androidTestImplementation(platform("androidx.compose:compose-bom:2023.10.01"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("io.mockk:mockk:1.13.13")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+android.applicationVariants.configureEach {
+    outputs.forEach { output ->
+        (output as com.android.build.gradle.internal.api.ApkVariantOutputImpl).outputFileName = "Hermes-Mobile-v${versionName}.apk"
+    }
 }
