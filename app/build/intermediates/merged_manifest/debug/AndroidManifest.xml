@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.hermes.mobile"
     android:versionCode="1"
-    android:versionName="1.0.0" >
+    android:versionName="0.0.1" >
 
     <uses-sdk
         android:minSdkVersion="26"
@@ -13,6 +13,7 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -27,7 +28,21 @@
 
     <uses-permission android:name="com.hermes.mobile.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
 
+    <uses-feature
+        android:name="android.hardware.camera.front"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.flash"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.screen.landscape"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.wifi"
+        android:required="false" />
+
     <application
+        android:name="com.hermes.mobile.HermesMobileApp"
         android:allowBackup="true"
         android:appComponentFactory="androidx.core.app.CoreComponentFactory"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -49,6 +64,7 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Deep linking for Hermes scheme -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
@@ -58,6 +74,24 @@
                 <data android:scheme="hermes" />
             </intent-filter>
         </activity>
+        <activity
+            android:name="com.hermes.mobile.ui.screens.auth.PairingActivity"
+            android:exported="true"
+            android:theme="@style/Theme.HermesMobile" />
+        <activity
+            android:name="com.hermes.mobile.ui.screens.chat.ChatActivity"
+            android:exported="true"
+            android:theme="@style/Theme.HermesMobile" />
+        <activity
+            android:name="com.hermes.mobile.ui.screens.settings.SettingsActivity"
+            android:exported="true"
+            android:theme="@style/Theme.HermesMobile" />
+        <activity
+            android:name="androidx.activity.ComponentActivity"
+            android:exported="true" />
+        <activity
+            android:name="androidx.compose.ui.tooling.PreviewActivity"
+            android:exported="true" />
 
         <provider
             android:name="androidx.startup.InitializationProvider"
@@ -73,13 +107,6 @@
                 android:name="androidx.profileinstaller.ProfileInstallerInitializer"
                 android:value="androidx.startup" />
         </provider>
-
-        <activity
-            android:name="androidx.activity.ComponentActivity"
-            android:exported="true" />
-        <activity
-            android:name="androidx.compose.ui.tooling.PreviewActivity"
-            android:exported="true" />
 
         <receiver
             android:name="androidx.profileinstaller.ProfileInstallReceiver"
@@ -100,6 +127,14 @@
                 <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
             </intent-filter>
         </receiver>
+
+        <activity
+            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:clearTaskOnLaunch="true"
+            android:screenOrientation="sensorLandscape"
+            android:stateNotNeeded="true"
+            android:theme="@style/zxing_CaptureTheme"
+            android:windowSoftInputMode="stateAlwaysHidden" />
     </application>
 
 </manifest>

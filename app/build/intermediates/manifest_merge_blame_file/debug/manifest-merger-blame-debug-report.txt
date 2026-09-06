@@ -2,7 +2,7 @@
 2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
 3    package="com.hermes.mobile"
 4    android:versionCode="1"
-5    android:versionName="1.0.0" >
+5    android:versionName="0.0.1" >
 6
 7    <uses-sdk
 8        android:minSdkVersion="26"
@@ -23,170 +23,239 @@
 15    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 15-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:9:5-77
 15-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:9:22-74
-16
-17    <uses-feature
-17-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:11:5-85
-18        android:name="android.hardware.camera"
-18-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:11:19-57
-19        android:required="false" />
-19-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:11:58-82
-20    <uses-feature
-20-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:12:5-95
-21        android:name="android.hardware.camera.autofocus"
-21-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:12:19-67
-22        android:required="false" />
-22-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:12:68-92
-23
-24    <permission
-24-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/bd7aa84542dd87bd7d712580ffe12c3d/transformed/core-1.12.0/AndroidManifest.xml:22:5-24:47
-25        android:name="com.hermes.mobile.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
-25-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/bd7aa84542dd87bd7d712580ffe12c3d/transformed/core-1.12.0/AndroidManifest.xml:23:9-81
-26        android:protectionLevel="signature" />
-26-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/bd7aa84542dd87bd7d712580ffe12c3d/transformed/core-1.12.0/AndroidManifest.xml:24:9-44
-27
-28    <uses-permission android:name="com.hermes.mobile.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
-28-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/bd7aa84542dd87bd7d712580ffe12c3d/transformed/core-1.12.0/AndroidManifest.xml:26:5-97
-28-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/bd7aa84542dd87bd7d712580ffe12c3d/transformed/core-1.12.0/AndroidManifest.xml:26:22-94
-29
-30    <application
-30-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:14:5-42:19
-31        android:allowBackup="true"
-31-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:15:9-35
-32        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
-32-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/bd7aa84542dd87bd7d712580ffe12c3d/transformed/core-1.12.0/AndroidManifest.xml:28:18-86
-33        android:dataExtractionRules="@xml/data_extraction_rules"
-33-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:16:9-65
-34        android:debuggable="true"
-35        android:extractNativeLibs="false"
-36        android:fullBackupContent="@xml/backup_rules"
-36-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:17:9-54
-37        android:icon="@mipmap/ic_launcher"
-37-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:18:9-43
-38        android:label="@string/app_name"
-38-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:19:9-41
-39        android:roundIcon="@mipmap/ic_launcher_round"
-39-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:20:9-54
-40        android:supportsRtl="true"
-40-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:21:9-35
-41        android:theme="@style/Theme.HermesMobile" >
-41-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:22:9-50
-42        <activity
-42-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:25:9-40:20
-43            android:name="com.hermes.mobile.MainActivity"
-43-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:26:13-41
-44            android:exported="true"
-44-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:27:13-36
-45            android:label="@string/app_name"
-45-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:28:13-45
-46            android:theme="@style/Theme.HermesMobile" >
-46-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:29:13-54
-47            <intent-filter>
-47-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:30:13-33:29
-48                <action android:name="android.intent.action.MAIN" />
-48-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:31:17-69
-48-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:31:25-66
-49
-50                <category android:name="android.intent.category.LAUNCHER" />
-50-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:32:17-77
-50-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:32:27-74
-51            </intent-filter>
-52            <intent-filter>
-52-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:34:13-39:29
-53                <action android:name="android.intent.action.VIEW" />
-53-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:35:17-69
-53-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:35:25-66
-54
-55                <category android:name="android.intent.category.DEFAULT" />
-55-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:36:17-76
-55-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:36:27-73
-56                <category android:name="android.intent.category.BROWSABLE" />
-56-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:37:17-78
-56-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:37:27-75
-57
-58                <data android:scheme="hermes" />
-58-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:38:17-49
-58-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:38:23-46
-59            </intent-filter>
-60        </activity>
-61
-62        <provider
-62-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/65f3ac8021ddeb77ad49521d00953b64/transformed/emoji2-1.4.0/AndroidManifest.xml:24:9-32:20
-63            android:name="androidx.startup.InitializationProvider"
-63-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/65f3ac8021ddeb77ad49521d00953b64/transformed/emoji2-1.4.0/AndroidManifest.xml:25:13-67
-64            android:authorities="com.hermes.mobile.androidx-startup"
-64-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/65f3ac8021ddeb77ad49521d00953b64/transformed/emoji2-1.4.0/AndroidManifest.xml:26:13-68
-65            android:exported="false" >
-65-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/65f3ac8021ddeb77ad49521d00953b64/transformed/emoji2-1.4.0/AndroidManifest.xml:27:13-37
-66            <meta-data
-66-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/65f3ac8021ddeb77ad49521d00953b64/transformed/emoji2-1.4.0/AndroidManifest.xml:29:13-31:52
-67                android:name="androidx.emoji2.text.EmojiCompatInitializer"
-67-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/65f3ac8021ddeb77ad49521d00953b64/transformed/emoji2-1.4.0/AndroidManifest.xml:30:17-75
-68                android:value="androidx.startup" />
-68-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/65f3ac8021ddeb77ad49521d00953b64/transformed/emoji2-1.4.0/AndroidManifest.xml:31:17-49
-69            <meta-data
-69-->[androidx.lifecycle:lifecycle-process:2.7.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/948be0bdf99b691c15429aadd2f62ebd/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:29:13-31:52
-70                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
-70-->[androidx.lifecycle:lifecycle-process:2.7.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/948be0bdf99b691c15429aadd2f62ebd/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:30:17-78
-71                android:value="androidx.startup" />
-71-->[androidx.lifecycle:lifecycle-process:2.7.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/948be0bdf99b691c15429aadd2f62ebd/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:31:17-49
-72            <meta-data
-72-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:29:13-31:52
-73                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
-73-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:30:17-85
-74                android:value="androidx.startup" />
-74-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:31:17-49
-75        </provider>
-76
+16    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+16-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:10:5-77
+16-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:10:22-74
+17
+18    <uses-feature
+18-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:12:5-85
+19        android:name="android.hardware.camera"
+19-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:12:19-57
+20        android:required="false" />
+20-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:12:58-82
+21    <uses-feature
+21-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:13:5-95
+22        android:name="android.hardware.camera.autofocus"
+22-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:13:19-67
+23        android:required="false" />
+23-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:13:68-92
+24
+25    <permission
+25-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/2fc250f0a26e98bb5cd5f74376215a93/transformed/core-1.12.0/AndroidManifest.xml:22:5-24:47
+26        android:name="com.hermes.mobile.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+26-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/2fc250f0a26e98bb5cd5f74376215a93/transformed/core-1.12.0/AndroidManifest.xml:23:9-81
+27        android:protectionLevel="signature" />
+27-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/2fc250f0a26e98bb5cd5f74376215a93/transformed/core-1.12.0/AndroidManifest.xml:24:9-44
+28
+29    <uses-permission android:name="com.hermes.mobile.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+29-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/2fc250f0a26e98bb5cd5f74376215a93/transformed/core-1.12.0/AndroidManifest.xml:26:5-97
+29-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/2fc250f0a26e98bb5cd5f74376215a93/transformed/core-1.12.0/AndroidManifest.xml:26:22-94
+30
+31    <uses-feature
+31-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:28:5-30:36
+32        android:name="android.hardware.camera.front"
+32-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:29:9-53
+33        android:required="false" />
+33-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:30:9-33
+34    <uses-feature
+34-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:36:5-38:36
+35        android:name="android.hardware.camera.flash"
+35-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:37:9-53
+36        android:required="false" />
+36-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:38:9-33
+37    <uses-feature
+37-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:39:5-41:36
+38        android:name="android.hardware.screen.landscape"
+38-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:40:9-57
+39        android:required="false" />
+39-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:41:9-33
+40    <uses-feature
+40-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:42:5-44:36
+41        android:name="android.hardware.wifi"
+41-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:43:9-45
+42        android:required="false" />
+42-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:44:9-33
+43
+44    <application
+44-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:15:5-60:19
+45        android:name="com.hermes.mobile.HermesMobileApp"
+45-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:16:9-40
+46        android:allowBackup="true"
+46-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:17:9-35
+47        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+47-->[androidx.core:core:1.12.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/2fc250f0a26e98bb5cd5f74376215a93/transformed/core-1.12.0/AndroidManifest.xml:28:18-86
+48        android:dataExtractionRules="@xml/data_extraction_rules"
+48-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:18:9-65
+49        android:debuggable="true"
+50        android:extractNativeLibs="false"
+51        android:fullBackupContent="@xml/backup_rules"
+51-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:19:9-54
+52        android:icon="@mipmap/ic_launcher"
+52-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:20:9-43
+53        android:label="@string/app_name"
+53-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:21:9-41
+54        android:roundIcon="@mipmap/ic_launcher_round"
+54-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:22:9-54
+55        android:supportsRtl="true"
+55-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:23:9-35
+56        android:theme="@style/Theme.HermesMobile" >
+56-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:24:9-50
+57        <activity
+57-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:27:9-43:20
+58            android:name="com.hermes.mobile.MainActivity"
+58-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:28:13-41
+59            android:exported="true"
+59-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:29:13-36
+60            android:label="@string/app_name"
+60-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:30:13-45
+61            android:theme="@style/Theme.HermesMobile" >
+61-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:31:13-54
+62            <intent-filter>
+62-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:32:13-35:29
+63                <action android:name="android.intent.action.MAIN" />
+63-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:33:17-69
+63-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:33:25-66
+64
+65                <category android:name="android.intent.category.LAUNCHER" />
+65-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:34:17-77
+65-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:34:27-74
+66            </intent-filter>
+67            <!-- Deep linking for Hermes scheme -->
+68            <intent-filter>
+68-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:37:13-42:29
+69                <action android:name="android.intent.action.VIEW" />
+69-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:38:17-69
+69-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:38:25-66
+70
+71                <category android:name="android.intent.category.DEFAULT" />
+71-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:39:17-76
+71-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:39:27-73
+72                <category android:name="android.intent.category.BROWSABLE" />
+72-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:40:17-78
+72-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:40:27-75
+73
+74                <data android:scheme="hermes" />
+74-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:41:17-49
+74-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:41:23-46
+75            </intent-filter>
+76        </activity>
 77        <activity
-77-->[androidx.compose.ui:ui-test-manifest:1.5.4] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/89645e49815d04c6fa2b97f527418ed9/transformed/ui-test-manifest-1.5.4/AndroidManifest.xml:23:9-25:39
-78            android:name="androidx.activity.ComponentActivity"
-78-->[androidx.compose.ui:ui-test-manifest:1.5.4] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/89645e49815d04c6fa2b97f527418ed9/transformed/ui-test-manifest-1.5.4/AndroidManifest.xml:24:13-63
-79            android:exported="true" />
-79-->[androidx.compose.ui:ui-test-manifest:1.5.4] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/89645e49815d04c6fa2b97f527418ed9/transformed/ui-test-manifest-1.5.4/AndroidManifest.xml:25:13-36
-80        <activity
-80-->[androidx.compose.ui:ui-tooling-android:1.5.4] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/15ce43c8f55401d292ee5a1ded2d5628/transformed/ui-tooling-release/AndroidManifest.xml:23:9-25:39
-81            android:name="androidx.compose.ui.tooling.PreviewActivity"
-81-->[androidx.compose.ui:ui-tooling-android:1.5.4] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/15ce43c8f55401d292ee5a1ded2d5628/transformed/ui-tooling-release/AndroidManifest.xml:24:13-71
-82            android:exported="true" />
-82-->[androidx.compose.ui:ui-tooling-android:1.5.4] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/15ce43c8f55401d292ee5a1ded2d5628/transformed/ui-tooling-release/AndroidManifest.xml:25:13-36
-83
-84        <receiver
-84-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:34:9-52:20
-85            android:name="androidx.profileinstaller.ProfileInstallReceiver"
-85-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:35:13-76
-86            android:directBootAware="false"
-86-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:36:13-44
-87            android:enabled="true"
-87-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:37:13-35
-88            android:exported="true"
-88-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:38:13-36
-89            android:permission="android.permission.DUMP" >
-89-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:39:13-57
-90            <intent-filter>
-90-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:40:13-42:29
-91                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
-91-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:17-91
-91-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:25-88
-92            </intent-filter>
-93            <intent-filter>
-93-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:43:13-45:29
-94                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
-94-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:17-85
-94-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:25-82
-95            </intent-filter>
-96            <intent-filter>
-96-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:46:13-48:29
-97                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
-97-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:17-88
-97-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:25-85
-98            </intent-filter>
-99            <intent-filter>
-99-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:49:13-51:29
-100                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
-100-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:17-95
-100-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/9.6.0/transforms/2242a4cca9356715685d3c7162db0cb1/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:25-92
-101            </intent-filter>
-102        </receiver>
-103    </application>
-104
-105</manifest>
+77-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:45:9-48:57
+78            android:name="com.hermes.mobile.ui.screens.auth.PairingActivity"
+78-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:46:13-60
+79            android:exported="true"
+79-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:47:13-36
+80            android:theme="@style/Theme.HermesMobile" />
+80-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:48:13-54
+81        <activity
+81-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:50:9-53:57
+82            android:name="com.hermes.mobile.ui.screens.chat.ChatActivity"
+82-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:51:13-57
+83            android:exported="true"
+83-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:52:13-36
+84            android:theme="@style/Theme.HermesMobile" />
+84-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:53:13-54
+85        <activity
+85-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:55:9-58:57
+86            android:name="com.hermes.mobile.ui.screens.settings.SettingsActivity"
+86-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:56:13-65
+87            android:exported="true"
+87-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:57:13-36
+88            android:theme="@style/Theme.HermesMobile" />
+88-->/data/data/com.termux/files/home/hermes-mobile-app/app/src/main/AndroidManifest.xml:58:13-54
+89        <activity
+89-->[androidx.compose.ui:ui-test-manifest:1.5.4] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/1ef9e146ee3f2f4223924e94b93838a3/transformed/ui-test-manifest-1.5.4/AndroidManifest.xml:23:9-25:39
+90            android:name="androidx.activity.ComponentActivity"
+90-->[androidx.compose.ui:ui-test-manifest:1.5.4] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/1ef9e146ee3f2f4223924e94b93838a3/transformed/ui-test-manifest-1.5.4/AndroidManifest.xml:24:13-63
+91            android:exported="true" />
+91-->[androidx.compose.ui:ui-test-manifest:1.5.4] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/1ef9e146ee3f2f4223924e94b93838a3/transformed/ui-test-manifest-1.5.4/AndroidManifest.xml:25:13-36
+92        <activity
+92-->[androidx.compose.ui:ui-tooling-android:1.5.4] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/bc88c97e59f8ff0d6b7e4e504f4df4f0/transformed/ui-tooling-release/AndroidManifest.xml:23:9-25:39
+93            android:name="androidx.compose.ui.tooling.PreviewActivity"
+93-->[androidx.compose.ui:ui-tooling-android:1.5.4] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/bc88c97e59f8ff0d6b7e4e504f4df4f0/transformed/ui-tooling-release/AndroidManifest.xml:24:13-71
+94            android:exported="true" />
+94-->[androidx.compose.ui:ui-tooling-android:1.5.4] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/bc88c97e59f8ff0d6b7e4e504f4df4f0/transformed/ui-tooling-release/AndroidManifest.xml:25:13-36
+95
+96        <provider
+96-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/dd5c0ad2d91872f3de92fafe75282a15/transformed/emoji2-1.4.0/AndroidManifest.xml:24:9-32:20
+97            android:name="androidx.startup.InitializationProvider"
+97-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/dd5c0ad2d91872f3de92fafe75282a15/transformed/emoji2-1.4.0/AndroidManifest.xml:25:13-67
+98            android:authorities="com.hermes.mobile.androidx-startup"
+98-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/dd5c0ad2d91872f3de92fafe75282a15/transformed/emoji2-1.4.0/AndroidManifest.xml:26:13-68
+99            android:exported="false" >
+99-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/dd5c0ad2d91872f3de92fafe75282a15/transformed/emoji2-1.4.0/AndroidManifest.xml:27:13-37
+100            <meta-data
+100-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/dd5c0ad2d91872f3de92fafe75282a15/transformed/emoji2-1.4.0/AndroidManifest.xml:29:13-31:52
+101                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+101-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/dd5c0ad2d91872f3de92fafe75282a15/transformed/emoji2-1.4.0/AndroidManifest.xml:30:17-75
+102                android:value="androidx.startup" />
+102-->[androidx.emoji2:emoji2:1.4.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/dd5c0ad2d91872f3de92fafe75282a15/transformed/emoji2-1.4.0/AndroidManifest.xml:31:17-49
+103            <meta-data
+103-->[androidx.lifecycle:lifecycle-process:2.7.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/40ab1462f8c958bc75692e5c9ed04c31/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:29:13-31:52
+104                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+104-->[androidx.lifecycle:lifecycle-process:2.7.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/40ab1462f8c958bc75692e5c9ed04c31/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:30:17-78
+105                android:value="androidx.startup" />
+105-->[androidx.lifecycle:lifecycle-process:2.7.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/40ab1462f8c958bc75692e5c9ed04c31/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:31:17-49
+106            <meta-data
+106-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:29:13-31:52
+107                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+107-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:30:17-85
+108                android:value="androidx.startup" />
+108-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:31:17-49
+109        </provider>
+110
+111        <receiver
+111-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:34:9-52:20
+112            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+112-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:35:13-76
+113            android:directBootAware="false"
+113-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:36:13-44
+114            android:enabled="true"
+114-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:37:13-35
+115            android:exported="true"
+115-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:38:13-36
+116            android:permission="android.permission.DUMP" >
+116-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:39:13-57
+117            <intent-filter>
+117-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:40:13-42:29
+118                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+118-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:17-91
+118-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:25-88
+119            </intent-filter>
+120            <intent-filter>
+120-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:43:13-45:29
+121                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+121-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:17-85
+121-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:25-82
+122            </intent-filter>
+123            <intent-filter>
+123-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:46:13-48:29
+124                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+124-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:17-88
+124-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:25-85
+125            </intent-filter>
+126            <intent-filter>
+126-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:49:13-51:29
+127                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+127-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:17-95
+127-->[androidx.profileinstaller:profileinstaller:1.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/938b3e498963af876269b2367eecf5b7/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:25-92
+128            </intent-filter>
+129        </receiver>
+130
+131        <activity
+131-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:47:9-53:63
+132            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+132-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:48:13-74
+133            android:clearTaskOnLaunch="true"
+133-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:49:13-45
+134            android:screenOrientation="sensorLandscape"
+134-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:50:13-56
+135            android:stateNotNeeded="true"
+135-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:51:13-42
+136            android:theme="@style/zxing_CaptureTheme"
+136-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:52:13-54
+137            android:windowSoftInputMode="stateAlwaysHidden" />
+137-->[com.journeyapps:zxing-android-embedded:4.3.0] /data/data/com.termux/files/home/.gradle/caches/8.9/transforms/82c0b2d0d37df3cf490ff130dcdc3979/transformed/zxing-android-embedded-4.3.0/AndroidManifest.xml:53:13-60
+138    </application>
+139
+140</manifest>
