@@ -12,7 +12,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0.0"
+        versionName = "0.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -31,6 +31,7 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            isDebuggable = true
         }
     }
 
@@ -61,16 +62,10 @@ android {
 
 dependencies {
     // Android Core
-    val coreKtx = "androidx.core:core-ktx:1.12.0"
-    val lifecycleKtx = "androidx.lifecycle:lifecycle-runtime-ktx:2.7.0"
-    val activityCompose = "androidx.activity:activity-compose:1.8.2"
-    val activityKtx = "androidx.activity:activity-ktx:1.8.0"
-
-    implementation(coreKtx)
-    implementation(lifecycleKtx)
-    implementation(activityCompose)
-    implementation(activityKtx)
-
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+    implementation("androidx.activity:activity-compose:1.8.2")
+    
     // Compose BOM
     implementation(platform("androidx.compose:compose-bom:2023.10.01"))
     implementation("androidx.compose.ui:ui")
@@ -79,34 +74,29 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.foundation:foundation")
-
+    
     // Navigation
     implementation("androidx.navigation:navigation-compose:2.7.6")
-
+    
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-
+    
     // Networking (Ktor)
     implementation("io.ktor:ktor-client-android:2.3.7")
     implementation("io.ktor:ktor-client-content-negotiation:2.3.7")
     implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.7")
     implementation("io.ktor:ktor-client-auth:2.3.7")
-
-    // QR Scanning
+    
+    // QR Scanning - Using lightweight solution
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-
+    
     // DataStore
     implementation("androidx.datastore:datastore-preferences:1.0.0")
-
+    
     // ViewModel
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-savedstate:2.7.0")
-
-    // Hilt for DI
-    implementation("com.google.dagger:hilt-android:2.45")
-    kapt("com.google.dagger:hilt-android-compiler:2.45")
-
+    
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
