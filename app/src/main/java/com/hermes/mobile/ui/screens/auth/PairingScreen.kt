@@ -3,10 +3,9 @@ package com.hermes.mobile.ui.screens.auth
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.result.ActivityResultCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -14,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -21,10 +21,9 @@ import com.hermes.mobile.ui.theme.HermesMobileTheme
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dagger.hilt.android.AndroidEntryPoint
-import dagger.hilt.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 import org.json.JSONObject
+import java.util.regex.Pattern
 
 @OptIn(ExperimentalMaterial3Api::class)
 @AndroidEntryPoint
@@ -32,7 +31,9 @@ class PairingActivity : ComponentActivity() {
 
     private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
         if (result.contents != null) {
-            viewModel.processQrResult(result.contents)
+            viewModel.processQrResult(result.contents, onResult = { qrConfig ->
+                viewModel.onQrScanned(qrConfig)
+            })
         }
     }
 
@@ -44,9 +45,13 @@ class PairingActivity : ComponentActivity() {
             HermesMobileTheme {
                 PairingScreenContent(
                     onQrScanRequested = { qrScanLauncher.launch(scanOptions) },
+                    qrConfig = viewModel.qrConfig,
+                    error = viewModel.error,
+                    isProcessing = viewModel.isProcessing,
                     onPaired = { url ->
-                        // Navigate to chat screen
-                        val intent = Intent(this, MainActivity::class.java)
+                        val intent = Intent(this, ChatActivity::class.java).apply {
+                            putExtra("desktop_url", url)
+                        }
                         startActivity(intent)
                         finish()
                     },
@@ -61,22 +66,20 @@ class PairingActivity : ComponentActivity() {
         .setBeepEnabled(true)
         .setBarcodeImageEnabled(true)
         .setOrientationLocked(false)
-        .setCaptureActivity(CaptureActivityAnyOrientation::class.java)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PairingScreenContent(
     onQrScanRequested: () -> Unit,
+    qrConfig: PairingViewModel.QRConfig?,
+    error: String?,
+    isProcessing: Boolean,
     onPaired: (String) -> Unit,
     viewModel: PairingViewModel
 ) {
-    val qrResult by remember { mutableStateOf<String?>(null) }
-    val isScanning by remember { mutableStateOf(false) }
-    val error by remember { mutableStateOf<String?>(null) }
-    val isProcessing by remember { mutableStateOf(false) }
-    val pairedUrl by remember { mutableStateOf<String?>(null) }
-
+    val context = LocalContext.current
+    
     Scaffold(
         topBar = {
             TopAppBar(
@@ -100,7 +103,7 @@ fun PairingScreenContent(
             when {
                 error != null -> {
                     Text(
-                        text = error ?: "",
+                        text = error,
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -116,24 +119,52 @@ fun PairingScreenContent(
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
-                pairedUrl != null -> {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.success,
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Text(
-                            text = "Successfully paired!",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Connecting to: $pairedUrl",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                qrConfig != null -> {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "QR Code Detected",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                            }
+                            
+                            Divider(color = MaterialTheme.colorScheme.divider)
+                            
+                            QRConfigDetails(qrConfig = qrConfig)
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            // API Key with show/hide toggle
+                            QRConfigApiKey(apiKey = qrConfig.apiKey)
+                            
+                            Spacer(modifier = Modifier.height(16.dp))
+                            
+                            Button(
+                                onClick = { onPaired(qrConfig.url) },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = true
+                            ) {
+                                Text("Connect to ${qrConfig.tailscaleIp}")
+                            }
+                        }
                     }
                 }
                 else -> {
@@ -149,9 +180,19 @@ fun PairingScreenContent(
             // QR Scanner Button
             Button(
                 onClick = {
-                    onQrScanRequested()
+                    // Request camera permission first
+                    val permission = ContextCompat.checkSelfPermission(
+                        LocalContext.current,
+                        Manifest.permission.CAMERA
+                    )
+                    if (permission == PackageManager.PERMISSION_GRANTED) {
+                        onQrScanRequested()
+                    } else {
+                        // Request permission (this would need a launcher in real code)
+                        Toast.makeText(context, "Camera permission required", Toast.LENGTH_SHORT).show()
+                    }
                 },
-                enabled = !isProcessing && pairedUrl == null,
+                enabled = !isProcessing && qrConfig == null,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 if (isProcessing) {
@@ -165,45 +206,9 @@ fun PairingScreenContent(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Manual entry section
-            Card {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Or enter details manually", style = MaterialTheme.typography.titleSmall)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    OutlinedTextField(
-                        value = remember { mutableStateOf("") }.value,
-                        onValueChange = { /* handled in ViewModel */ },
-                        label = { Text("Desktop URL") },
-                        placeholder = { Text("e.g., 100.89.25.56:8642") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = remember { mutableStateOf("") }.value,
-                        onValueChange = { /* handled in ViewModel */ },
-                        label = { Text("Pairing Token") },
-                        placeholder = { Text("Token from QR code") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(
-                        onClick = { /* process manual entry */ },
-                        enabled = true,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Connect Manually")
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Help text
+            // Instructions
             Text(
-                text = "Make sure Hermes Agent Desktop is running and QR code is visible",
+                text = "Open Hermes Desktop, run 'hermes-mobile-plugin qr', and scan the QR code shown in browser",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -212,28 +217,111 @@ fun PairingScreenContent(
     }
 }
 
-// ViewModel for pairing logic
-@HiltViewModel
-class PairingViewModel @Inject constructor(
-    private val repository: com.hermes.mobile.data.repository.HermesRepository
-) : androidx.lifecycle.ViewModel() {
-
-    fun processQrResult(qrResult: String): String {
-        // Parse QR result - expected format from our plugin: JSON with url and api_key
-        try {
-            val json = JSONObject(qrResult)
-            val url = json.getString("url")
-            // Validate URL format
-            if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                throw IllegalArgumentException("Invalid URL format")
-            }
-            return url
-        } catch (e: Exception) {
-            throw IllegalArgumentException("Invalid QR code format: ${e.message}")
-        }
+@Composable
+fun QRConfigDetails(qrConfig: PairingViewModel.QRConfig) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        InfoRow("Server URL", qrConfig.url)
+        InfoRow("Tailscale IP", qrConfig.tailscaleIp)
+        InfoRow("API Key", "••••••••••••••••••••••")
+        InfoRow("Compression", if (qrConfig.contextCompression) "Enabled" else "Disabled")
+        InfoRow("Version", qrConfig.version)
     }
 }
 
-class CaptureActivityAnyOrientation : com.journeyapps.barcodescanner.CaptureActivity {
-    // Allow any orientation for QR scanning
+@Composable
+fun QRConfigApiKey(apiKey: String) {
+    var showKey by remember { mutableStateOf(false) }
+    
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text("API Key", style = MaterialTheme.typography.labelSmall)
+        Spacer(modifier = Modifier.height(4.dp))
+        OutlinedTextField(
+            value = if (showKey) apiKey else "••••••••••••••••••••••••••••••••••••••••••••••••••",
+            onValueChange = {},
+            enabled = false,
+            modifier = Modifier.fillMaxWidth(),
+            readOnly = true,
+            suffix = {
+                IconButton(onClick = { showKey = !showKey }) {
+                    Icon(
+                        imageVector = if (showKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                        contentDescription = if (showKey) "Hide API key" else "Show API key"
+                    )
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun InfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+// ViewModel for pairing logic
+@androidx.hilt.lifecycle.HiltViewModel
+class PairingViewModel @javax.inject.Inject constructor(
+    private val repository: com.hermes.mobile.data.repository.HermesRepository
+) : androidx.lifecycle.ViewModel() {
+
+    data class QRConfig(
+        val url: String,
+        val apiKey: String,
+        val tailscaleIp: String,
+        val version: String,
+        val contextCompression: Boolean
+    )
+
+    var qrConfig by mutableStateOf<QRConfig?>(null)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+    var isProcessing by mutableStateOf(false)
+        private set
+
+    fun processQrResult(qrResult: String, onResult: (QRConfig) -> Unit) {
+        isProcessing = true
+        error = null
+        
+        try {
+            // Parse QR result - expect JSON format from our plugin
+            val json = JSONObject(qrResult)
+            val url = json.optString("url")
+            val apiKey = json.optString("api_key")
+            val tailscaleIp = json.optString("tailscale_ip")
+            val version = json.optString("version")
+            val compression = json.optBoolean("context_compression", true)
+            
+            // Validate required fields
+            if (url.isEmpty() || !url.startsWith("http://") && !url.startsWith("https://")) {
+                throw IllegalArgumentException("Invalid URL format in QR code")
+            }
+            
+            qrConfig = QRConfig(
+                url = url,
+                apiKey = apiKey,
+                tailscaleIp = tailscaleIp,
+                version = version,
+                contextCompression = compression
+            )
+            
+            onResult(qrConfig!!)
+        } catch (e: Exception) {
+            error = "Invalid QR code format: ${e.message}"
+        } finally {
+            isProcessing = false
+        }
+    }
+    
+    fun onQrScanned(config: QRConfig) {
+        // Save configuration for later use
+        qrConfig = config
+    }
 }

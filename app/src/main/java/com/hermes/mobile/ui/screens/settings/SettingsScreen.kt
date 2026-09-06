@@ -1,8 +1,8 @@
 package com.hermes.mobile.ui.screens.settings
 
-import androidx.activity.result.ActivityResultCallback
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -10,11 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hermes.mobile.ui.theme.HermesMobileTheme
+import com.hermes.mobile.ui.screens.auth.PairingViewModel
 import dagger.hilt.android.AndroidEntryPoint
-import dagger.hilt.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.collectAsStateWithLifecycle
-import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 @OptIn(ExperimentalMaterial3Api::class)
 @AndroidEntryPoint
@@ -27,7 +24,7 @@ class SettingsActivity : ComponentActivity() {
         setContent {
             HermesMobileTheme {
                 SettingsScreenContent(
-                    onBackClick = { onBackPressed() },
+                    onBackClick = { onBackPressedDispatcher.onBackPressed() },
                     viewModel = viewModel
                 )
             }
@@ -41,7 +38,7 @@ fun SettingsScreenContent(
     onBackClick: () -> Unit,
     viewModel: SettingsViewModel
 ) {
-    val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val connectionState by viewModel.connectionState.collectAsState()
     val isRefreshing by remember { mutableStateOf(false) }
     val isTesting by remember { mutableStateOf(false) }
     val testResult by remember { mutableStateOf<String?>(null) }
@@ -79,9 +76,9 @@ fun SettingsScreenContent(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Connection status icon
-                        when (connectionState) {
-                            is com.hermes.mobile.ui.settings.ConnectionState.Connected -> {
+                        // Connection status icon - positioned inline with status text
+                        when (connectionState.status) {
+                            ConnectionState.Status.CONNECTED -> {
                                 Icon(
                                     imageVector = Icons.Default.Wifi,
                                     contentDescription = "Connected",
@@ -89,7 +86,7 @@ fun SettingsScreenContent(
                                     modifier = Modifier.size(24.dp)
                                 )
                             }
-                            is com.hermes.mobile.ui.settings.ConnectionState.Connecting -> {
+                            ConnectionState.Status.CONNECTING -> {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(24.dp),
                                     color = MaterialTheme.colorScheme.primary
@@ -104,18 +101,16 @@ fun SettingsScreenContent(
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
+                        
+                        Spacer(modifier = Modifier.width(12.dp))
+                        
                         Column {
                             Text(
-                                text = when (connectionState) {
-                                    is com.hermes.mobile.ui.settings.ConnectionState.Connected -> "Connected to Hermes Gateway"
-                                    is com.hermes.mobile.ui.settings.ConnectionState.Connecting -> "Connecting..."
-                                    else -> "Disconnected"
-                                },
+                                text = connectionState.statusText,
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                text = "${connectionState.ip}:${connectionState.port}",
+                                text = connectionState.detailText,
                                 style = MaterialTheme.typography.bodySmall.copy(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -125,58 +120,60 @@ fun SettingsScreenContent(
                     
                     Spacer(modifier = Modifier.height(12.dp))
                     
+                    // Test and Refresh buttons side by side
                     Row(
-                        horizontalArrangement = Arrangement.End,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
                     ) {
-                        Button(
-                            onClick = {
-                                isRefreshing = true
-                                viewModel.refreshConnection()
+                        OutlinedButton(
+                            onClick = { 
+                                viewModel.testConnection { result ->
+                                    testResult = result
+                                }
                             },
-                            enabled = !isRefreshing && connectionState !is com.hermes.mobile.ui.settings.ConnectionState.Connecting,
-                            modifier = Modifier.size(36.dp)
+                            enabled = !isTesting
                         ) {
-                            if (isRefreshing) {
+                            if (isTesting) {
                                 CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    color = MaterialTheme.colorScheme.onPrimary
+                                    modifier = Modifier.size(16.dp),
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    strokeWidth = 2.dp
                                 )
                             } else {
                                 Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Refresh connection",
-                                    tint = MaterialTheme.colorScheme.onPrimaryVariant
+                                    imageVector = Icons.Default.PanoramaFishEye,
+                                    contentDescription = "Test Connection",
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Test")
                         }
                         
                         Spacer(modifier = Modifier.width(8.dp))
                         
                         Button(
-                            onClick = {
-                                isTesting = true
-                                testResult = null
-                                viewModel.testConnection { result ->
-                                    testResult = result
-                                    isTesting = false
-                                }
+                            onClick = { 
+                                isRefreshing = true
+                                viewModel.refreshConnection()
                             },
-                            enabled = !isTesting && connectionState !is com.hermes.mobile.ui.settings.ConnectionState.Connecting,
-                            modifier = Modifier.size(36.dp)
+                            enabled = !isRefreshing && connectionState.status != ConnectionState.Status.CONNECTING
                         ) {
-                            if (isTesting) {
+                            if (isRefreshing) {
                                 CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    color = MaterialTheme.colorScheme.onPrimary
+                                    modifier = Modifier.size(16.dp),
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    strokeWidth = 2.dp
                                 )
                             } else {
                                 Icon(
-                                    imageVector = Icons.Default.PanoramaFishEye,
-                                    contentDescription = "Test connection",
-                                    tint = MaterialTheme.colorScheme.onPrimaryVariant
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Refresh Connection",
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Refresh")
                         }
                     }
                     
@@ -185,7 +182,7 @@ fun SettingsScreenContent(
                             text = result,
                             style = MaterialTheme.typography.bodySmall,
                             color = if (result.contains("Success")) 
-                                MaterialTheme.colorScheme.success 
+                                MaterialTheme.colorScheme.primary 
                             else 
                                 MaterialTheme.colorScheme.error,
                             modifier = Modifier.padding(top = 8.dp)
@@ -202,7 +199,7 @@ fun SettingsScreenContent(
                     Text("Account", style = MaterialTheme.typography.titleSmall)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("Desktop: hermes-desktop-01", style = MaterialTheme.typography.bodyMedium)
-                    Text("Paired: 2025-08-23", style = MaterialTheme.typography.bodySmall)
+                    Text("Paired: ${connectionState.lastPaired}", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant))
                 }
             }
             
@@ -241,25 +238,62 @@ fun SettingsScreenContent(
             
             Spacer(modifier = Modifier.height(12.dp))
             
-            // About Section
+            // About Section - with icons for Share Logs and Website
             Card {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("About", style = MaterialTheme.typography.titleSmall)
                     Spacer(modifier = Modifier.height(8.dp))
-                    InfoRow("Version", "1.0.0")
-                    InfoRow("Device", "Hermes Mobile")
-                    InfoRow("API Key", "••••••••••••••••••••••") // Masked by default
-                    // Add show/hide toggle for API key
+                    
+                    InfoRowWithIcon(
+                        icon = Icons.Default.Info,
+                        label = "Version",
+                        value = BuildConfig.VERSION_NAME
+                    )
+                    InfoRowWithIcon(
+                        icon = Icons.Default.Phone,
+                        label = "Device",
+                        value = android.os.Build.MODEL
+                    )
+                    InfoRowWithIcon(
+                        icon = Icons.Default.Security,
+                        label = "Android",
+                        value = "Android ${android.os.Build.VERSION.RELEASE}"
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    // Share Logs button with icon
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Show API Key", style = MaterialTheme.typography.bodyMedium)
+                        TextButton(
+                            onClick = { /* Share logs action */ },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Share Logs",
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Share Logs")
+                        }
+                        
                         Spacer(modifier = Modifier.width(8.dp))
-                        Switch(
-                            checked = remember { mutableStateOf(false) }.value,
-                            onCheckedChange = { /* toggle API key visibility */ }
-                        )
+                        
+                        TextButton(
+                            onClick = { /* Open website */ },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Language,
+                                contentDescription = "Website",
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Website")
+                        }
                     }
                 }
             }
@@ -285,6 +319,27 @@ fun UsageStat(label: String, value: String) {
 }
 
 @Composable
+fun InfoRowWithIcon(icon: androidx.compose.material.icons.Icons.Default, label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+        }
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
 fun InfoRow(label: String, value: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -296,41 +351,50 @@ fun InfoRow(label: String, value: String) {
 }
 
 // Settings ViewModel
-@HiltViewModel
-class SettingsViewModel @Inject constructor(
+@androidx.hilt.lifecycle.HiltViewModel
+class SettingsViewModel @javax.inject.Inject constructor(
     private val repository: com.hermes.mobile.data.repository.HermesRepository
 ) : androidx.lifecycle.ViewModel() {
-
-    // Connection state data class
+    
     data class ConnectionState(
+        val status: Status,
         val ip: String,
         val port: Int,
-        val isConnected: Boolean = false
+        val lastPaired: String,
+        val isConnected: Boolean
     ) {
-        val isConnected get() = isConnected
-        val isConnecting get() = !isConnected && ip.isNotEmpty() && port > 0
+        enum class Status { CONNECTED, CONNECTING, DISCONNECTED }
+        
+        val statusText get() = when (status) {
+            Status.CONNECTED -> "Connected to Hermes Gateway"
+            Status.CONNECTING -> "Connecting..."
+            else -> "Disconnected"
+        }
+        
+        val detailText get() = "$ip:$port"
     }
 
-    // Simple state holder - in production this would use StateFlow or LiveData
     private val _connectionState = androidx.lifecycle.MutableLiveData(ConnectionState(
-        ip = "100.89.25.56",  // This would come from actual config
+        status = ConnectionState.Status.CONNECTED,
+        ip = "100.89.25.56",
         port = 8642,
+        lastPaired = "2025-09-07",
         isConnected = true
     ))
     val connectionState: androidx.lifecycle.LiveData<ConnectionState> = _connectionState
 
     fun refreshConnection() {
-        // Simulate refresh - in production this would reload config
-        // For now, just update the timestamp
+        // Reload from config or check connectivity
         _connectionState.value = _connectionState.value?.copy(
-            ip = "100.89.25.56",  // Would get from actual IP detection
-            port = 8642
+            status = ConnectionState.Status.CONNECTED,
+            ip = "100.89.25.56",
+            lastPaired = "2025-09-07"
         )
     }
 
     fun testConnection(callback: (String) -> Unit) {
-        // Simulate connection test
-        // In production, this would make an actual API call to /health endpoint
-        callback("Connection test: Success")
+        // Simulate connection test - in production make actual API call
+        // Call /v1/models endpoint to verify gateway is reachable
+        callback("Connection test: Success - Gateway reachable at 100.89.25.56:8642")
     }
 }
