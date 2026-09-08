@@ -1,4 +1,0 @@
-#Sun Sep 06 19:53:57 GMT 2026
-base.0=/data/data/com.termux/files/home/hermes-mobile-app/app/build/intermediates/dex/debug/minifyDebugWithR8/classes.dex
-path.0=classes.dex
-renamed.0=classes.dex

@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Transparent background: the logo is the circular avatar itself,
-         matching the chat header avatar. -->
-    <background android:drawable="@android:color/transparent"/>
-    <foreground android:drawable="@drawable/hermes_logo_circle"/>
-</adaptive-icon>

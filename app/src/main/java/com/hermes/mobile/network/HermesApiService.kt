@@ -51,7 +51,7 @@ class HermesApiService @Inject constructor(
         private const val KEY_SETUP_TOKEN = "setup_token"
 
         /** A stream that stays silent this long is dead (hung provider,
-         *  silently dropped connection) — kill it instead of waiting out
+         *  silently dropped connection) - kill it instead of waiting out
          *  the 300s OkHttp read timeout. */
         private const val STREAM_IDLE_TIMEOUT_MS = 90_000L
         private const val WATCHDOG_POLL_MS = 2_000L
@@ -71,7 +71,7 @@ class HermesApiService @Inject constructor(
     fun hasDarkThemePreference(): Boolean = prefs.contains(KEY_DARK_THEME)
 
     // ── Device account (auto-registered after QR pairing) ──
-    // Stored ENCRYPTED (AES256-GCM via SecurePrefs) — these are live
+    // Stored ENCRYPTED (AES256-GCM via SecurePrefs) - these are live
     // credentials, never plaintext on disk.
     private val devicePrefs: SharedPreferences
         get() = com.hermes.mobile.security.SecurePrefs.get(context, com.hermes.mobile.security.SecurePrefs.DEVICE_PREFS)
@@ -118,15 +118,15 @@ class HermesApiService @Inject constructor(
 
     // ── Server URL persistence ──
     // baseUrl stays in plain prefs (non-secret); apiKey + setupToken go to
-    // SecurePrefs (AES256-GCM at rest) — same store device creds use.
+    // SecurePrefs (AES256-GCM at rest) - same store device creds use.
 
     // Written on Main (updateConfig) and read from IO threads (healthCheck
-    // / streamChat) — publication must be visible across dispatchers.
+    // / streamChat) - publication must be visible across dispatchers.
     @Volatile
     private var config: ServerConfig? = null
 
     // Built ONCE (lazy): SecurePrefs.get() creates a MasterKey +
-    // EncryptedSharedPreferences (KeyStore init + file decrypt) — doing
+    // EncryptedSharedPreferences (KeyStore init + file decrypt) - doing
     // that on EVERY access was blocking the Main thread on each 5s poll.
     private val secretPrefs: SharedPreferences by lazy {
         com.hermes.mobile.security.SecurePrefs.get(context, SECURE_PREFS_NAME)
@@ -136,7 +136,7 @@ class HermesApiService @Inject constructor(
         val prev = config
         config = cfg
         if (prev == cfg) {
-            // Unchanged — skip the prefs write. healthCheck polls every 5s
+            // Unchanged - skip the prefs write. healthCheck polls every 5s
             // and passes a fresh object; writing on every poll is needless
             // disk I/O.
             return
@@ -204,7 +204,7 @@ class HermesApiService @Inject constructor(
                     builder.header("Authorization", "Bearer $apiKey")
                 }
                 val request = builder.build()
-                // response.use closes the body — a leaked body pins a socket
+                // response.use closes the body - a leaked body pins a socket
                 // (readTimeout 300s) that can't be pooled; the 5s poll loop
                 // would accumulate connections over time.
                 client.newCall(request).execute().use { it.isSuccessful }
@@ -241,7 +241,7 @@ class HermesApiService @Inject constructor(
         // Build OpenAI-compatible chat completion request
         val messages = buildOpenAIMessages(sessionId, query)
         // Dynamic default: server inventory decides. No hardcoded model id.
-        // Resolved here (suspend scope) — not inside the callback below.
+        // Resolved here (suspend scope) - not inside the callback below.
         val safeModel = if (!model.isNullOrBlank()) model else fetchDefaultModelId()
         val payload = JSONObject().apply {
             put("model", safeModel)
@@ -352,7 +352,7 @@ class HermesApiService @Inject constructor(
                             }
                             // Telegram: media + caption arrive together. The
                             // server emits this in-stream (before [DONE])
-                            // when the reply includes a session upload —
+                            // when the reply includes a session upload -
                             // apply the image/file to the bubble NOW.
                             "attachment" -> {
                                 onAttachment(
@@ -387,7 +387,7 @@ class HermesApiService @Inject constructor(
                         // If 401, try to refresh token and retry
                         if (response?.code == 401) {
                             val baseUrl = config?.baseUrl ?: "http://localhost:8080"
-                            // Refresh off this OkHttp callback thread — a
+                            // Refresh off this OkHttp callback thread - a
                             // runBlocking here would pin a dispatcher thread
                             // per failed stream.
                             CoroutineScope(Dispatchers.IO).launch {
@@ -425,7 +425,7 @@ class HermesApiService @Inject constructor(
                         if (completed.compareAndSet(false, true)) {
                             source.cancel()
                             continuation.resumeWithException(
-                                IOException("Stream idle — no data for ${STREAM_IDLE_TIMEOUT_MS / 1000}s")
+                                IOException("Stream idle - no data for ${STREAM_IDLE_TIMEOUT_MS / 1000}s")
                             )
                         }
                         return@launch
@@ -519,7 +519,7 @@ class HermesApiService @Inject constructor(
 
     // ─── Model Inventory (same source as the Hermes dashboard/TUI picker) ───
     // GET /api/model/options returns providers[] with slug, name, models[].
-    // Groups, ids and the default derive 100% from the response — no
+    // Groups, ids and the default derive 100% from the response - no
     // hardcoded model names anywhere in this file.
     suspend fun fetchModelOptions(): ModelListResponse? {
         val cfg = config ?: getConfig()
@@ -570,7 +570,7 @@ class HermesApiService @Inject constructor(
             if (opts.current.isNotBlank() && opts.models.any { it.id == opts.current }) return opts.current
             opts.models.firstOrNull()?.let { return it.id }
         }
-        throw IOException("No model available — check connection")
+        throw IOException("No model available - check connection")
     }
 
     // ─── Keep Computer Awake (platform-generic) ───
@@ -678,7 +678,7 @@ class HermesApiService @Inject constructor(
     // ─── Session status/source badges (server truth) ───
 
     /** Fetch the server's per-session status (idle/working/done/error) +
-     * source (app/voice/swarm) — the local DB has no such fields. */
+     * source (app/voice/swarm) - the local DB has no such fields. */
     suspend fun fetchServerSessionStatus(): Map<String, Pair<String, String>> {
         val baseUrl = config?.baseUrl ?: return emptyMap()
         return withContext(Dispatchers.IO) {
@@ -710,7 +710,7 @@ class HermesApiService @Inject constructor(
     // ─── Per-session push channel (response_ready) ───
 
     /** Subscribe to the session's SSE event channel. The server PUSHES a
-     * 'response_ready' event the moment a response is saved — the chat
+     * 'response_ready' event the moment a response is saved - the chat
      * patches instantly instead of polling. Returns the source (cancel it
      * to stop); keepalive comments are ignored by the SSE parser. */
     fun subscribeSessionEvents(
@@ -745,7 +745,7 @@ class HermesApiService @Inject constructor(
                 onFailure(t)
             }
             override fun onClosed(eventSource: EventSource) {
-                // Treat close as down — the fallback poll + resubscribe kick in.
+                // Treat close as down - the fallback poll + resubscribe kick in.
                 onFailure(null)
             }
         })
@@ -756,7 +756,7 @@ class HermesApiService @Inject constructor(
     suspend fun switchModel(sessionId: String, modelName: String, global: Boolean = false): Boolean {
         // Direct API has no server-side switch endpoint (POST /v1/models/switch
         // is 404). Model travels per chat request, so switch is local-only.
-        // Any non-blank server-advertised id is accepted — no hardcoded list.
+        // Any non-blank server-advertised id is accepted - no hardcoded list.
         if (modelName.isBlank()) return false
         return true
     }
@@ -909,7 +909,7 @@ class HermesApiService @Inject constructor(
                     .post(wav.toRequestBody("audio/wav".toMediaType()))
                     .build()
                 // AuthInterceptor adds the Authorization header (replace
-                // semantics) to every request — no manual header needed.
+                // semantics) to every request - no manual header needed.
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         val json = JSONObject(response.body?.string() ?: "{}")
@@ -958,7 +958,7 @@ class HermesApiService @Inject constructor(
     }
 
     /** Download a session attachment (e.g. /uploads/...) as raw bytes.
-     * Telegram-style: tapping a media/file bubble downloads it — the same
+     * Telegram-style: tapping a media/file bubble downloads it - the same
      * AuthInterceptor attaches the Bearer token automatically. Returns null
      * on any failure. */
     suspend fun downloadAttachment(relUrl: String): ByteArray? {
@@ -974,6 +974,67 @@ class HermesApiService @Inject constructor(
                 throw e
             } catch (_: Exception) {
                 null
+            }
+        }
+    }
+
+    // ── Audio STT / TTS (hermes-mobile-qr plugin routes) ──────────────
+
+    suspend fun transcribeAudio(audioB64: String, mimeType: String = "audio/mp4", model: String? = null): String {
+        val baseUrl = config?.baseUrl ?: throw RuntimeException("Not connected")
+        val url = "$baseUrl/api/audio/transcribe"
+        val requestJson = JSONObject()
+        requestJson.put("audio_b64", audioB64)
+        requestJson.put("mime_type", mimeType)
+        if (model != null && model.isNotEmpty()) {
+            requestJson.put("model", model)
+        }
+        val payload = requestJson.toString()
+        return withContext(Dispatchers.IO) {
+            val request = Request.Builder()
+                .url(url)
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    throw RuntimeException("Transcribe HTTP ${resp.code}: $body")
+                }
+                val responseJson = JSONObject(body)
+                if (!responseJson.optBoolean("ok", false)) {
+                    throw RuntimeException("Transcribe: ${responseJson.optString("error", "unknown")}")
+                }
+                responseJson.optString("text", "")
+            }
+        }
+    }
+
+    suspend fun speakText(text: String, model: String? = null): String {
+        val baseUrl = config?.baseUrl ?: throw RuntimeException("Not connected")
+        val url = "$baseUrl/api/audio/speak"
+        val requestJson = JSONObject()
+        requestJson.put("text", text)
+        if (model != null && model.isNotEmpty()) {
+            requestJson.put("model", model)
+        }
+        val payload = requestJson.toString()
+        return withContext(Dispatchers.IO) {
+            val request = Request.Builder()
+                .url(url)
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    throw RuntimeException("Speak HTTP ${resp.code}: $body")
+                }
+                val responseJson = JSONObject(body)
+                if (!responseJson.optBoolean("ok", false)) {
+                    throw RuntimeException("Speak: ${responseJson.optString("error", "unknown")}")
+                }
+                val dataUrl = responseJson.optString("data_url", "")
+                if (dataUrl.isEmpty()) throw RuntimeException("Speak: no audio returned")
+                dataUrl
             }
         }
     }

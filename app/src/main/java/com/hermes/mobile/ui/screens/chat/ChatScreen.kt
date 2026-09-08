@@ -156,6 +156,13 @@ class ChatViewModel @Inject constructor(
     fun toggleEmojiPicker() { showEmojiPicker.value = !showEmojiPicker.value }
     fun hideEmojiPicker() { showEmojiPicker.value = false }
 
+    // ── QR dialog ──
+    var showQrDialog = MutableStateFlow(false)
+        private set
+
+    fun toggleQrDialog() { showQrDialog.value = !showQrDialog.value }
+    fun hideQrDialog() { showQrDialog.value = false }
+
     // ── Error state ──
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
@@ -1135,7 +1142,7 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(modifier = Modifier.width(4.dp))
-                // Hermes logo — the golden Caduceus (circle-clipped)
+                // Hermes logo — the golden Caduceus (circle‑clipped)
                 Image(
                     painter = painterResource(R.drawable.hermes_caduceus),
                     contentDescription = "Hermes",
@@ -1182,6 +1189,18 @@ fun ChatScreen(
                         contentDescription = "Select model",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp)
+                    )
+                }
+                // QR code button (unchanged)
+                IconButton(
+                    onClick = { vm.toggleQrDialog() },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.QrCode,
+                        contentDescription = "QR code",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
