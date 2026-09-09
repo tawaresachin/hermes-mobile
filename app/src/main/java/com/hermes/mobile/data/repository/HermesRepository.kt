@@ -94,7 +94,8 @@ class HermesRepository @Inject constructor(
         val ext = "(?:\\.png|\\.jpe?g|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.webm|\\.mov|\\.mkv" +
             "|\\.mp3|\\.wav|\\.ogg|\\.m4a|\\.opus|\\.flac|\\.pdf|\\.zip|\\.docx?|\\.xlsx?" +
             "|\\.pptx?|\\.txt|\\.md|\\.csv|\\.json|\\.log|\\.bin)"
-        val re = Regex("/uploads/" + java.util.regex.Pattern.quote(sessionId) + "/[^\\s)\\]]*?" + ext)
+        val sid = java.util.regex.Pattern.quote(sessionId)
+        val re = Regex("(?:/uploads/" + sid + "/|/api/audio/download/" + sid + "/)[^\\s)\\]]*?" + ext)
         return text.replace(re, "").replace(Regex("\\s+"), " ").trim()
     }
 
@@ -141,14 +142,17 @@ class HermesRepository @Inject constructor(
         attempt: Int = 1,
         attachmentUrl: String = "",
         attachType: String = "",
-        multiAgent: Boolean = false,
         replyTo: String? = null,
         // Pre-inserted row (queued messages) — reuse it for the tick chain
         // instead of creating a duplicate user message.
         userMsgId: Long? = null,
         model: String? = null,
         provider: String? = null,
+        onUsage: (Long, Long) -> Unit = { _, _ -> },
     ): String {
+        // Real per-turn usage captured from the SSE usage frame.
+        var usagePrompt = 0L
+        var usageCompletion = 0L
         // Save user message ONLY on first attempt (retries must not duplicate it)
         var userMsgIdFinal: Long? = userMsgId
         if (attempt == 1 && userMsgId == null) {
@@ -235,6 +239,11 @@ class HermesRepository @Inject constructor(
                     }
                     onAttachment(url, type)
                 },
+                onUsage = { pt, ct ->
+                    usagePrompt = pt
+                    usageCompletion = ct
+                    onUsage(pt, ct)
+                },
                 onTurnEnd = {
                     // Follow-up turn boundary: persist the accumulated text
                     // into the CURRENT placeholder, open a fresh placeholder
@@ -262,7 +271,6 @@ class HermesRepository @Inject constructor(
                 },
                 attachmentUrl = attachmentUrl,
                 attachType = attachType,
-                multiAgent = multiAgent,
                 replyTo = replyTo,
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -290,8 +298,8 @@ class HermesRepository @Inject constructor(
                 // Delete the placeholder message we just created
                 messageDao.deleteMessage(msgId)
                 // Retry silently — user message already saved, so don't re-insert.
-                // Named params: a 401 retry must NOT drop the attachment,
-                // reply quote or multi-agent flag (positional call lost them).
+                // Named params: a 401 retry must NOT drop the attachment
+                // or reply quote (positional call lost them).
                 return sendMessage(
                     sessionId = sessionId,
                     query = query,
@@ -301,8 +309,10 @@ class HermesRepository @Inject constructor(
                     attempt = attempt + 1,
                     attachmentUrl = attachmentUrl,
                     attachType = attachType,
-                    multiAgent = multiAgent,
                     replyTo = replyTo,
+                    onUsage = onUsage,
+                    model = model,
+                    provider = provider,
                 )
             }
             // Transient network failure BEFORE any content arrived (drop,
@@ -328,11 +338,19 @@ class HermesRepository @Inject constructor(
                     attempt = attempt + 1,
                     attachmentUrl = attachmentUrl,
                     attachType = attachType,
-                    multiAgent = multiAgent,
                     replyTo = replyTo,
+                    onUsage = onUsage,
+                    model = model,
+                    provider = provider,
                 )
             }
-            fullResponse.append("⚠️ Connection error: ${e.message}")
+            fullResponse.append(
+                "⚠️ " + when {
+                    e is java.net.UnknownHostException -> "Can't reach the server. Check the URL in Settings or scan a fresh QR."
+                    e is java.net.SocketTimeoutException -> "The server took too long to respond. Try again."
+                    e.message?.contains("401") == true -> "API key rejected. Update it in Settings → Account."
+                    else -> "Connection failed. Tap to retry after checking Settings."
+                })
             // Tick → FAILED: the send did not complete after retries.
             if (userMsgIdFinal != null) {
                 try {
@@ -347,6 +365,15 @@ class HermesRepository @Inject constructor(
         // replaces them, Telegram never shows raw media links)
         finalizeMessage(msgId, sessionId, fullResponse.toString())
         sessionDao.incrementMessageCount(sessionId)
+
+        // Real token usage on the assistant row → Settings → Usage sums truth.
+        if (usagePrompt + usageCompletion > 0) {
+            try {
+                messageDao.updateMessageTokens(msgId, usagePrompt + usageCompletion)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { }
+        }
 
         // Tick → READ once the response COMPLETED. The first-text-chunk
         // hook misses tool-only / reasoning-only / resume-repair responses
@@ -615,8 +642,10 @@ class HermesRepository @Inject constructor(
 
     // ─── File Upload ───
 
-    suspend fun uploadFile(file: java.io.File, fileName: String, mimeType: String): String? {
-        return apiService.uploadFile(file, fileName, mimeType)
+    suspend fun uploadFile(
+        file: java.io.File, fileName: String, mimeType: String, sessionId: String = ""
+    ): String? {
+        return apiService.uploadFile(file, fileName, mimeType, sessionId)
     }
 
     /** Telegram-style: tap a media/file bubble → download the attachment
@@ -625,7 +654,7 @@ class HermesRepository @Inject constructor(
         return apiService.downloadAttachment(relUrl)
     }
 
-    /** Upload the on-device diag log to the bridge (stored under STORE_PATH/logs/). */
+    /** Upload the on-device diag log to the gateway plugin (stored under ~/.hermes/mobile-logs/diag/). */
     suspend fun uploadDiagLog(device: String, version: String, log: String): Boolean {
         return apiService.uploadDiagLog(device, version, log)
     }
@@ -638,12 +667,6 @@ class HermesRepository @Inject constructor(
 
     suspend fun setKeepAwake(awake: Boolean): String? {
         return apiService.setSystemAwake(awake)
-    }
-
-    // ─── Follow-ups to a running agent (Cursor-style) ───
-
-    suspend fun sendFollowUp(sessionId: String, query: String): Boolean {
-        return apiService.sendFollowUp(sessionId, query)
     }
 
     /** Local user bubble for a queued follow-up (the server persists its
@@ -674,14 +697,12 @@ class HermesRepository @Inject constructor(
 
     fun getSavedConfig(): ServerConfig? = apiService.getConfig()
 
-    fun getBaseUrl(): String = apiService.getBaseUrl()
-
-    // ─── Device account (auto-registered on QR pairing) ───
-    fun saveDeviceCredentials(email: String, password: String) {
-        apiService.saveDeviceCredentials(email, password)
+    /** Forget the saved server URL + API key (Settings → Log Out). */
+    fun clearSavedConnection() {
+        apiService.clearConfig()
     }
 
-    fun getDeviceCredentials(): Pair<String, String>? = apiService.getDeviceCredentials()
+    fun getBaseUrl(): String = apiService.getBaseUrl()
 
     suspend fun checkConnection(config: ServerConfig): ConnectionStatus {
         return try {
@@ -713,6 +734,12 @@ class HermesRepository @Inject constructor(
         return apiService.switchModel(sessionId, modelName, global)
     }
 
+    fun savedModelForSession(sessionId: String): String? =
+        apiService.savedModelForSession(sessionId)
+
+    fun saveModelForSession(sessionId: String, modelId: String) =
+        apiService.saveModelForSession(sessionId, modelId)
+
     // ─── Dark Theme ───
 
     fun saveDarkTheme(isDark: Boolean) {
@@ -732,7 +759,7 @@ class HermesRepository @Inject constructor(
         return apiService.textToSpeech(text, voice)
     }
 
-    /** Whisper STT via the bridge (null → caller falls back to system). */
+    /** Whisper STT via the gateway audio route (null → caller falls back to system). */
     suspend fun transcribeAudio(wav: ByteArray, lang: String? = null): String? {
         return apiService.transcribeAudio(wav, lang)
     }
@@ -744,6 +771,13 @@ class HermesRepository @Inject constructor(
         val messagesCount: Int,
         val tokensUsed: Long
     )
+
+    suspend fun fetchContextWindow(modelId: String, providerSlug: String?): Long =
+        apiService.fetchContextWindow(modelId, providerSlug)
+
+    /** Server-truth usage (falls back to local counts when offline). */
+    suspend fun getServerUsageStats(): HermesApiService.ServerUsage? =
+        apiService.fetchServerUsage()
 
     suspend fun getUsageStats(): UsageStats {
         return try {

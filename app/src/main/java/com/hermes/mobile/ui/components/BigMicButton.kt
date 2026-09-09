@@ -2,8 +2,8 @@ package com.hermes.mobile.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -20,6 +20,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -87,8 +88,6 @@ fun BigMicButton(
 
     val s by animateFloatAsState(targetValue = if (isPressed && !isRecording) 0.92f else 1f, label = "mic_scale")
 
-    val interactionSource = remember { MutableInteractionSource() }
-
     Box(contentAlignment = Alignment.Center, modifier = modifier.size(size)) {
         if (!isRecording) {
             Box(modifier = Modifier.size(size + 24.dp).align(Alignment.Center).background(brush = Brush.radialGradient(colors = listOf(pulseColor, pulseColor.copy(alpha = 0f)), center = Offset(pulsePx + 12f, pulsePx + 12f), radius = pulsePx + 12f), shape = CircleShape))
@@ -115,12 +114,21 @@ fun BigMicButton(
                     },
                     shape = CircleShape
                 )
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication = null
-                ) {
-                    isPressed = false
-                    if (isRecording) onRecordingStop() else onRecordingStart()
+                .pointerInput(Unit) {
+                    // Telegram voice-note interaction: press to capture,
+                    // release to send. A tap (quick press+release) still
+                    // records + sends whatever was captured.
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        isPressed = true
+                        onRecordingStart()
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.changes.none { it.pressed }) break
+                        }
+                        isPressed = false
+                        onRecordingStop()
+                    }
                 }
         ) {
             if (isRecording) {

@@ -6,12 +6,15 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Base64
-import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -22,6 +25,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -30,11 +34,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.hermes.mobile.data.model.ModelInfo
-import com.hermes.mobile.ui.components.AudioPlayer
+import com.hermes.mobile.ui.components.AutoPlayAudio
 import com.hermes.mobile.ui.components.BigMicButton
 import com.hermes.mobile.ui.components.ModelPickerSheet
-import com.hermes.mobile.ui.components.SpeakDialog
 import com.hermes.mobile.ui.theme.HermesPrimary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -43,51 +45,108 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-sealed class RecordingStatus {
-    data object Idle : RecordingStatus()
-    data object Recording : RecordingStatus()
-    data object Sending : RecordingStatus()
-}
+private enum class VoicePhase { Idle, Recording, Transcribing, Thinking, Speaking }
+
+private data class VoiceTurn(
+    val userText: String,
+    var assistantText: String = "",
+    var done: Boolean = false,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VoiceScreen(
-    onExit: () -> Unit,
-    onNewMessage: (String, String?, String?, Boolean, String?) -> Unit = { _, _, _, _, _ -> }
-) {
+fun VoiceScreen(onExit: () -> Unit) {
     val vm: VoiceViewModel = hiltViewModel()
     val currentModel by vm.currentModel.collectAsState()
     val availableModels by vm.availableModels.collectAsState()
     val modelsLoading by vm.modelsLoading.collectAsState()
+    val sessions by vm.sessions.collectAsState()
+    val selectedSessionId by vm.selectedSessionId.collectAsState()
     val context = LocalContext.current
-
-    var recordingStatus by remember { mutableStateOf<RecordingStatus>(RecordingStatus.Idle) }
-    var transcription by remember { mutableStateOf<String?>(null) }
-    var transcriptionError by remember { mutableStateOf<String?>(null) }
-    var showSpeakDialog by remember { mutableStateOf(false) }
-    var showModelPicker by remember { mutableStateOf(false) }
-    var audioDataUrl by remember { mutableStateOf<String?>(null) }
-
-    val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    val statusText = when (recordingStatus) {
-        RecordingStatus.Idle -> "Hold to record"
-        RecordingStatus.Recording -> "Recording… tap to stop"
-        RecordingStatus.Sending -> "Transcribing…"
+    var phase by remember { mutableStateOf(VoicePhase.Idle) }
+    var lastPressAt by remember { mutableLongStateOf(0L) }
+    var statusMsg by remember { mutableStateOf<String?>(null) }
+    var showModelPicker by remember { mutableStateOf(false) }
+    var showSessionSheet by remember { mutableStateOf(false) }
+    var ttsDataUrl by remember { mutableStateOf<String?>(null) }
+    var releaseRequested by remember { mutableStateOf(false) }
+    val turns = remember { mutableStateListOf<VoiceTurn>() }
+    val streamBuilder = remember { StringBuilder() }
+
+    // Back closes playback/sheets first, then exits the screen.
+    BackHandler(enabled = ttsDataUrl != null || showModelPicker || showSessionSheet) {
+        if (showModelPicker) showModelPicker = false
+        else if (showSessionSheet) showSessionSheet = false
+        else ttsDataUrl = null
     }
 
-    val statusColor = when (recordingStatus) {
-        RecordingStatus.Idle -> MaterialTheme.colorScheme.onSurfaceVariant
-        RecordingStatus.Recording -> Color(0xFFE53935)
-        RecordingStatus.Sending -> HermesPrimary
+    val statusText = when (phase) {
+        VoicePhase.Idle -> "Hold to speak, release to send"
+        VoicePhase.Recording -> "Listening…"
+        VoicePhase.Transcribing -> "Transcribing…"
+        VoicePhase.Thinking -> "Hermes is thinking…"
+        VoicePhase.Speaking -> "Speaking…"
+    }
+    val statusColor = when (phase) {
+        VoicePhase.Idle -> MaterialTheme.colorScheme.onSurfaceVariant
+        VoicePhase.Recording -> Color(0xFFE53935)
+        VoicePhase.Transcribing -> HermesPrimary
+        VoicePhase.Thinking -> HermesPrimary
+        VoicePhase.Speaking -> SuccessTint
     }
 
     val hasAudioPermission = ActivityCompat.checkSelfPermission(
         context, Manifest.permission.RECORD_AUDIO
     ) == PackageManager.PERMISSION_GRANTED
 
+    fun speakReply(text: String) {
+        if (text.isBlank()) { phase = VoicePhase.Idle; return }
+        phase = VoicePhase.Speaking
+        vm.speak(
+            text.take(2000), // voice answers stay snappy; bubbles show the full text
+            onSuccess = { url -> ttsDataUrl = url },
+            onError = { statusMsg = it; phase = VoicePhase.Idle }
+        )
+    }
+
+    fun sendTranscript(text: String) {
+        if (text.isBlank()) {
+            statusMsg = "Couldn't hear anything — try again"
+            phase = VoicePhase.Idle
+            return
+        }
+        statusMsg = null
+        val turn = VoiceTurn(userText = text)
+        turns.add(turn)
+        phase = VoicePhase.Thinking
+        vm.sendTranscribed(
+            text = text,
+            onChunk = { chunk ->
+                streamBuilder.append(chunk)
+                // mutate last item; trigger recomposition via list swap
+                turns[turns.size - 1] = turn.copy(assistantText = streamBuilder.toString())
+            },
+            onComplete = { reply ->
+                streamBuilder.setLength(0)
+                turns[turns.size - 1] = turn.copy(
+                    assistantText = reply.ifBlank { turn.assistantText }, done = true
+                )
+                speakReply(reply.ifBlank { turn.assistantText })
+            },
+            onError = { msg ->
+                streamBuilder.setLength(0)
+                turns[turns.size - 1] = turn.copy(assistantText = "", done = true)
+                turns.removeLastOrNull()
+                statusMsg = msg
+                phase = VoicePhase.Idle
+            }
+        )
+    }
+
     fun startRecording() {
+        if (phase != VoicePhase.Idle) return
         if (!hasAudioPermission) {
             val activity = context as? android.app.Activity
             if (activity != null) {
@@ -97,9 +156,13 @@ fun VoiceScreen(
             }
             return
         }
-        recordingStatus = RecordingStatus.Recording
+        statusMsg = null
+        lastPressAt = System.currentTimeMillis()
+        phase = VoicePhase.Recording
         scope.launch {
-            val minBuf = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            val minBuf = AudioRecord.getMinBufferSize(
+                16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+            )
             val bufSize = if (minBuf > 0) minBuf * 2 else 8192
             val recorder = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
@@ -109,49 +172,51 @@ fun VoiceScreen(
                 bufSize
             )
             if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-                recordingStatus = RecordingStatus.Idle
+                phase = VoicePhase.Idle
+                statusMsg = "Microphone unavailable"
                 return@launch
             }
             recorder.startRecording()
             val audioData = ByteArrayOutputStream()
             val buffer = ByteArray(4096)
             val endTime = System.currentTimeMillis() + 30000
-            while (recordingStatus == RecordingStatus.Recording && System.currentTimeMillis() < endTime) {
+            releaseRequested = false
+            while (!releaseRequested && System.currentTimeMillis() < endTime) {
                 val read = recorder.read(buffer, 0, buffer.size)
                 if (read > 0) audioData.write(buffer, 0, read)
                 delay(10)
             }
             recorder.stop()
             recorder.release()
-            if (recordingStatus == RecordingStatus.Recording) {
-                recordingStatus = RecordingStatus.Sending
-                val wavData = encodeWav(audioData.toByteArray(), 16000, 1, 16)
-                val b64 = Base64.encodeToString(wavData, Base64.NO_WRAP)
-                vm.transcribe(b64,
-                    onSuccess = { text ->
-                        transcription = text
-                        transcriptionError = null
-                        recordingStatus = RecordingStatus.Idle
-                        if (text.isNotBlank()) onNewMessage(text, null, null, false, null)
-                    }
-                )
-            } else {
-                recordingStatus = RecordingStatus.Idle
+            val heldMs = System.currentTimeMillis() - lastPressAt
+            if (heldMs < 300 || audioData.size() < 3200) {
+                phase = VoicePhase.Idle
+                statusMsg = "Hold the mic while speaking"
+                return@launch
             }
+            // Release = send. Transcribe, then immediately run the turn.
+            phase = VoicePhase.Transcribing
+            val wavData = encodeWav(audioData.toByteArray(), 16000, 1, 16)
+            val b64 = Base64.encodeToString(wavData, Base64.NO_WRAP)
+            vm.transcribe(
+                b64,
+                onSuccess = { text -> sendTranscript(text.trim()) },
+                onError = { msg -> statusMsg = msg; phase = VoicePhase.Idle }
+            )
         }
     }
 
     fun stopRecording() {
-        if (recordingStatus == RecordingStatus.Recording) {
-            recordingStatus = RecordingStatus.Idle
-        }
+        // Finger released: flip the gate so the read-loop exits and runs
+        // encode → transcribe → send. Recording state itself follows the
+        // loop's phase write, so the button never sticks.
+        releaseRequested = true
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .verticalScroll(rememberScrollState())
     ) {
         TopAppBar(
             title = { Text("Voice", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium) },
@@ -161,7 +226,7 @@ fun VoiceScreen(
                 }
             },
             actions = {
-                if (!currentModel.isBlank()) {
+                if (currentModel.isNotBlank()) {
                     val displayName = availableModels.firstOrNull { it.id == currentModel }?.name
                         ?: currentModel.substringAfterLast("/").take(15)
                     Text(
@@ -172,9 +237,9 @@ fun VoiceScreen(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 IconButton(onClick = { showModelPicker = true }) {
-                    Icon(Icons.Filled.Settings, contentDescription = "Change model")
+                    Icon(Icons.Filled.Tune, contentDescription = "Change model")
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
@@ -183,158 +248,136 @@ fun VoiceScreen(
             )
         )
 
+        // Session selector row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clickable { showSessionSheet = true }
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Filled.Forum, contentDescription = null, tint = HermesPrimary, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            val current = sessions.firstOrNull { it.id == selectedSessionId }
+            Text(
+                text = current?.title?.takeIf { it.isNotBlank() }
+                    ?: if (selectedSessionId != null) "Conversation" else "New conversation",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = "change",
+                style = MaterialTheme.typography.labelMedium,
+                color = HermesPrimary,
+            )
+            Spacer(modifier = Modifier.width(2.dp))
+            Icon(Icons.Filled.ExpandMore, contentDescription = null, tint = HermesPrimary, modifier = Modifier.size(18.dp))
+        }
+
+        // Live transcript turns
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.Bottom
+        ) {
+            if (turns.isEmpty() && statusMsg == null) {
+                Text(
+                    "Press and hold the mic to speak. Release to send — the answer is spoken back.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 48.dp)
+                )
+            }
+            turns.forEach { turn ->
+                // user
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
+                        color = HermesPrimary.copy(alpha = 0.14f),
+                        modifier = Modifier.widthIn(max = 300.dp)
+                    ) {
+                        Text(
+                            turn.userText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                // assistant
+                if (turn.assistantText.isNotBlank() || !turn.done) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.widthIn(max = 300.dp)
+                        ) {
+                            Text(
+                                text = if (turn.assistantText.isBlank()) "…" else turn.assistantText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            AnimatedVisibility(visible = statusMsg != null, enter = fadeIn(), exit = fadeOut()) {
+                Text(
+                    text = statusMsg ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                )
+            }
+        }
+
+        // Mic + status
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp),
+                .padding(bottom = 36.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Filled.ModelTraining, contentDescription = null, tint = HermesPrimary, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    if (modelsLoading) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp))
-                    } else {
-                        val selectedModel = availableModels.firstOrNull { it.id == currentModel }
-                        Text(
-                            text = selectedModel?.name ?: currentModel,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
             Box(
-                modifier = Modifier.size(120.dp),
+                modifier = Modifier.size(140.dp),
                 contentAlignment = Alignment.Center
             ) {
                 BigMicButton(
-                    isRecording = recordingStatus == RecordingStatus.Recording,
+                    isRecording = phase == VoicePhase.Recording,
                     onRecordingStart = { startRecording() },
                     onRecordingStop = { stopRecording() }
                 )
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = statusText,
                 style = MaterialTheme.typography.bodyMedium,
                 color = statusColor,
                 textAlign = TextAlign.Center
             )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            AnimatedVisibility(
-                visible = transcription != null || transcriptionError != null,
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (transcriptionError != null)
-                            MaterialTheme.colorScheme.errorContainer
-                        else
-                            MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp)
-                    ) {
-                        Text(
-                            text = if (transcriptionError != null) "Error" else "Transcript",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (transcriptionError != null)
-                                MaterialTheme.colorScheme.onErrorContainer
-                            else
-                                HermesPrimary
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = transcription ?: transcriptionError ?: "",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (transcriptionError != null)
-                                MaterialTheme.colorScheme.onErrorContainer
-                            else
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (transcription != null) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                TextButton(onClick = { transcription = null }) {
-                                    Text("Clear")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            FilledTonalButton(
-                onClick = { showSpeakDialog = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = HermesPrimary.copy(alpha = 0.12f),
-                    contentColor = HermesPrimary
-                )
-            ) {
-                Icon(Icons.Filled.RecordVoiceOver, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Speak", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-            }
-
-            Spacer(modifier = Modifier.height(32.dp))
         }
     }
 
-    SnackbarHost(hostState = snackbarHostState)
-
-    if (showSpeakDialog) {
-        SpeakDialog(
-            onDismiss = { showSpeakDialog = false },
-            onSpoken = { dataUrl ->
-                audioDataUrl = dataUrl
-                showSpeakDialog = false
-            }
+    // TTS playback — auto-plays the assistant reply, silent UI
+    ttsDataUrl?.let { url ->
+        AutoPlayAudio(
+            dataUrl = url,
+            onFinished = { ttsDataUrl = null; phase = VoicePhase.Idle }
         )
-    }
-
-    audioDataUrl?.let { url ->
-        AudioPlayer(dataUrl = url, onDismiss = { audioDataUrl = null })
     }
 
     if (showModelPicker) {
@@ -342,14 +385,94 @@ fun VoiceScreen(
             availableModels = availableModels,
             currentModel = currentModel,
             modelsLoading = modelsLoading,
-            onSelect = { modelId, global ->
+            onSelect = { modelId, _ ->
                 vm.switchModel(modelId)
                 showModelPicker = false
             },
             onDismiss = { showModelPicker = false }
         )
     }
+
+    if (showSessionSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+        ModalBottomSheet(
+            onDismissRequest = { showSessionSheet = false },
+            sheetState = sheetState
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                Text(
+                    "Voice session",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(start = 12.dp, bottom = 8.dp)
+                )
+                // New conversation pinned first — always available.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable {
+                            showSessionSheet = false
+                            turns.clear()
+                            streamBuilder.setLength(0)
+                            vm.startNewSession()
+                        }
+                        .padding(horizontal = 12.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Filled.AddComment, contentDescription = null, tint = HermesPrimary)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("New conversation", style = MaterialTheme.typography.bodyLarge, color = HermesPrimary)
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                LazyColumn(modifier = Modifier.heightIn(max = 340.dp)) {
+                    items(sessions, key = { it.id }) { s ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (s.id == selectedSessionId)
+                                        HermesPrimary.copy(alpha = 0.08f)
+                                    else Color.Transparent
+                                )
+                                .clickable {
+                                    vm.selectSession(s.id)
+                                    turns.clear()
+                                    streamBuilder.setLength(0)
+                                    showSessionSheet = false
+                                }
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    s.title?.takeIf { it.isNotBlank() }
+                                        ?: "Chat ${s.id.take(6)}",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    "${s.messageCount} messages · " +
+                                        SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(s.updatedAt)),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (s.id == selectedSessionId) {
+                                Icon(Icons.Filled.Check, contentDescription = null, tint = HermesPrimary)
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
 }
+
+private val SuccessTint = Color(0xFF2E7D32)
 
 private fun encodeWav(
     pcmData: ByteArray,

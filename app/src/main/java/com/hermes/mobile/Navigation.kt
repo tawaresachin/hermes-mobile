@@ -249,7 +249,7 @@ fun HermesBottomNavigationBar(
                     Icon(
                         imageVector = screen.icon,
                         contentDescription = screen.label,
-                        tint = if (selected) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = if (selected) HermesPrimary else MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(24.dp)
                     )
                 },
@@ -258,7 +258,7 @@ fun HermesBottomNavigationBar(
                         text = screen.label,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (selected) HermesPrimary else MaterialTheme.colorScheme.onSurface
                     )
                 },
                 colors = NavigationBarItemDefaults.colors(
@@ -314,7 +314,7 @@ fun SignInRequired(
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "$feature is locked until you sign in with your bridge account.",
+            text = "$feature is locked until you connect your Hermes server (Settings → scan the QR code).",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center

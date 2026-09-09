@@ -6,7 +6,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.*
 import androidx.lifecycle.lifecycleScope
-import com.hermes.mobile.auth.AuthManager
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.theme.HermesMobileTheme
 import com.hermes.mobile.ui.theme.LocalDarkTheme
@@ -20,9 +19,6 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var repository: HermesRepository
 
-    @Inject
-    lateinit var authManager: AuthManager
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -35,26 +31,6 @@ class MainActivity : ComponentActivity() {
         }
         // Deep link from the "response ready" notification → open the session.
         val deepLinkSession = intent.getStringExtra(EXTRA_SESSION_ID)
-        // Silent re-auth: refresh token first, else the paired device account.
-        // Best-effort — never blocks UI, never crashes on failure.
-        lifecycleScope.launch {
-            try {
-                if (!authManager.isLoggedIn.value) {
-                    val cfg = repository.getSavedConfig()
-                    val baseUrl = cfg?.baseUrl?.trimEnd('/')
-                    if (baseUrl.isNullOrBlank()) return@launch
-                    val refreshed = authManager.refreshToken(baseUrl)
-                    if (!refreshed) {
-                        val creds = repository.getDeviceCredentials()
-                        if (creds != null) {
-                            authManager.login(baseUrl, creds.first, creds.second)
-                        }
-                    }
-                }
-            } catch (_: Exception) {
-                // Silent — user can re-pair or log in from Settings.
-            }
-        }
         setContent {
             // Read saved dark theme preference (initial + reactive via listener)
             var isDarkTheme by remember {
@@ -77,9 +53,8 @@ class MainActivity : ComponentActivity() {
             }
 
             val actualDark = isDarkTheme ?: false
-            val loggedIn by authManager.isLoggedIn.collectAsState()
-            // Direct API pairing counts as signed in (v2.8.7+ uses API key,
-            // not bridge JWT). Reactive: flips true right after Test saves.
+            // Direct-API posture: a saved base URL + API key IS the session.
+            // Reactive: flips true right after Test saves.
             var apiPaired by remember {
                 mutableStateOf(
                     repository.getSavedConfig()?.let {
@@ -100,7 +75,7 @@ class MainActivity : ComponentActivity() {
             }
             CompositionLocalProvider(LocalDarkTheme provides actualDark) {
                 HermesMobileTheme(darkTheme = actualDark) {
-                    MainNavigation(isLoggedIn = loggedIn || apiPaired, initialSessionId = deepLinkSession)
+                    MainNavigation(isLoggedIn = apiPaired, initialSessionId = deepLinkSession)
                 }
             }
         }

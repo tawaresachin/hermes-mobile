@@ -60,7 +60,10 @@ data class ModelInfo(
     val isVision: Boolean = false,
     val isFree: Boolean = false,
     val provider: String = "",
-    val baseUrl: String = ""
+    val baseUrl: String = "",
+    // Provider SLUG (e.g. "custom:freellm") — what the server expects in the
+    // request "provider" field. `provider` above is the human label.
+    val providerSlug: String = ""
 )
 
 data class ModelListResponse(

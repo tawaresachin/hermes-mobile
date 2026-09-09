@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.hermes.mobile.auth.AuthManager
 import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.ServerConfig
 import com.hermes.mobile.data.repository.HermesRepository
@@ -62,11 +61,12 @@ data class SettingsUiState(
     val keepAwake: Boolean = false,
     val awakeMechanism: String? = null,
     // Preferences
-    val contextCompression: Boolean = true,
     // Usage stats
     val sessionsCount: Int = 0,
     val messagesCount: Int = 0,
     val tokensUsed: Long = 0,
+    // True when the numbers came from the server ledger, false = local fallback.
+    val usageIsServer: Boolean = true,
     // Auth fields
     val email: String = "",
     val password: String = "",
@@ -78,8 +78,7 @@ data class SettingsUiState(
     // QR setup token (from hermes://connect payload)
     val setupToken: String = "",
     // One-time claim token (from a post-registration claim QR) — signs the
-    // app into the user's web-registered account
-    val claimToken: String = "",
+    // app into the user's account
     // Bridge API key (from hermes://connect payload) — persisted for refresh
     val apiKey: String = "",
 )
@@ -87,7 +86,6 @@ data class SettingsUiState(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val repository: HermesRepository,
-    val authManager: AuthManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -99,7 +97,7 @@ class SettingsViewModel @Inject constructor(
     private val _diagUploadResult = MutableStateFlow<String?>(null)
     val diagUploadResult: StateFlow<String?> = _diagUploadResult.asStateFlow()
 
-    /** Upload the diag log to the bridge, then return success (share follows). */
+    /** Upload the diag log to the gateway plugin, then return success (share follows). */
     suspend fun uploadDiagLogNow(device: String, version: String, log: String): Boolean {
         _diagUploadResult.value = "Uploading…"
         val ok = try {
@@ -172,27 +170,41 @@ class SettingsViewModel @Inject constructor(
         }
         // Load usage stats
         loadUsageStats()
-        // Observe auth state
+        // Direct-API posture (v0.0.1+): "signed in" == a saved base URL + API
+        // key. The old bridge JWT session is gone; do not resurrect it.
         viewModelScope.launch {
-            authManager.isLoggedIn.collect { loggedIn ->
-                _uiState.update {
-                    it.copy(
-                        isLoggedIn = loggedIn,
-                        loggedInEmail = if (loggedIn) authManager.getEmail() else ""
-                    )
-                }
+            repository.allSessions.collect {
+                val cfg = repository.getSavedConfig()
+                val paired = cfg != null && cfg.baseUrl.isNotBlank() &&
+                    !cfg.apiKey.isNullOrBlank()
+                _uiState.update { it.copy(isLoggedIn = paired) }
             }
         }
     }
 
     fun loadUsageStats() {
         viewModelScope.launch {
+            // Server truth (session token ledger) when reachable; local Room
+            // counts are only a fallback for offline pairing.
+            val server = try { repository.getServerUsageStats() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+            if (server != null) {
+                _uiState.update {
+                    it.copy(
+                        sessionsCount = server.sessions,
+                        messagesCount = server.messages,
+                        tokensUsed = server.inputTokens + server.outputTokens,
+                        usageIsServer = true
+                    )
+                }
+                return@launch
+            }
             val stats = repository.getUsageStats()
             _uiState.update {
                 it.copy(
                     sessionsCount = stats.sessionsCount,
                     messagesCount = stats.messagesCount,
-                    tokensUsed = stats.tokensUsed
+                    tokensUsed = stats.tokensUsed,
+                    usageIsServer = false
                 )
             }
         }
@@ -205,139 +217,21 @@ class SettingsViewModel @Inject constructor(
     fun clearAuthError() { _uiState.update { it.copy(authError = null) } }
     fun setError(msg: String) { _uiState.update { it.copy(authError = msg) } }
     fun setSetupToken(token: String) { _uiState.update { it.copy(setupToken = token) } }
-    fun setClaimToken(token: String) { _uiState.update { it.copy(claimToken = token) } }
     fun setApiKey(key: String) { _uiState.update { it.copy(apiKey = key) } }
 
-    /**
-     * Sign in as the user who registered on the web setup page, via the
-     * claim token carried by the scanned QR. Claim failures are surfaced,
-     * NEVER silently replaced by a device account (that caused the wrong
-     * email showing). Only a plain pairing QR (no claim) falls back to the
-     * auto-registered device account.
-     */
-    fun signInAfterPairing() {
-        val base = _uiState.value.baseUrl.trimEnd('/')
-        if (base.isBlank()) return
-        val claim = _uiState.value.claimToken
-        if (claim.isNotBlank()) {
-            viewModelScope.launch {
-                authManager.claimAccount(base, claim)
-                    .onSuccess {
-                        // Claim is reusable until expiry — keep it so a later
-                        // re-scan after logout still signs into this account.
-                        _uiState.update { it.copy(authError = null) }
-                    }
-                    .onFailure { e ->
-                        // Expired/invalid claim: tell the user to get a fresh
-                        // QR from the setup page — do NOT create a device
-                        // account silently.
-                        _uiState.update {
-                            it.copy(
-                                authError = "Sign-in QR expired — reopen the setup page for a fresh QR (${e.message ?: "claim rejected"})"
-                            )
-                        }
-                    }
-            }
-        } else {
-            autoRegisterDeviceIfNeeded()
-        }
-    }
-
-    /**
-     * After a successful QR pairing, auto-create a device account so the
-     * bridge is usable immediately. Credentials are generated with
-     * SecureRandom and stored ENCRYPTED (SecurePrefs). Failure is silent —
-     * the user can still register manually in Settings.
-     */
-    fun autoRegisterDeviceIfNeeded() {
-        if (authManager.isLoggedIn.value) return
-        val base = _uiState.value.baseUrl.trimEnd('/')
-        if (base.isBlank()) return
-        viewModelScope.launch {
-            try {
-                val random = java.security.SecureRandom()
-                val email = "device-${java.lang.Long.toHexString(random.nextLong()).take(8)}@hermesbridge.app"
-                // 32 hex chars from a CSPRNG — no dictionary, no pattern.
-                val password = buildString {
-                    repeat(32) { append("0123456789abcdef"[random.nextInt(16)]) }
-                }
-                authManager.register(base, email, password)
-                    .onSuccess {
-                        repository.saveDeviceCredentials(email, password)
-                    }
-                    .onFailure { _ ->
-                        // Don't block pairing — manual register/login still available.
-                    }
-            } catch (_: Exception) {
-                // Never let auto-registration break the connection flow.
-            }
-        }
-    }
-
-    fun register() {
-        val state = _uiState.value
-        if (state.email.isBlank() || state.password.isBlank()) {
-            _uiState.update { it.copy(authError = "Email and password are required") }
-            return
-        }
-        if (state.password.length < 8) {
-            _uiState.update { it.copy(authError = "Password must be at least 8 characters") }
-            return
-        }
-        viewModelScope.launch {
-            _uiState.update { it.copy(isAuthLoading = true, authError = null) }
-            val rawUrl = state.baseUrl.trimEnd('/')
-            val registerBaseUrl = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-                rawUrl
-            } else {
-                "http://$rawUrl"
-            }
-            val result = authManager.register(registerBaseUrl, state.email, state.password)
-            result.onFailure { e: Throwable ->
-                _uiState.update { it.copy(authError = e.message ?: "Registration failed") }
-            }
-            _uiState.update { it.copy(isAuthLoading = false, password = "") }
-        }
-    }
-
-    fun login() {
-        val state = _uiState.value
-        if (state.email.isBlank() || state.password.isBlank()) {
-            _uiState.update { it.copy(authError = "Email and password are required") }
-            return
-        }
-        // Ensure baseUrl has http:// prefix for login
-        val rawUrl = state.baseUrl.trimEnd('/')
-        val loginBaseUrl = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-            rawUrl
-        } else {
-            "http://$rawUrl"
-        }
-        android.util.Log.d("SettingsScreen", "Login URL: $loginBaseUrl")
-        viewModelScope.launch {
-            _uiState.update { it.copy(isAuthLoading = true, authError = null) }
-            val result = authManager.login(loginBaseUrl, state.email, state.password)
-            result.onFailure { e: Throwable ->
-                _uiState.update { it.copy(authError = e.message ?: "Login failed") }
-            }
-            _uiState.update { it.copy(isAuthLoading = false, password = "") }
-        }
-    }
-
+    /** Log out = forget the pairing (URL + API key + tokens). */
     fun logout() {
-        authManager.logout()
+        repository.clearSavedConnection()
+        _uiState.update {
+            it.copy(baseUrl = "", apiKey = "", setupToken = "",
+                    isLoggedIn = false, connectionStatus = com.hermes.mobile.data.model.ConnectionStatus.DISCONNECTED)
+        }
     }
 
     fun toggleTheme() {
         val newValue = !_uiState.value.isDarkTheme
         _uiState.update { it.copy(isDarkTheme = newValue) }
         repository.saveDarkTheme(newValue)
-    }
-
-    fun toggleContextCompression() {
-        val newValue = !_uiState.value.contextCompression
-        _uiState.update { it.copy(contextCompression = newValue) }
-        // TODO: persist to SharedPreferences
     }
 
     fun testConnection() {
@@ -354,9 +248,10 @@ class SettingsViewModel @Inject constructor(
                 val connected = repository.checkConnectionRaw(config)
                 _uiState.update {
                     if (connected) it.copy(connectionStatus = ConnectionStatus.CONNECTED, errorDetail = null)
-                    else it.copy(connectionStatus = ConnectionStatus.ERROR, errorDetail = "Server returned error status. Check if Hermes Desktop is running on port 8642, or if bridge is running on port 9119.")
+                    else it.copy(connectionStatus = ConnectionStatus.ERROR, errorDetail = "Server returned an error. Check the URL and that the Hermes gateway is reachable.")
                 }
-                // Only persist the URL once the connection actually works
+                // Only persist the URL once the connection actually works.
+                // API key IS the credential — nothing else to sign in to.
                 if (connected) {
                     repository.saveConfig(
                         ServerConfig(
@@ -365,18 +260,16 @@ class SettingsViewModel @Inject constructor(
                             setupToken = _uiState.value.setupToken,
                         )
                     )
-                    // Pairing done → sign in: claim QR (web-registered user)
-                    // first, else auto-create a device account.
-                    signInAfterPairing()
+                    _uiState.update { it.copy(isLoggedIn = true) }
                 }
             } catch (e: Exception) {
                 val errorMsg = e.message ?: "Unknown error"
                 val actionableMsg = when {
-                    errorMsg.contains("timeout") -> "Connection timeout. Is Hermes Desktop running on port 8642? Try: hermes mobile-serve"
-                    errorMsg.contains("refused") -> "Connection refused. Is the server running? Check port 8642 (Desktop) or 9119 (Bridge)."
-                    errorMsg.contains("401") -> "Authentication failed. Run 'hermes mobile-serve' to set up bridge, then scan QR code."
+                    errorMsg.contains("timeout") -> "Connection timed out. Check the server URL and that the Hermes gateway is running."
+                    errorMsg.contains("refused") -> "Connection refused. Is the Hermes gateway running at this address?"
+                    errorMsg.contains("401") -> "API key rejected. Check the key in Settings → Account, or scan a fresh QR."
                     errorMsg.contains("403") -> "Access denied. Check your API key in Settings → Account."
-                    else -> "Connection failed: $errorMsg. Try: hermes mobile-serve"
+                    else -> "Connection failed. Check the URL and API key, or scan a fresh QR."
                 }
                 _uiState.update {
                     it.copy(connectionStatus = ConnectionStatus.ERROR, errorDetail = actionableMsg)
@@ -385,66 +278,16 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Re-fetch the bridge's preferred URL (Tailscale-first) from /setup/connect. */
+    /** Re-test the saved connection (URL may have changed on the network). */
     fun refreshFromBridge() {
-        val current = _uiState.value.baseUrl.trimEnd('/')
-        if (current.isBlank() || current == "http://localhost:8080") {
-            _uiState.update { it.copy(authError = "Enter your current server URL first, then refresh") }
+        val cfg = repository.getSavedConfig()
+        if (cfg == null || cfg.baseUrl.isBlank() || cfg.baseUrl == "http://localhost:8080") {
+            _uiState.update { it.copy(authError = "Enter your server URL first, then refresh") }
             return
         }
-        viewModelScope.launch {
-            _uiState.update { it.copy(isAuthLoading = true, authError = null) }
-            try {
-                // Network must run on IO dispatcher — main-thread HTTP throws
-                // NetworkOnMainThreadException (which has a NULL message → "Refresh failed: null").
-                val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    // Auth via bridge API key (from QR) or JWT — persists across restarts
-                    val bearer = _uiState.value.apiKey.ifBlank { authManager.getToken().orEmpty() }
-                    val setupUrl = "$current/setup/connect" +
-                        if (_uiState.value.setupToken.isNotBlank()) "?token=${_uiState.value.setupToken}" else ""
-                    val conn = java.net.URL(setupUrl).openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 8000
-                    conn.readTimeout = 8000
-                    conn.setRequestProperty("Authorization", "Bearer $bearer")
-                    try {
-                        val code = conn.responseCode
-                        if (code == 200) {
-                            val body = conn.inputStream.bufferedReader().readText()
-                            org.json.JSONObject(body).optString("url", "").trimEnd('/')
-                        } else {
-                            throw java.io.IOException("Bridge returned HTTP $code")
-                        }
-                    } finally {
-                        conn.disconnect()
-                    }
-                }
-                val preferredUrl = result
-                if (preferredUrl.isNotBlank()) {
-                    _uiState.update { it.copy(baseUrl = preferredUrl) }
-                    repository.saveConfig(
-                        ServerConfig(
-                            baseUrl = preferredUrl,
-                            apiKey = _uiState.value.apiKey,
-                            setupToken = _uiState.value.setupToken,
-                        )
-                    )
-                    _uiState.update { it.copy(authError = "Connected via ${preferredUrl.removePrefix("http://").removePrefix("https://")}") }
-                    testConnection()
-                } else {
-                    _uiState.update { it.copy(authError = "Bridge did not return a URL") }
-                }
-            } catch (e: Exception) {
-                val detail = e.message ?: e.javaClass.simpleName
-                val msg = when {
-                    e is java.net.UnknownHostException -> "Can't reach bridge — the saved URL is stale. Scan the QR code again for the current URL."
-                    e is java.net.SocketTimeoutException -> "Bridge timed out — the saved URL may be stale. Scan the QR code again."
-                    else -> "Refresh failed: $detail. Scan the QR code again for the current URL."
-                }
-                _uiState.update { it.copy(authError = msg) }
-            }
-            _uiState.update { it.copy(isAuthLoading = false) }
-        }
+        testConnection()
     }
+
 }
 
 // Helper to format token counts
@@ -475,7 +318,7 @@ fun SettingsScreen(
     // silent when not connected yet).
     LaunchedEffect(Unit) { viewModel.loadSystemStatus() }
 
-    /** Private/Tailscale/LAN-only guard for QR-derived bridge URLs. */
+    /** Private/Tailscale/LAN-only guard for QR-derived server URLs. */
     fun isTrustedBridgeHost(rawUrl: String): Boolean {
         val host = try {
             Uri.parse(rawUrl).host?.lowercase() ?: return false
@@ -509,14 +352,8 @@ fun SettingsScreen(
         val uri = Uri.parse(scanned)
         val url = when {
             scanned.startsWith("hermes://connect") -> {
-                val directUrl = uri.getQueryParameter("url")
-                if (!directUrl.isNullOrBlank()) {
-                    directUrl.trimEnd('/')
-                } else {
-                    val host = uri.getQueryParameter("host") ?: ""
-                    val port = uri.getQueryParameter("port") ?: "9119"
-                    "http://$host:$port"
-                }
+                // Plugin QR format: hermes://connect?url=<enc>&key=<enc>
+                (uri.getQueryParameter("url") ?: "").trimEnd('/')
             }
             scanned.startsWith("http://") || scanned.startsWith("https://") -> {
                 scanned.trimEnd('/')
@@ -530,18 +367,7 @@ fun SettingsScreen(
             vm.setError("Blocked host: only private/Tailscale/LAN addresses are accepted")
             return
         }
-        // Capture the one-time setup token for /setup/connect refresh
-        val setup = uri.getQueryParameter("setup")
-        if (!setup.isNullOrBlank()) {
-            vm.setSetupToken(setup)
-        }
-        // One-time claim token — present only on post-registration claim QRs;
-        // signs the app into the user's web-registered account.
-        val claim = uri.getQueryParameter("claim")
-        if (!claim.isNullOrBlank()) {
-            vm.setClaimToken(claim)
-        }
-        // Capture the bridge API key so refresh works after app restarts
+        // API key from the QR — the sole credential (direct API posture)
         val apiKey = uri.getQueryParameter("key")
         if (!apiKey.isNullOrBlank()) {
             vm.setApiKey(apiKey)
@@ -724,7 +550,10 @@ fun SettingsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("Connected via API Key", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                                 Text(
-                                    if (isApiKeyVisible) uiState.apiKey else "${uiState.apiKey.take(8)}...${uiState.apiKey.takeLast(8)}",
+                                    if (isApiKeyVisible) uiState.apiKey
+                                    else uiState.apiKey.takeIf { it.startsWith("hermes-") }
+                                        ?.let { "hermes-" + "•".repeat(16) }
+                                        ?: "•".repeat(16),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
@@ -790,13 +619,26 @@ fun SettingsScreen(
 
             // ─── 6. PREFERENCES ───
             SettingsSection("Preferences") {
-                SettingsToggle(
-                    icon = Icons.Filled.Compress,
-                    title = "Context Compression",
-                    subtitle = if (uiState.contextCompression) "ON — compresses context in API calls" else "OFF — full context sent",
-                    checked = uiState.contextCompression,
-                    onCheckedChange = { viewModel.toggleContextCompression() }
-                )
+                // Honest info row: compression is the server's own engine
+                // (identical to Telegram/CLI sessions). A client toggle
+                // controlled nothing — the switch was a lie, so it is gone.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+                ) {
+                    Icon(Icons.Filled.Compress, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Context Compression",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface)
+                        Text("Automatic — handled by the Hermes server, the same engine Telegram and CLI use",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
                 SettingsToggle(
                     icon = Icons.Filled.PowerSettingsNew,
                     title = "Keep Computer Awake",
@@ -804,7 +646,7 @@ fun SettingsScreen(
                         "Holding the computer awake" +
                             (uiState.awakeMechanism?.let { " ($it)" } ?: "")
                     } else {
-                        "Holds the host computer awake while the bridge runs"
+                        "Holds the host device awake while the gateway is busy"
                     },
                     checked = uiState.keepAwake,
                     onCheckedChange = { viewModel.toggleKeepAwake() }
@@ -824,7 +666,8 @@ fun SettingsScreen(
             SettingsSection("Usage") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
@@ -850,7 +693,29 @@ fun SettingsScreen(
                         )
                         Text("Tokens", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    // Manual refresh + honest source note.
+                    IconButton(
+                        onClick = { viewModel.loadUsageStats() },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.Refresh,
+                            contentDescription = "Refresh usage",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = if (uiState.usageIsServer)
+                        "From the Hermes server token ledger"
+                    else
+                        "Local counts — server not reachable",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 2.dp)
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -991,50 +856,49 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
                 ) {
-                    // Prerequisite section FIRST — Tailscale must be up on
-                    // both devices before anything else works.
+                    // Current direct-API flow (v0.0.1+): plugin QR -> 8642.
                     SetupHelpSection(
-                        title = "✅ 0. Prerequisite — Tailscale (both devices)",
+                        title = "0. Prerequisite — Tailscale (both devices)",
                         steps = listOf(
                             "Install the free Tailscale app on BOTH the server machine and this phone",
                             "Install from tailscale.com/download (Windows / macOS / Linux / Android)",
                             "Sign in BOTH devices to the SAME Tailscale account and enable the VPN",
-                            "Each device gets a 100.x address — that's the secure P2P link to your bridge",
+                            "Each device gets a 100.x address — that's the secure P2P link to your server",
                             "Verify both show online in the Tailscale app before continuing"
                         )
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     SetupHelpSection(
-                        title = "🖥 1. Server-side (on the machine with Hermes Agent)",
+                        title = "1. Server-side (the machine running Hermes Agent)",
                         steps = listOf(
-                            "One-line installer (works on Windows/macOS/Linux/Android):",
-                            "   curl -fsSL https://raw.githubusercontent.com/tawaresachin/hermes-mobile-bridge/main/install.py | python3 -",
-                            "Or use the built-in command:  hermes mobile-serve",
-                            "The installer starts the bridge; the console prints a pairing URL",
-                            "On that computer, open the printed URL:  http://100.x.x.x:9119/setup?token=…",
-                            "Register or log in — the page then shows your 15-min sign-in QR"
+                            "Install the mobile plugin once:",
+                            "   pip install git+https://github.com/tawaresachin/hermes-mobile-plugin",
+                            "   hermes-mobile-plugin install",
+                            "Start the Hermes Agent gateway:  hermes gateway run",
+                            "Show the pairing QR:  hermes-mobile-plugin qr",
+                            "(Add --no-browser if the browser cannot open there)"
                         )
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     SetupHelpSection(
-                        title = "📱 2. App-side (this phone)",
+                        title = "2. App-side (this phone)",
                         steps = listOf(
-                            "Install the Hermes Mobile APK",
-                            "Open Settings → tap 'Scan QR Code'",
-                            "Aim the camera at the QR shown on the setup page",
-                            "The app auto-configures the server URL + key",
-                            "It signs in as your registered account — Chat, Voice & Sessions unlock"
+                            "Open Settings → tap 'QR Code' → scan the pairing QR",
+                            "(or screenshot it and use the gallery option)",
+                            "The app fills in the server URL + API key automatically",
+                            "Tap 'Test' — Connection turns green",
+                            "Chat, Voice & Sessions unlock right away"
                         )
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     SetupHelpSection(
                         title = "⚠️ Tips & troubleshooting",
                         steps = listOf(
-                            "The sign-in QR is valid for 15 minutes after you register on the page",
-                            "Expired QR? Reopen the setup page, log in again — a fresh QR appears",
+                            "The pairing QR carries the server URL + API key — keep it private",
+                            "Server IP changed? Regenerate with: hermes-mobile-plugin qr",
                             "Connection shows 'Connected via Tailscale' when the P2P link is live",
                             "Not connecting? Confirm BOTH devices are online in Tailscale",
-                            "Log out → Chat/Voice/Sessions lock until you sign in again"
+                            "Log out → Chat/Voice/Sessions lock until you scan the QR again"
                         )
                     )
                 }
@@ -1199,7 +1063,7 @@ private fun ConnectionStatusHeader(
                 IconButton(onClick = onRefresh) {
                     Icon(
                         Icons.Filled.Refresh,
-                        contentDescription = "Refresh from bridge",
+                        contentDescription = "Test connection",
                         modifier = Modifier.size(24.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )

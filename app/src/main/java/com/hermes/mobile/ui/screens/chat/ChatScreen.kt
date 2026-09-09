@@ -136,6 +136,23 @@ class ChatViewModel @Inject constructor(
     private val _currentModel = MutableStateFlow("")
     val currentModel: StateFlow<String> = _currentModel.asStateFlow()
 
+    // ── Context meter (live tokens used in THIS session / model window) ──
+    private val _contextUsed = MutableStateFlow(0L)
+    val contextUsed: StateFlow<Long> = _contextUsed.asStateFlow()
+    private val _contextTotal = MutableStateFlow(0L)
+    val contextTotal: StateFlow<Long> = _contextTotal.asStateFlow()
+
+    /** Resolve the selected model's context window once per model id. */
+    fun refreshContextTotal() {
+        val model = _currentModel.value
+        if (model.isBlank() || _contextTotal.value > 0L) return
+        viewModelScope.launch {
+            val slug = providerFor(model)
+            val total = repository.fetchContextWindow(model, slug)
+            if (total > 0) _contextTotal.value = total
+        }
+    }
+
     private val _availableModels = MutableStateFlow<List<ModelInfo>>(emptyList())
     val availableModels: StateFlow<List<ModelInfo>> = _availableModels.asStateFlow()
 
@@ -155,13 +172,6 @@ class ChatViewModel @Inject constructor(
 
     fun toggleEmojiPicker() { showEmojiPicker.value = !showEmojiPicker.value }
     fun hideEmojiPicker() { showEmojiPicker.value = false }
-
-    // ── QR dialog ──
-    var showQrDialog = MutableStateFlow(false)
-        private set
-
-    fun toggleQrDialog() { showQrDialog.value = !showQrDialog.value }
-    fun hideQrDialog() { showQrDialog.value = false }
 
     // ── Error state ──
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -216,21 +226,31 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /** Apply this session's own saved model (or clear to "" so loadModels
+     * can pick the server default for a session that never chose one). */
+    private fun restoreSessionModel(sessionId: String) {
+        _currentModel.value = repository.savedModelForSession(sessionId) ?: ""
+        _contextTotal.value = 0L
+        _contextUsed.value = 0L
+    }
+
     private suspend fun createNewSession() {
         try {
             val session = repository.createSession()
             _sessionId.value = session.id
+            restoreSessionModel(session.id)
             observeMessages(session.id)
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Legitimate cancellation when scope is torn down — suppress
         } catch (e: Exception) {
-            _errorMessage.value = "Failed to create session: ${e.message}"
+            _errorMessage.value = "Could not start a new chat — pull to refresh or try again"
         }
     }
 
     private suspend fun resumeSession(sessionId: String) {
         try {
             _sessionId.value = sessionId
+            restoreSessionModel(sessionId)
             // Clean stale streaming placeholders (app died mid-stream last
             // time) BEFORE observing — otherwise the next stream renders its
             // live text into the orphaned bubble too.
@@ -249,7 +269,7 @@ class ChatViewModel @Inject constructor(
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Legitimate cancellation when scope is torn down — suppress
         } catch (e: Exception) {
-            _errorMessage.value = "Failed to resume session: ${e.message}"
+            _errorMessage.value = "Could not reopen this chat — it may have been deleted"
         }
     }
 
@@ -263,7 +283,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Legitimate cancellation when session changes — suppress error
             } catch (e: Exception) {
-                _errorMessage.value = "Failed to load messages: ${e.message}"
+                _errorMessage.value = "Could not load messages — check the connection"
             }
         }
     }
@@ -273,12 +293,28 @@ class ChatViewModel @Inject constructor(
     // cancelled stream can't clobber the new stream's UI content.
     private var streamGeneration = 0
 
-    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, multiAgent: Boolean = false, replyTo: Message? = null) {
+    /** Provider SLUG for a model id (server contract). The display label
+     * ("FreeLLM") must never go on the wire — it yields custom:custom:... 404s. */
+    fun providerFor(modelId: String): String? =
+        _availableModels.value.firstOrNull { it.id == modelId }
+            ?.providerSlug?.takeIf { it.isNotBlank() }
+
+    /** Pin this session to `modelId` (persisted). Unknown ids are still
+     * accepted — the server decides; we never substitute silently. */
+    private fun pinModel(sessionId: String, modelId: String) {
+        _currentModel.value = modelId
+        _contextTotal.value = 0L
+        repository.saveModelForSession(sessionId, modelId)
+        refreshContextTotal()
+        val found = _availableModels.value.firstOrNull { it.id == modelId }
+        _selectedModelName.value = found?.name ?: modelId.substringAfterLast("/").take(20)
+        _selectedModelProvider.value = found?.provider ?: ""
+    }
+
+    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, replyTo: Message? = null) {
         val sid = _sessionId.value ?: return
         val model = _currentModel.value
-        // Find the selected model's provider to send alongside model
-        val found = _availableModels.value.firstOrNull { it.id == model }
-        val provider = found?.provider?.takeIf { it.isNotBlank() }
+        val provider = providerFor(model)
         // TELEGRAM QUEUE MODEL: one message → ONE complete response, and
         // NO QUERY IS EVER DISCARDED. If the agent is already working, the
         // new message is saved locally + queued; it gets its own turn the
@@ -293,7 +329,7 @@ class ChatViewModel @Inject constructor(
                         replyTo?.content
                     )
                     pendingQueue.addLast(
-                        QueuedMessage(query, attachmentUrl, attachType, multiAgent, replyTo, uid)
+                        QueuedMessage(query, attachmentUrl, attachType, replyTo, uid)
                     )
                     _queuedIds.value = _queuedIds.value + uid
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -302,14 +338,13 @@ class ChatViewModel @Inject constructor(
             }
             return
         }
-        startStream(sid, query, attachmentUrl, attachType, multiAgent, replyTo, null, model, provider)
+        startStream(sid, query, attachmentUrl, attachType, replyTo, null, model, provider)
     }
 
     private data class QueuedMessage(
         val query: String,
         val attachmentUrl: String?,
         val attachType: String?,
-        val multiAgent: Boolean,
         val replyTo: Message?,
         val userMsgId: Long?
     )
@@ -371,7 +406,6 @@ class ChatViewModel @Inject constructor(
         query: String,
         attachmentUrl: String?,
         attachType: String?,
-        multiAgent: Boolean,
         replyTo: Message?,
         userMsgId: Long?,
         model: String? = null,
@@ -396,10 +430,15 @@ class ChatViewModel @Inject constructor(
                     userMsgId = userMsgId,
                     attachmentUrl = attachmentUrl ?: "",
                     attachType = attachType ?: "",
-                    multiAgent = multiAgent,
                     replyTo = replyTo?.content,
                     model = model ?: _currentModel.value,
                     provider = provider,
+                    onUsage = { pt, _ ->
+                        // prompt_tokens IS the live context fill (what the next
+                        // turn pays for) — same value Hermes' /status shows.
+                        _contextUsed.value = pt
+                        if (_contextTotal.value == 0L) refreshContextTotal()
+                    },
                     onChunk = { chunk ->
                         if (gen == streamGeneration) {
                             streamBuilder.append(chunk)
@@ -433,7 +472,12 @@ class ChatViewModel @Inject constructor(
                     },
                     onModelReverted = { reverted ->
                         if (gen == streamGeneration && reverted.isNotBlank()) {
+                            // Server fell back to its default after a hard
+                            // provider failure. Surface the truth AND persist
+                            // it — the header must never lie about which
+                            // model answered this session now.
                             _currentModel.value = reverted
+                            repository.saveModelForSession(sid, reverted)
                         }
                     },
                     onAttachment = { url, _ ->
@@ -479,7 +523,7 @@ class ChatViewModel @Inject constructor(
                     if (next.userMsgId != null) {
                         _queuedIds.value = _queuedIds.value - next.userMsgId
                     }
-                    startStream(sid, next.query, next.attachmentUrl, next.attachType, next.multiAgent, next.replyTo, next.userMsgId, _currentModel.value)
+                    startStream(sid, next.query, next.attachmentUrl, next.attachType, next.replyTo, next.userMsgId, _currentModel.value, providerFor(_currentModel.value))
                 }
             }
         }
@@ -615,16 +659,19 @@ class ChatViewModel @Inject constructor(
                 val response = repository.fetchModelOptions() ?: repository.listModels()
                 if (response != null) {
                     val models = response.models.filter { it.id.isNotBlank() }
+                    _availableModels.value = models
+                    // Priority: THIS session's saved pick (even if missing
+                    // from the catalog — per-session choice must not be
+                    // silently replaced) > server default > previous value.
+                    val saved = repository.savedModelForSession(sid)
                     val serverDefault = response.current.takeIf { c -> models.any { it.id == c } }
                     val keepCurrent = _currentModel.value.takeIf { c -> models.any { it.id == c } }
-                    val currentModel = keepCurrent ?: serverDefault ?: models.firstOrNull()?.id ?: ""
-                    _availableModels.value = models
+                    val currentModel = saved ?: keepCurrent ?: serverDefault ?: models.firstOrNull()?.id ?: ""
                     _currentModel.value = currentModel
-                    // Find model name and provider for header display
-                    val currentId = currentModel
-                    val found = models.firstOrNull { it.id == currentId }
-                    _selectedModelName.value = found?.name ?: currentId.substringAfterLast("/").take(20)
+                    val found = models.firstOrNull { it.id == currentModel }
+                    _selectedModelName.value = found?.name ?: currentModel.substringAfterLast("/").take(20)
                     _selectedModelProvider.value = found?.provider ?: ""
+                    refreshContextTotal()
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -638,11 +685,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             val success = repository.switchModel(sid, modelId, global)
             if (success) {
-                _currentModel.value = modelId
-                // Update display name
-                val found = _availableModels.value.firstOrNull { it.id == modelId }
-                _selectedModelName.value = found?.name ?: modelId.substringAfterLast("/").take(20)
-                _selectedModelProvider.value = found?.provider ?: ""
+                pinModel(sid, modelId)
                 if (global) {
                     // Reload to show the new global default
                     loadModels()
@@ -666,7 +709,6 @@ class ChatViewModel @Inject constructor(
             attachment: PendingAttachment?,
             context: android.content.Context,
             onAttachComplete: () -> Unit,
-            multiAgent: Boolean = false,
             replyTo: Message? = null
         ) {
             val sid = _sessionId.value ?: return
@@ -681,17 +723,18 @@ class ChatViewModel @Inject constructor(
                             onAttachComplete()
                             return@launch
                         }
-                        attachUrl = repository.uploadFile(tempFile, attachment.fileName, attachment.mimeType)
+                        attachUrl = repository.uploadFile(
+                            tempFile, attachment.fileName, attachment.mimeType, sid)
                         tempFile.delete()
                         attachType = attachment.attachType
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        _errorMessage.value = "Upload failed: ${e.message}"
+                        _errorMessage.value = "Upload failed — check the connection and try again"
                     }
                 }
                 if (text.isNotBlank() || attachUrl != null) {
-                    sendMessage(text, attachUrl, attachType, multiAgent = multiAgent, replyTo = replyTo)
+                    sendMessage(text, attachUrl, attachType, replyTo = replyTo)
                 }
                 onAttachComplete()
             }
@@ -703,11 +746,11 @@ class ChatViewModel @Inject constructor(
             val sid = _sessionId.value ?: return
             viewModelScope.launch {
                 val url = try {
-                    repository.uploadFile(file, file.name, "image/png")
+                    repository.uploadFile(file, file.name, "image/png", sid)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    _errorMessage.value = "Upload failed: ${e.message}"
+                    _errorMessage.value = "Upload failed — check the connection and try again"
                     null
                 } finally {
                     file.delete()
@@ -900,6 +943,14 @@ class ChatViewModel @Inject constructor(
 // Screen composable
 // ═══════════════════════════════════════════════════════════════
 
+/** Compact token formatter for the context meter: 1234567 -> "1.2M". */
+private fun meterFmt(tokens: Long): String = when {
+    tokens < 1_000 -> tokens.toString()
+    tokens < 1_000_000 -> String.format(java.util.Locale.US, "%.1fk", tokens / 1000.0).replace(".0k", "k")
+    else -> String.format(java.util.Locale.US, "%.1fM", tokens / 1_000_000.0).replace(".0M", "M")
+}
+
+
 data class PendingAttachment(
     val uri: android.net.Uri,
     val fileName: String,
@@ -944,6 +995,8 @@ fun ChatScreen(
     val modelsLoading by vm.modelsLoading.collectAsState()
     val selectedModelName by vm.selectedModelName.collectAsState()
     val selectedModelProvider by vm.selectedModelProvider.collectAsState()
+    val contextUsed by vm.contextUsed.collectAsState()
+    val contextTotal by vm.contextTotal.collectAsState()
 
     // ── Telegram-style delete snackbar (same UX as session delete:
     //    destructive actions get an Undo, never instant removal) ──
@@ -982,8 +1035,6 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     // ── Model picker state ──
     var showModelPicker by remember { mutableStateOf(false) }
-    // ── Multi-agent mode: routes turns through the ruflo swarm ──
-    var multiAgentMode by remember { mutableStateOf(false) }
     // ── Telegram-style interactions ──
     var pendingReply by remember { mutableStateOf<Message?>(null) }
     var menuTarget by remember { mutableStateOf<Message?>(null) }
@@ -1073,7 +1124,7 @@ fun ChatScreen(
                 onFinalText = { text ->
                     if (text.isNotBlank()) {
                         inputText = text
-                        vm.sendMessage(text.trim(), multiAgent = multiAgentMode)
+                        vm.sendMessage(text.trim())
                         inputText = ""
                     }
                 },
@@ -1189,41 +1240,6 @@ fun ChatScreen(
                         contentDescription = "Select model",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp)
-                    )
-                }
-                // QR code button (unchanged)
-                IconButton(
-                    onClick = { vm.toggleQrDialog() },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.QrCode,
-                        contentDescription = "QR code",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                // Multi-agent toggle — routes this chat's turns through the
-                // ruflo swarm (8 parallel specialists). Slow (minutes) but
-                // deep: use for heavy analysis/build tasks.
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clip(RoundedCornerShape(8.dp))
-                ) {
-                    Text(
-                        text = "Multi",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (multiAgentMode) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Switch(
-                        checked = multiAgentMode,
-                        onCheckedChange = { multiAgentMode = it },
-                        modifier = Modifier.scale(0.75f),
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = HermesPrimary,
-                            checkedThumbColor = Color.White
-                        )
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
@@ -1653,6 +1669,45 @@ fun ChatScreen(
             }
         }
 
+        // ── Context meter (live tokens-in-context / model window) ──
+        // Telegram-slim: 2dp hairline + 10sp caption, sits between the
+        // reply bar and the input; fades in only once real numbers exist.
+        androidx.compose.animation.AnimatedVisibility(
+            visible = contextUsed > 0 && contextTotal > 0,
+            enter = fadeIn(), exit = fadeOut()
+        ) {
+            val fraction = (contextUsed.toFloat() / contextTotal.toFloat()).coerceIn(0f, 1f)
+            val warn = fraction > 0.85f
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(2.dp)
+                        .clip(RoundedCornerShape(1.dp)),
+                    color = when {
+                        fraction > 0.95f -> MaterialTheme.colorScheme.error
+                        warn -> Color(0xFFF9A825)
+                        else -> HermesPrimary.copy(alpha = 0.65f)
+                    },
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    strokeCap = androidx.compose.ui.graphics.StrokeCap.Round,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "${meterFmt(contextUsed)} / ${meterFmt(contextTotal)}" +
+                        if (warn) " · auto-compress soon" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                )
+            }
+        }
+
         InputBar(
             inputText = inputText,
             onInputChange = { text ->
@@ -1670,7 +1725,7 @@ fun ChatScreen(
                 vm.sendWithAttachment(inputText.trim(), pendingAttachment, context, onAttachComplete = {
                     pendingAttachment = null
                     inputText = ""
-                }, multiAgent = multiAgentMode, replyTo = pendingReply)
+                }, replyTo = pendingReply)
                 DraftStore.clear(sessionIdState ?: "")
                 pendingReply = null
             },
@@ -2338,17 +2393,17 @@ fun MessageBubble(
         MaterialTheme.colorScheme.onSurface
     }
 
-    // Build absolute URL for images served from the bridge server
+    // Build absolute URL for images served by the gateway plugin
     val absoluteImageUrl = remember(message.attachmentUrl, baseUrl) {
         val rel = message.attachmentUrl ?: return@remember null
         if (rel.startsWith("http")) rel
         else baseUrl.trimEnd('/') + rel
     }
 
-    // Telegram-style bubble: width hugs the text (wraps), never wider than
-    // ~78% of the available space — short texts get small bubbles.
+    // Telegram-style bubble with the user's full-width preference: wide
+    // bubbles (up to ~94% incl. tail/avatar lanes); short texts still hug.
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val bubbleMax = this.maxWidth * 0.78f
+        val bubbleMax = this.maxWidth * 0.94f
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2444,7 +2499,7 @@ fun MessageBubble(
                 // Compose list-scroll jank source (Telegram bubbles are flat).
                 shadowElevation = 0.dp
             ) {
-                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                     // ── Telegram-style quote chip (reply preview) ──
                     // Rendered at the top of the replying bubble: accent-tinted
                     // box with the quoted text, max 2 lines.

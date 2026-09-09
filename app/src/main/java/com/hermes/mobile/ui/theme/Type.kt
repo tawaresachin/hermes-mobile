@@ -55,9 +55,12 @@ val HermesTypography = Typography(
     bodyMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-        letterSpacing = 0.25.sp
+        // Telegram parity: chat message text is 15sp (~1.4 line height).
+        // This style IS the bubble body + input field, so the whole chat
+        // rides one token — slimmer than 16, more readable than 14.
+        fontSize = 15.sp,
+        lineHeight = 21.sp,
+        letterSpacing = 0.2.sp
     ),
     bodySmall = TextStyle(
         fontFamily = FontFamily.SansSerif,

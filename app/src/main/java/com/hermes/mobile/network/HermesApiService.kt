@@ -2,7 +2,6 @@ package com.hermes.mobile.network
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.hermes.mobile.auth.AuthManager
 import com.hermes.mobile.data.model.ServerConfig
 import com.hermes.mobile.data.model.ModelInfo
 import com.hermes.mobile.data.model.ModelListResponse
@@ -34,7 +33,6 @@ import kotlin.coroutines.resumeWithException
 @Singleton
 class HermesApiService @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val authManager: AuthManager,
     private val authInterceptor: AuthInterceptor
 ) {
 
@@ -70,26 +68,31 @@ class HermesApiService @Inject constructor(
 
     fun hasDarkThemePreference(): Boolean = prefs.contains(KEY_DARK_THEME)
 
-    // ── Device account (auto-registered after QR pairing) ──
-    // Stored ENCRYPTED (AES256-GCM via SecurePrefs) - these are live
-    // credentials, never plaintext on disk.
-    private val devicePrefs: SharedPreferences
-        get() = com.hermes.mobile.security.SecurePrefs.get(context, com.hermes.mobile.security.SecurePrefs.DEVICE_PREFS)
-
-    fun saveDeviceCredentials(email: String, password: String) {
-        devicePrefs.edit()
-            .putString("device_email", email)
-            .putString("device_password", password)
-            .apply()
-    }
-
-    fun getDeviceCredentials(): Pair<String, String>? {
-        val email = devicePrefs.getString("device_email", null) ?: return null
-        val password = devicePrefs.getString("device_password", null) ?: return null
-        return email to password
-    }
-
     fun prefs(): SharedPreferences = prefs
+
+    // ── Server session continuity ──
+    // The app's local session UUID maps to the server's state.db session id
+    // (returned in X-Hermes-Session-Id; rotates when Hermes auto-compresses
+    // the transcript). Sending the header makes the server load/append REAL
+    // history — same pipeline as Telegram/CLI, including auto context
+    // compression — instead of starting a fresh context each message.
+    fun serverIdFor(localSessionId: String): String? =
+        prefs.getString("srv_session:$localSessionId", null)
+
+    fun saveServerId(localSessionId: String, serverId: String) {
+        if (serverId.isBlank() || serverId == serverIdFor(localSessionId)) return
+        prefs.edit().putString("srv_session:$localSessionId", serverId).apply()
+    }
+
+    // ── Per-session model selection ──
+    // Each chat remembers ITS model: switching sessions must never leak one
+    // session's pick into another, and reloads must not reset it.
+    fun savedModelForSession(sessionId: String): String? =
+        prefs.getString("session_model:$sessionId", null)
+
+    fun saveModelForSession(sessionId: String, modelId: String) {
+        prefs.edit().putString("session_model:$sessionId", modelId).apply()
+    }
 
     // ── HTTP Client with AuthInterceptor ──
 
@@ -148,6 +151,13 @@ class HermesApiService @Inject constructor(
             .putString(KEY_API_KEY, cfg.apiKey.orEmpty())
             .putString(KEY_SETUP_TOKEN, cfg.setupToken.orEmpty())
             .apply()
+    }
+
+    /** Forget the pairing entirely (logout). */
+    fun clearConfig() {
+        config = null
+        prefs.edit().remove(KEY_BASE_URL).apply()
+        secretPrefs.edit().remove(KEY_API_KEY).remove(KEY_SETUP_TOKEN).apply()
     }
 
     fun getConfig(): ServerConfig? {
@@ -228,9 +238,9 @@ class HermesApiService @Inject constructor(
         onAttachment: (String, String) -> Unit = { _, _ -> },
         onTurnEnd: () -> Unit = {},
         onOpen: () -> Unit = {},
+        onUsage: (Long, Long) -> Unit = { _, _ -> },
         attachmentUrl: String = "",
         attachType: String = "",
-        multiAgent: Boolean = false,
         replyTo: String? = null,
         model: String? = null,
         provider: String? = null,
@@ -257,6 +267,13 @@ class HermesApiService @Inject constructor(
             .url("$baseUrl/v1/chat/completions")
             .post(payload.toString().toRequestBody(jsonMediaType))
             .header("Accept", "text/event-stream")
+        // Declare OUR session id from the very first turn (local UUID is a
+        // valid server id — verified live); switch to the server's id once
+        // one is known (e.g. after compression rotation).
+        reqBuilder.header(
+            "X-Hermes-Session-Id",
+            serverIdFor(sessionId)?.takeIf { it.isNotBlank() } ?: sessionId
+        )
         if (resolvedKey.isNotBlank()) {
             reqBuilder.header("Authorization", "Bearer $resolvedKey")
         }
@@ -272,6 +289,11 @@ class HermesApiService @Inject constructor(
             val source = factory.newEventSource(request, object : EventSourceListener() {
                 override fun onOpen(eventSource: EventSource, response: Response) {
                     lastEventMs = System.currentTimeMillis()
+                    // Persist the (possibly rotated by compression) server id
+                    // so the NEXT message continues the same transcript.
+                    response.header("X-Hermes-Session-Id")?.takeIf { it.isNotBlank() }?.let {
+                        saveServerId(sessionId, it)
+                    }
                     onOpen()
                 }
                 override fun onEvent(
@@ -291,6 +313,13 @@ class HermesApiService @Inject constructor(
                     }
                     try {
                         val json = JSONObject(data)
+                        // Final usage frame (may arrive with or without choices):
+                        // persist real token counts instead of showing 0.
+                        json.optJSONObject("usage")?.let { u ->
+                            val pt = u.optLong("prompt_tokens", 0L)
+                            val ct = u.optLong("completion_tokens", 0L)
+                            if (pt + ct > 0) onUsage(pt, ct)
+                        }
                         // OpenAI SSE format: {"choices":[{"delta":{"content":".."},"message":{...}}]}
                         // Server sends this. Must handle before custom type check.
                         val choices = json.optJSONArray("choices")
@@ -384,21 +413,11 @@ class HermesApiService @Inject constructor(
                     response: Response?
                 ) {
                     if (completed.compareAndSet(false, true)) {
-                        // If 401, try to refresh token and retry
+                        // 401 = the saved API key is wrong/revoked. There is no
+                        // refresh flow (API-key auth), so surface a clear error.
                         if (response?.code == 401) {
-                            val baseUrl = config?.baseUrl ?: "http://localhost:8080"
-                            // Refresh off this OkHttp callback thread - a
-                            // runBlocking here would pin a dispatcher thread
-                            // per failed stream.
-                            CoroutineScope(Dispatchers.IO).launch {
-                                val refreshed = authManager.refreshToken(baseUrl)
-                                val ex = if (refreshed) {
-                                    IOException("401 - Retrying with refreshed token")
-                                } else {
-                                    IOException("401 - Auth failed after refresh")
-                                }
-                                continuation.resumeWithException(ex)
-                            }
+                            continuation.resumeWithException(
+                                IOException("401 - API key rejected. Re-scan the QR code or update the key in Settings."))
                             return
                         }
                         val ex = t ?: IOException("Connection failed: ${response?.code ?: 0}")
@@ -545,13 +564,15 @@ class HermesApiService @Inject constructor(
                         for (j in 0 until arr.length()) {
                             val raw = arr.optString(j, "").trim()
                             if (raw.isEmpty()) continue
-                            // Entries with a slash are already qualified.
-                            // Bare entries qualify with their provider slug.
-                            val chatId = if (raw.contains("/")) raw
-                                else if (slug.isNotBlank()) "$slug/$raw" else raw
+                            // The request sends provider and model SEPARATELY
+                            // (server combines them). Prefixing the id with the
+                            // slug here made the server double-prefix colon
+                            // slugs: "custom:custom:freellm/qwen..." -> 404.
+                            // Bare ids stay bare; slash ids keep their slash.
                             val free = raw.contains(":free", ignoreCase = true) ||
                                 raw.contains("-free", ignoreCase = true)
-                            out.add(ModelInfo(id = chatId, name = raw, isFree = free, provider = label))
+                            out.add(ModelInfo(id = raw, name = raw, isFree = free,
+                                provider = label, providerSlug = slug))
                         }
                     }
                     if (out.isEmpty()) return@use null
@@ -631,49 +652,15 @@ class HermesApiService @Inject constructor(
         }
     }
 
-    // ─── Follow-up to a running agent (Cursor-style) ───
-
-    /** Queue a follow-up on the session's ACTIVE stream (returns 409 if none). */
-    suspend fun sendFollowUp(sessionId: String, query: String): Boolean {
-        val baseUrl = config?.baseUrl ?: return false
-        return withContext(Dispatchers.IO) {
-            try {
-                val payload = JSONObject().apply {
-                    put("session_id", sessionId)
-                    put("query", query)
-                }
-                val request = Request.Builder()
-                    .url("$baseUrl/v1/chat/completions/followup")
-                    .post(payload.toString().toRequestBody(jsonMediaType))
-                    .build()
-                client.newCall(request).execute().use { it.isSuccessful }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) { false }
-        }
-    }
-
-    /** INTERRUPT the running agent (Telegram interrupt mode): the server
-     * cancels the agent task, saves the partial response, and closes the
-     * stream. The app's Stop button calls this while streaming. */
-    suspend fun cancelChat(sessionId: String): Boolean {
-        val baseUrl = config?.baseUrl ?: return false
-        return withContext(Dispatchers.IO) {
-            try {
-                val payload = JSONObject().apply {
-                    put("session_id", sessionId)
-                    put("query", "")
-                }
-                val request = Request.Builder()
-                    .url("$baseUrl/v1/chat/completions/cancel")
-                    .post(payload.toString().toRequestBody(jsonMediaType))
-                    .build()
-                client.newCall(request).execute().use { it.isSuccessful }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) { false }
-        }
-    }
+    /** INTERRUPT the running agent (Telegram interrupt mode): the app's Stop
+     * button calls this while streaming, then cancels the local SSE job.
+     *
+     * The api_server has no cancel route (the old /v1/chat/completions/cancel
+     * is 404 — verified), but it reaps the agent as soon as the SSE connection
+     * closes (api_server.py: `_reap_disconnected_agent_processes`, source
+     * "api_server_sse_disconnect"). So closing our own stream IS the interrupt;
+     * there is nothing remote left to do. Always succeeds. */
+    suspend fun cancelChat(sessionId: String): Boolean = true
 
     // ─── Session status/source badges (server truth) ───
 
@@ -686,7 +673,10 @@ class HermesApiService @Inject constructor(
                 val request = Request.Builder().url("$baseUrl/api/sessions").get().build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@use emptyMap()
-                    val arr = JSONArray(response.body?.string() ?: return@use emptyMap())
+                    val body = response.body?.string() ?: return@use emptyMap()
+                    // api_server wraps the list: {object:"list", data:[...]}
+                    val arr = if (body.trimStart().startsWith("[")) JSONArray(body)
+                        else JSONObject(body).optJSONArray("data") ?: return@use emptyMap()
                     buildMap {
                         for (i in 0 until arr.length()) {
                             val s = arr.getJSONObject(i)
@@ -704,6 +694,59 @@ class HermesApiService @Inject constructor(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) { emptyMap() }
+        }
+    }
+
+    // ─── Server usage truth (Settings → Usage) ───
+
+    /** Sum real per-session token/message counts from GET /api/sessions
+     * (paginated, capped at 5 pages so a huge history can't hang settings).
+     * Returns Triple(messages, inputTokens, outputTokens) or null offline. */
+    data class ServerUsage(
+        val sessions: Int,
+        val messages: Int,
+        val inputTokens: Long,
+        val outputTokens: Long
+    )
+
+    suspend fun fetchServerUsage(): ServerUsage? {
+        val cfg = config ?: getConfig()
+        val base = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: return null
+        val key = cfg.apiKey?.takeIf { it.isNotBlank() } ?: ""
+        return withContext(Dispatchers.IO) {
+            try {
+                var offset = 0
+                var sessions = 0
+                var messages = 0
+                var tin = 0L
+                var tout = 0L
+                for (page in 0 until 5) {
+                    val url = "$base/api/sessions?limit=200&offset=$offset"
+                    val builder = Request.Builder().url(url).get()
+                    if (key.isNotBlank()) builder.header("Authorization", "Bearer $key")
+                    client.newCall(builder.build()).execute().use { response ->
+                        if (!response.isSuccessful) return@use
+                        val json = JSONObject(response.body?.string() ?: return@use)
+                        val arr = json.optJSONArray("data") ?: return@use
+                        for (i in 0 until arr.length()) {
+                            val s = arr.optJSONObject(i) ?: continue
+                            sessions++
+                            messages += s.optInt("message_count", 0)
+                            tin += s.optLong("input_tokens", 0L)
+                            tout += s.optLong("output_tokens", 0L)
+                        }
+                        if (!json.optBoolean("has_more", false) || arr.length() == 0) {
+                            offset = -1
+                            return@use
+                        }
+                    }
+                    if (offset < 0) break
+                    offset += 200
+                }
+                if (sessions == 0) null else ServerUsage(sessions, messages, tin, tout)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { null }
         }
     }
 
@@ -761,15 +804,43 @@ class HermesApiService @Inject constructor(
         return true
     }
 
+    /** Context window for a model via the plugin's resolver (server truth,
+     * cached server-side). providerSlug is e.g. "custom:freellm". Returns
+     * null when unknown/offline — the UI hides the meter instead of guessing. */
+    suspend fun fetchContextWindow(modelId: String, providerSlug: String?): Long {
+        if (modelId.isBlank()) return 0L
+        val cfg = config ?: getConfig()
+        val base = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: return 0L
+        val key = cfg.apiKey?.takeIf { it.isNotBlank() } ?: ""
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = "$base/api/mobile/context-window?model=" +
+                    java.net.URLEncoder.encode(modelId, "UTF-8") +
+                    "&provider=" + java.net.URLEncoder.encode(providerSlug ?: "", "UTF-8")
+                val builder = Request.Builder().url(url).get()
+                if (key.isNotBlank()) builder.header("Authorization", "Bearer $key")
+                client.newCall(builder.build()).execute().use { response ->
+                    if (!response.isSuccessful) return@use 0L
+                    val json = JSONObject(response.body?.string() ?: return@use 0L)
+                    json.optLong("context_length", 0L)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { 0L }
+        }
+    }
+
     // ─── Simple Chat (non-streaming) ───
 
     suspend fun sendChat(
         query: String,
         sessionId: String? = null
     ): String {
-        val baseUrl = config?.baseUrl ?: "http://localhost:8080"
+        val baseUrl = config?.baseUrl ?: return ""
+        val model = fetchDefaultModelId()
         return withContext(Dispatchers.IO) {
             val payload = JSONObject().apply {
+                put("model", model)
                 put("query", query)
                 put("stream", false)
                 sessionId?.let { put("session_id", it) }
@@ -820,7 +891,10 @@ class HermesApiService @Inject constructor(
                 response.use { resp ->
                     if (!resp.isSuccessful) return@withContext null
                     val body = resp.body?.string() ?: return@withContext null
-                    val arr = JSONArray(body)
+                    // Hermes api_server wraps the list: {object:"list", data:[...]}.
+                    // Accept a bare array too (legacy/other servers).
+                    val arr = if (body.trimStart().startsWith("[")) JSONArray(body)
+                        else JSONObject(body).optJSONArray("data") ?: return@withContext null
                     buildList {
                         for (i in 0 until arr.length()) {
                             add(arr.getJSONObject(i))
@@ -928,7 +1002,7 @@ class HermesApiService @Inject constructor(
 
     // ─── File Upload ───
 
-    suspend fun uploadFile(file: java.io.File, fileName: String, mimeType: String): String? {
+    suspend fun uploadFile(file: java.io.File, fileName: String, mimeType: String, sessionId: String = ""): String? {
         val baseUrl = config?.baseUrl ?: return null
         return withContext(Dispatchers.IO) {
             try {
@@ -936,8 +1010,14 @@ class HermesApiService @Inject constructor(
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", fileName, file.asRequestBody(mimeType.toMediaTypeOrNull()))
                     .build()
+                // hermes-mobile-qr plugin route: /api/audio/upload?session_id=<sid>
+                // -> {url:"/api/audio/download/<sid>/<stored>"}. The URL is
+                // relative; bubbles resolve it against baseUrl on display.
+                val urlBuilder = ("$baseUrl/api/audio/upload").toHttpUrlOrNull()?.newBuilder()?.apply {
+                    if (sessionId.isNotBlank()) addQueryParameter("session_id", sessionId)
+                }
                 val request = Request.Builder()
-                    .url("$baseUrl/api/upload")
+                    .url(urlBuilder?.build() ?: return@withContext null)
                     .post(body)
                     .build()
                 // AuthInterceptor handles the Authorization header.

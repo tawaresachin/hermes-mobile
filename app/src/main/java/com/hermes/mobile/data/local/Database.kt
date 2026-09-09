@@ -57,6 +57,9 @@ interface MessageDao {
         attachmentName: String?
     )
 
+    @Query("UPDATE messages SET tokens = :tokens WHERE id = :messageId")
+    suspend fun updateMessageTokens(messageId: Long, tokens: Long)
+
     @Query("UPDATE messages SET status = :status WHERE id = :messageId")
     suspend fun updateMessageStatus(messageId: Long, status: com.hermes.mobile.data.model.MessageStatus)
 
