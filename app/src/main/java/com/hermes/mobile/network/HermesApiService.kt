@@ -1200,7 +1200,7 @@ class HermesApiService @Inject constructor(
 
     // ── Audio STT / TTS (hermes-mobile-qr plugin routes) ──────────────
 
-    suspend fun transcribeAudio(audioB64: String, mimeType: String = "audio/mp4", model: String? = null): String {
+    suspend fun transcribeAudio(audioB64: String, mimeType: String = "audio/wav", model: String? = null): String {
         val baseUrl = config?.baseUrl ?: throw RuntimeException("Not connected")
         val url = "$baseUrl/api/audio/transcribe"
         val requestJson = JSONObject()

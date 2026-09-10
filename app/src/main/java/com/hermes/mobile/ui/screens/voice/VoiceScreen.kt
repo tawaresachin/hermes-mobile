@@ -382,15 +382,15 @@ fun VoiceScreen(onExit: () -> Unit) {
 
     if (showModelPicker) {
         ModelPickerSheet(
-            availableModels = availableModels,
-            currentModel = currentModel,
-            modelsLoading = modelsLoading,
-            onSelect = { modelId, _, _ ->
-                vm.switchModel(modelId)
-                showModelPicker = false
-            },
-            onDismiss = { showModelPicker = false }
-        )
+                            availableModels = availableModels,
+                            currentModel = currentModel,
+                            modelsLoading = modelsLoading,
+                            onSelect = { modelId, providerSlug, global ->
+                                vm.switchModel(modelId, providerSlug, global)
+                                showModelPicker = false
+                            },
+                            onDismiss = { showModelPicker = false }
+                        )
     }
 
     if (showSessionSheet) {

@@ -185,10 +185,18 @@ class VoiceViewModel @Inject constructor(
         }
     }
 
-    fun switchModel(modelId: String) {
-        viewModelScope.launch {
+    fun switchModel(modelId: String, providerSlug: String = "", global: Boolean = false) {
+        val sid = _selectedSessionId.value ?: run {
             _currentModel.value = modelId
-            loadModels()
+            return
+        }
+        viewModelScope.launch {
+            val success = repository.switchModel(sid, modelId, global)
+            if (success) {
+                _currentModel.value = modelId
+                repository.saveModelForSession(sid, modelId, providerSlug)
+                if (global) loadModels()
+            }
         }
     }
 }
