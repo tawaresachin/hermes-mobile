@@ -145,13 +145,7 @@ class ChatViewModel @Inject constructor(
 
     // Bubble text size: user-tunable (Preferences). Default 15sp — the
     // 16sp Telegram parity read too heavy on a phone in practice.
-    private val _chatFontSp = MutableStateFlow(
-        repository.prefs().getFloat("chat_font_sp", 15f))
-    val chatFontSp: Float get() = _chatFontSp.value
-    fun setChatFontSp(sp: Float) {
-        _chatFontSp.value = sp
-        repository.prefs().edit().putFloat("chat_font_sp", sp).apply()
-    }
+    val chatFontSp: kotlinx.coroutines.flow.StateFlow<Float> = repository.chatFontSp
 
     /** Resolve the selected model's context window once per model id. */
     fun refreshContextTotal() {
@@ -1178,7 +1172,7 @@ fun ChatScreen(
     val contextUsed by vm.contextUsed.collectAsState()
     val contextTotal by vm.contextTotal.collectAsState()
     // User-tunable chat text size (Preferences slider; default 15sp).
-    val chatFontSp = vm.chatFontSp
+    val chatFontSp by vm.chatFontSp.collectAsState()
 
     // ── Telegram-style delete snackbar (same UX as session delete:
     //    destructive actions get an Undo, never instant removal) ──
@@ -1875,7 +1869,7 @@ fun ChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 LinearProgressIndicator(
@@ -1888,7 +1882,7 @@ fun ChatScreen(
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
                     strokeCap = androidx.compose.ui.graphics.StrokeCap.Round,
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "${meterFmt(contextUsed)} / ${meterFmt(contextTotal)}" +
                         if (warn) " · auto-compress soon"
@@ -2677,6 +2671,26 @@ fun MessageBubble(
                 )
             }
             Box {
+            // ⋮ menu — TOP-RIGHT corner overlay (Telegram-style trailing
+            // affordance). Opens the full sheet: select/copy/reply/edit/
+            // forward/regenerate/delete. Long-press on the bubble does the
+            // same, for muscle memory.
+            if (!isStreaming && (onMenu != null || onLongPress != null)) {
+                IconButton(
+                    onClick = onMenu ?: onLongPress!!,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 2.dp, end = 2.dp)
+                        .size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "Message options",
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
             Column(
                 modifier = Modifier
                     .widthIn(max = bubbleMax)
@@ -2702,7 +2716,7 @@ fun MessageBubble(
                 // Compose list-scroll jank source (Telegram bubbles are flat).
                 shadowElevation = 0.dp
             ) {
-                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)) {
                     // ── Telegram-style quote chip (reply preview) ──
                     // Rendered at the top of the replying bubble: accent-tinted
                     // box with the quoted text, max 2 lines.
@@ -2712,7 +2726,7 @@ fun MessageBubble(
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = 6.dp)
+                                .padding(bottom = 4.dp)
                         ) {
                             Text(
                                 text = message.replyToText!!.trim(),
@@ -2836,12 +2850,10 @@ fun MessageBubble(
                             )
                         }
                     }
-                    // Overflow ⋮ (replaces the edit pencil): opens the full
-                    // action sheet (reply/copy/edit/forward/select/delete) —
-                    // one affordance instead of icon sprawl per bubble.
+                    // Stop stays bottom-right (live action); the ⋮ menu moved
+                    // to the bubble's TOP-RIGHT corner overlay.
                     val showStopAction = onStop != null && isUser
-                    val showMenuAction = !isStreaming && (onMenu != null || onLongPress != null)
-                    if (showMenuAction || showStopAction) {
+                    if (showStopAction) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2849,21 +2861,6 @@ fun MessageBubble(
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (showMenuAction) {
-                                IconButton(
-                                    onClick = onMenu ?: onLongPress!!,
-                                    modifier = Modifier.size(22.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.MoreVert,
-                                        contentDescription = "Message options",
-                                        tint = textColor.copy(alpha = 0.45f),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                            if (showStopAction) {
-                                Spacer(modifier = Modifier.width(4.dp))
                                 IconButton(
                                     onClick = onStop,
                                     modifier = Modifier.size(24.dp)
@@ -2875,7 +2872,6 @@ fun MessageBubble(
                                         modifier = Modifier.size(14.dp)
                                     )
                                 }
-                            }
                         }
                     }
                     // Telegram-style reaction badge (double-tap to toggle 👍)
@@ -3163,20 +3159,20 @@ fun ToolActivityGroup(jsonLines: String) {
             .clip(RoundedCornerShape(8.dp))
             .clickable { expanded = !expanded }
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+        Column(modifier = Modifier.padding(start = 10.dp, end = 26.dp, top = 4.dp, bottom = 4.dp)) {
             if (!expanded && lines.size > 2) {
                 Text(
                     text = "Agent work · ${lines.size} steps",
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = HermesPrimary,
-                    modifier = Modifier.padding(bottom = 3.dp)
+                    modifier = Modifier.padding(bottom = 2.dp)
                 )
             }
             shown.forEach { (head, label, status) ->
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(vertical = 1.dp)
+                    modifier = Modifier.padding(vertical = 0.5.dp)
                 ) {
                     Text(
                         text = if (status == "failed") "✕" else if (status == "running") "◌" else "✓",
@@ -3209,19 +3205,12 @@ fun ToolActivityGroup(jsonLines: String) {
                     }
                 }
             }
-            if (!expanded && lines.size > 2) {
+            if (lines.size > 2) {
                 Text(
-                    text = "show all ${lines.size} steps",
+                    text = if (!expanded) "show all ${lines.size} steps" else "collapse",
                     style = MaterialTheme.typography.labelSmall,
                     color = HermesPrimary.copy(alpha = 0.8f),
-                    modifier = Modifier.padding(top = 3.dp)
-                )
-            } else if (expanded && lines.size > 2) {
-                Text(
-                    text = "collapse",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = HermesPrimary.copy(alpha = 0.8f),
-                    modifier = Modifier.padding(top = 3.dp)
+                    modifier = Modifier.padding(top = 2.dp)
                 )
             }
         }

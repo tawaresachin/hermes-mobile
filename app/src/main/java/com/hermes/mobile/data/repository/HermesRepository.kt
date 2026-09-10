@@ -8,6 +8,8 @@ import com.hermes.mobile.network.HermesApiService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -793,6 +795,17 @@ class HermesRepository @Inject constructor(
 
     fun isCaveman(): Boolean = apiService.isCaveman()
     fun saveCaveman(on: Boolean) = apiService.saveCaveman(on)
+
+    // Chat text size — ONE shared reactive source (@Singleton repo). The
+    // Settings slider and every open chat read the same flow, so a change
+    // lands mid-session with no restart.
+    private val _chatFontSp = MutableStateFlow(
+        apiService.prefs().getFloat("chat_font_sp", 15f))
+    val chatFontSp: StateFlow<Float> = _chatFontSp
+    fun setChatFont(sp: Float) {
+        _chatFontSp.value = sp
+        apiService.prefs().edit().putFloat("chat_font_sp", sp).apply()
+    }
 
     fun saveDarkTheme(isDark: Boolean) {
         apiService.saveDarkTheme(isDark)

@@ -66,7 +66,6 @@ data class SettingsUiState(
     val messagesCount: Int = 0,
     val tokensUsed: Long = 0,
     val caveman: Boolean = true,
-    val chatFontSp: Float = 15f,
     // True when the numbers came from the server ledger, false = local fallback.
     val usageIsServer: Boolean = true,
     // Auth fields
@@ -172,12 +171,7 @@ class SettingsViewModel @Inject constructor(
         }
         // Load usage stats
         loadUsageStats()
-        _uiState.update {
-            it.copy(
-                caveman = repository.isCaveman(),
-                chatFontSp = repository.prefs().getFloat("chat_font_sp", 15f)
-            )
-        }
+        _uiState.update { it.copy(caveman = repository.isCaveman()) }
         // Direct-API posture (v0.0.1+): "signed in" == a saved base URL + API
         // key. The old bridge JWT session is gone; do not resurrect it.
         viewModelScope.launch {
@@ -241,9 +235,9 @@ class SettingsViewModel @Inject constructor(
         repository.saveCaveman(on)
     }
 
+    val chatFontSp: kotlinx.coroutines.flow.StateFlow<Float> = repository.chatFontSp
     fun setChatFont(sp: Float) {
-        _uiState.update { it.copy(chatFontSp = sp) }
-        repository.prefs().edit().putFloat("chat_font_sp", sp).apply()
+        repository.setChatFont(sp)
     }
 
     fun toggleTheme() {
@@ -342,6 +336,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val chatFontSp by viewModel.chatFontSp.collectAsState()
     val scrollState = rememberScrollState()
     val context = LocalContext.current
 
@@ -664,12 +659,12 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.weight(1f))
-                        Text("${uiState.chatFontSp.toInt()} sp",
+                        Text("${chatFontSp.toInt()} sp",
                             style = MaterialTheme.typography.labelMedium,
                             color = HermesPrimary)
                     }
                     Slider(
-                        value = uiState.chatFontSp,
+                        value = chatFontSp,
                         onValueChange = { viewModel.setChatFont(it) },
                         valueRange = 12f..20f,
                         steps = 7,
@@ -677,7 +672,7 @@ fun SettingsScreen(
                             thumbColor = HermesPrimary,
                             activeTrackColor = HermesPrimary)
                     )
-                    Text("Applies to new messages; restart chat tab to refresh",
+                    Text("Applies instantly across the app",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
