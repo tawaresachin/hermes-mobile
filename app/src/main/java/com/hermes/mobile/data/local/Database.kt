@@ -25,6 +25,9 @@ interface SessionDao {
 
     /** Latest active session — bottom-bar tabs resume this instead of
      *  silently creating a new one. */
+    @Query("SELECT * FROM sessions WHERE id = :sessionId")
+    suspend fun getSessionById(sessionId: String): com.hermes.mobile.data.model.Session?
+
     @Query("SELECT * FROM sessions WHERE isActive = 1 ORDER BY updatedAt DESC LIMIT 1")
     suspend fun getLastSession(): Session?
 }

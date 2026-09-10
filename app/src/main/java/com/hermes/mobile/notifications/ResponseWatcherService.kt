@@ -117,22 +117,9 @@ class ResponseWatcherService : Service() {
         // from the Hermes persona. No progress bar, no chrome — just the
         // logo and the message stack (exactly how Telegram renders a chat
         // notification: conversation title, timestamp, stacked bubbles).
-        val style = NotificationCompat.MessagingStyle(hermesPerson())
-            .setConversationTitle("Hermes")
-            .addMessage(
-                NotificationCompat.MessagingStyle.Message(
-                    if (currentQuery.isNotBlank()) currentQuery else "…",
-                    now,
-                    "You"
-                )
-            )
-            .addMessage(
-                NotificationCompat.MessagingStyle.Message(
-                    "is typing…",
-                    now + 1,
-                    hermesPerson()
-                )
-            )
+        // Slim single-line card (MessagingStyle rendered as a wide
+        // expanded conversation panel on MIUI/stock shades). The query
+        // rides as subtext so the row stays one line.
         return NotificationCompat.Builder(this, CHANNEL_ID)
             // The ACTUAL Hermes logo — MIUI's shade shows the small icon in
             // the avatar slot; a white glyph was invisible on white cards.
@@ -147,7 +134,7 @@ class ResponseWatcherService : Service() {
             // "Hermes: is typing…" in the shade) — NOT the user's own
             // message, which made the thinking indicator disappear.
             .setContentText("is typing…")
-            .setStyle(style)
+            .setSubText(if (currentQuery.isNotBlank()) "Re: " + currentQuery.replace("\n", " ").take(60) + "\u2026" else null)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setWhen(now)
@@ -237,22 +224,6 @@ class ResponseWatcherService : Service() {
             val now = System.currentTimeMillis()
             // Telegram-style stacked bubbles: the user's message + Hermes's
             // reply, under the Hermes logo + conversation title + timestamp.
-            val style = NotificationCompat.MessagingStyle(hermes)
-                .setConversationTitle("Hermes")
-                .addMessage(
-                    NotificationCompat.MessagingStyle.Message(
-                        if (query.isNotBlank()) query else "…",
-                        now,
-                        "You"
-                    )
-                )
-                .addMessage(
-                    NotificationCompat.MessagingStyle.Message(
-                        text,
-                        now + 1,
-                        hermes
-                    )
-                )
             val notif = NotificationCompat.Builder(context, CHANNEL_ID)
                 // The ACTUAL Hermes logo (same as the ongoing notification) —
                 // the shade shows the real girl image, Telegram-contact style.
@@ -261,7 +232,8 @@ class ResponseWatcherService : Service() {
                 .setColor(0xFF0088CC.toInt())
                 .setContentTitle("Hermes")
                 .setContentText(text)
-                .setStyle(style)
+                .setSubText(if (query.isNotBlank()) "Re: " + query.replace("\n", " ").take(60) + "\u2026" else null)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
                 .setAutoCancel(true)
                 .setContentIntent(pi)
                 .setWhen(now)

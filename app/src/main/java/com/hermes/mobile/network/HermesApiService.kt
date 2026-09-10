@@ -70,6 +70,9 @@ class HermesApiService @Inject constructor(
 
     fun prefs(): SharedPreferences = prefs
 
+    /** App context for resource-driven defaults (screen-class font size). */
+    val contextRes: Context get() = context
+
     // ── Server session continuity ──
     // The app's local session UUID maps to the server's state.db session id
     // (returned in X-Hermes-Session-Id; rotates when Hermes auto-compresses
@@ -308,8 +311,16 @@ class HermesApiService @Inject constructor(
         val cfg = config ?: getConfig()
         val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: "http://localhost:8080"
         val resolvedKey = cfg?.apiKey?.takeIf { it.isNotBlank() } ?: ""
-        // Build OpenAI-compatible chat completion request
-        val messages = buildOpenAIMessages(sessionId, query)
+        // Build OpenAI-compatible chat completion request.
+        // REPLY CONTEXT: the quote chip is UI-only — the server has no
+        // reply-to field, so the quoted text rides INSIDE the user message
+        // (and therefore into persisted history): the agent sees exactly
+        // what the user is replying to.
+        val wireQuery: String = if (!replyTo.isNullOrBlank()) {
+            val quoted = replyTo.trim().replace("\n", " ").take(400)
+            "Re: \"" + quoted + "\"\n\n" + query
+        } else query
+        val messages = buildOpenAIMessages(sessionId, wireQuery)
         // Dynamic default: server inventory decides. No hardcoded model id.
         // Resolved here (suspend scope) - not inside the callback below.
         val safeModel = if (!model.isNullOrBlank()) model else fetchDefaultModelId()

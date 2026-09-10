@@ -304,7 +304,7 @@ fun VoiceScreen(onExit: () -> Unit) {
                     Surface(
                         shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
                         color = HermesPrimary.copy(alpha = 0.14f),
-                        modifier = Modifier.widthIn(max = 300.dp)
+                        modifier = Modifier.fillMaxWidth(0.85f).widthIn(max = 420.dp)
                     ) {
                         Text(
                             turn.userText,
@@ -321,7 +321,7 @@ fun VoiceScreen(onExit: () -> Unit) {
                         Surface(
                             shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.widthIn(max = 300.dp)
+                            modifier = Modifier.fillMaxWidth(0.85f).widthIn(max = 420.dp)
                         ) {
                             Text(
                                 text = if (turn.assistantText.isBlank()) "…" else turn.assistantText,

@@ -81,9 +81,16 @@ class HermesRepository @Inject constructor(
     }
 
     /** Telegram-style forward: send the text as a user message in the
-     *  target session (saves it + hands it to the AI in one go). */
-    suspend fun forwardMessage(sessionId: String, content: String) {
-        sendMessage(sessionId = sessionId, query = content, onChunk = {})
+     *  target session (saves it + hands it to the AI in one go).
+     *  sourceLabel = "Forwarded from <session title>" — rides the wire so
+     *  the agent knows the message is imported, not typed in this chat. */
+    suspend fun forwardMessage(sessionId: String, content: String, sourceLabel: String = "", attachmentUrl: String? = null) {
+        val wire = buildString {
+            if (sourceLabel.isNotBlank()) append(sourceLabel).append("\n\n")
+            append(content)
+        }
+        sendMessage(sessionId = sessionId, query = wire, onChunk = {},
+            attachmentUrl = attachmentUrl ?: "")
     }
 
     /** Strip session-upload URLs from displayed text. The attachment bubble
@@ -651,6 +658,9 @@ class HermesRepository @Inject constructor(
     }
 
     /** Rename a session (local-only metadata change). */
+    suspend fun getSessionTitle(sessionId: String): String? =
+        sessionDao.getSessionById(sessionId)?.title
+
     suspend fun renameSession(sessionId: String, title: String) {
         sessionDao.renameSession(sessionId, title.trim().ifBlank { "Untitled Session" })
     }
@@ -800,11 +810,19 @@ class HermesRepository @Inject constructor(
     // Settings slider and every open chat read the same flow, so a change
     // lands mid-session with no restart.
     private val _chatFontSp = MutableStateFlow(
-        apiService.prefs().getFloat("chat_font_sp", 15f))
+        apiService.prefs().getFloat("chat_font_sp",
+            apiService.contextRes.resources.getInteger(com.hermes.mobile.R.integer.chat_font_sp).toFloat()))
     val chatFontSp: StateFlow<Float> = _chatFontSp
     fun setChatFont(sp: Float) {
         _chatFontSp.value = sp
         apiService.prefs().edit().putFloat("chat_font_sp", sp).apply()
+    }
+
+    /** Clear the override; flow re-seeds to the screen-class resource. */
+    fun resetChatFontToAuto() {
+        apiService.prefs().edit().remove("chat_font_sp").apply()
+        _chatFontSp.value =
+            apiService.contextRes.resources.getInteger(com.hermes.mobile.R.integer.chat_font_sp).toFloat()
     }
 
     fun saveDarkTheme(isDark: Boolean) {

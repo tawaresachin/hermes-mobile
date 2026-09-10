@@ -240,6 +240,10 @@ class SettingsViewModel @Inject constructor(
         repository.setChatFont(sp)
     }
 
+    fun resetChatFont() {
+        repository.resetChatFontToAuto()
+    }
+
     fun toggleTheme() {
         val newValue = !_uiState.value.isDarkTheme
         _uiState.update { it.copy(isDarkTheme = newValue) }
@@ -672,6 +676,12 @@ fun SettingsScreen(
                             thumbColor = HermesPrimary,
                             activeTrackColor = HermesPrimary)
                     )
+                    Row(modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { viewModel.resetChatFont() }) {
+                            Text("Auto (device)")
+                        }
+                    }
                     Text("Applies instantly across the app",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)

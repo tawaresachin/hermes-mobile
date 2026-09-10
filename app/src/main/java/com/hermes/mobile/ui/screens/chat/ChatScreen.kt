@@ -145,7 +145,7 @@ class ChatViewModel @Inject constructor(
 
     // Bubble text size: user-tunable (Preferences). Default 15sp — the
     // 16sp Telegram parity read too heavy on a phone in practice.
-    val chatFontSp: kotlinx.coroutines.flow.StateFlow<Float> = repository.chatFontSp
+    val chatFontSp: StateFlow<Float> = repository.chatFontSp
 
     /** Resolve the selected model's context window once per model id. */
     fun refreshContextTotal() {
@@ -381,6 +381,36 @@ class ChatViewModel @Inject constructor(
                     }
                 }
             }
+            "whoami" -> {
+                val j = repository.getJson("/api/system/status")
+                reply("You: Sachin (paired device)\nServer: " +
+                    (j?.optString("os") ?: "?") + " · python " + (j?.optString("python")?.take(4) ?: "?"))
+            }
+            "tools" -> {
+                val j = repository.getJson("/v1/toolsets")
+                val names = j?.optJSONArray("data")?.let { arr ->
+                    (0 until arr.length()).map { i ->
+                        val o = arr.getJSONObject(i)
+                        o.optString("label", o.optString("name")) +
+                            (if (o.optBoolean("enabled")) "" else " (off)")
+                    }
+                }.orEmpty()
+                reply("Toolsets: " + names.joinToString(", "))
+            }
+            "usage" -> {
+                val s = repository.getServerUsageStats()
+                reply(if (s != null)
+                    "Server ledger — sessions: ${s.sessions}, messages: ${s.messages}, " +
+                    "tokens in: ${meterFmt(s.inputTokens)}, out: ${meterFmt(s.outputTokens)}"
+                else "Usage endpoint not reachable.")
+            }
+            "queue" -> {
+                if (arg.isBlank()) reply("Usage: /queue <text> — send now; it will run after the current reply.")
+                else sendMessage(arg)
+            }
+            "compress" -> reply("Context: ${meterFmt(_contextUsed.value)} / ${meterFmt(_contextTotal.value)} tokens.\nAuto-compression runs server-side at ~50% — nothing to do manually.")
+            "commands" -> reply("Commands act here: " + SLASH_COMMANDS.joinToString(" ") { it.command } +
+                "\nAnything else starting with / goes to the agent as-is.")
             "help" -> reply(
                 "Slash commands\n" +
                 "/new /reset — new chat\n" +
@@ -447,7 +477,7 @@ class ChatViewModel @Inject constructor(
                     " · plugin " + (repository.getJson("/api/audio/health")
                         ?.optString("plugin_version") ?: "?"))
             }
-            else -> sendMessage(raw)   // unknown "/…" — let the agent handle it
+            else -> sendMessage(raw, bypassSlash = true)  // unknown "/…" — the agent decides
         }
     }
 
@@ -456,14 +486,14 @@ class ChatViewModel @Inject constructor(
     val showModelPickerState: StateFlow<Boolean> = showModelPickerGlobal.asStateFlow()
     fun consumeModelPickerRequest() { showModelPickerGlobal.value = false }
 
-    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, replyTo: Message? = null) {
+    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, replyTo: Message? = null, bypassSlash: Boolean = false) {
         val sid = _sessionId.value ?: return
         // ── Slash commands ──
         // The gateway's slash handlers are messaging-platform-only (adapter
         // command table); api_server chats never see them — the raw text
         // would go to the MODEL instead. The Telegram adapter answers these
         // client-side too, so the app mirrors it with real executors below.
-        if (attachmentUrl.isNullOrBlank() && query.trim().startsWith("/") && query.length <= 200) {
+        if (!bypassSlash && attachmentUrl.isNullOrBlank() && query.trim().startsWith("/") && query.length <= 200) {
             viewModelScope.launch { handleSlashCommand(sid, query.trim()) }
             return
         }
@@ -1066,7 +1096,10 @@ class ChatViewModel @Inject constructor(
          *  session's Room flow picks it up when opened). */
         fun forwardTo(targetSessionId: String, message: Message) {
             viewModelScope.launch {
-                repository.forwardMessage(targetSessionId, message.content)
+                val source = repository.getSessionTitle(message.sessionId)
+                val label = "Forwarded from" + (source?.takeIf { it.isNotBlank() }?.let { " \"$it\"" } ?: " another chat")
+                repository.forwardMessage(
+                    targetSessionId, message.content, label, message.attachmentUrl)
             }
         }
 
@@ -3448,8 +3481,15 @@ private val SLASH_COMMANDS = listOf(
     SlashCommand("/context", "Token window usage for this chat"),
     SlashCommand("/title", "Rename this session: /title <text>"),
     SlashCommand("/retry", "Resend the last message"),
+    SlashCommand("/retry", "Resend the last message"),
     SlashCommand("/skills", "Installed Hermes skills (server)"),
+    SlashCommand("/tools", "Enabled toolsets (server)"),
+    SlashCommand("/usage", "Server token ledger totals"),
+    SlashCommand("/queue", "Queue text for the next turn"),
+    SlashCommand("/compress", "Context status (compression is automatic)"),
+    SlashCommand("/whoami", "Device + server identity"),
     SlashCommand("/version", "App + server + plugin versions"),
+    SlashCommand("/commands", "Every command handled client-side"),
     SlashCommand("/help", "List these commands"),
 )
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Chat bubble text size (sp) by available-width class; default for
+         the user's Chat Text Size preference (slider can override). -->
+    <integer name="chat_font_sp">14</integer>
+</resources>
