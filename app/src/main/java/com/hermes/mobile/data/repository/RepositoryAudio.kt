@@ -10,7 +10,7 @@ class RepositoryAudio @Inject constructor(
 ) {
     suspend fun transcribeFromBase64(
         base64Audio: String,
-        mimeType: String = "audio/mp4",
+        mimeType: String = "audio/wav",
         model: String? = null
     ): String {
         var b64 = base64Audio
