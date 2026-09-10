@@ -84,6 +84,15 @@ class HermesApiService @Inject constructor(
         prefs.edit().putString("srv_session:$localSessionId", serverId).apply()
     }
 
+    // ── Caveman mode (user's "Context Compression" setting) ──
+    // ON = terse replies to save output tokens. The gateway extracts a
+    // leading system-role message as the turn's ephemeral system prompt,
+    // so the flag rides the payload — no server change needed.
+    fun isCaveman(): Boolean = prefs.getBoolean("caveman_mode", true)
+    fun saveCaveman(on: Boolean) {
+        prefs.edit().putBoolean("caveman_mode", on).apply()
+    }
+
     // ── Per-session model selection ──
     // Each chat remembers ITS model: switching sessions must never leak one
     // session's pick into another, and reloads must not reset it.
@@ -107,8 +116,16 @@ class HermesApiService @Inject constructor(
     // Helper: build OpenAI-format messages array from session history + new query
     private fun buildOpenAIMessages(sessionId: String, query: String): List<Map<String, String>> {
         val messages = mutableListOf<Map<String, String>>()
-        // Add system message if available
-        // For now, just add user message (session history managed server-side)
+        // Session history is managed server-side (X-Hermes-Session-Id);
+        // only the new user turn goes on the wire.
+        if (isCaveman()) {
+            messages.add(mapOf(
+                "role" to "system",
+                "content" to "CAVEMAN MODE ON (token saving): answer terse. " +
+                    "Short sentences, no filler, no emoji, no decorative formatting. " +
+                    "Keep technical accuracy; drop the rest."
+            ))
+        }
         messages.add(mapOf("role" to "user", "content" to query))
         return messages
     }
@@ -133,6 +150,12 @@ class HermesApiService @Inject constructor(
     // / streamChat) - publication must be visible across dispatchers.
     @Volatile
     private var config: ServerConfig? = null
+
+    // Ids advertised by GET /v1/models are model_routes ALIASES: the server
+    // pins them to a provider and 400s any request that also sends one
+    // ("Remove 'provider' or use 'X'"). Cached on every healthCheck.
+    @Volatile
+    private var aliasIds: Set<String> = emptySet()
 
     // Built ONCE (lazy): SecurePrefs.get() creates a MasterKey +
     // EncryptedSharedPreferences (KeyStore init + file decrypt) - doing
@@ -201,6 +224,20 @@ class HermesApiService @Inject constructor(
 
     // ─── Health Check ───
 
+    /** Plain GET of `path` (no auth). True on any HTTP response — even 401 —
+     * because it proves the server is REACHABLE. */
+    suspend fun isReachable(cfg: ServerConfig, path: String = "/api/audio/health"): Boolean {
+        val base = cfg.baseUrl.trimEnd('/') + path
+        return withContext(Dispatchers.IO) {
+            try {
+                client.newCall(Request.Builder().url(base).get().build())
+                    .execute().use { true }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { false }
+        }
+    }
+
     suspend fun healthCheck(cfg: ServerConfig? = null): Boolean {
         val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
             ?: config?.baseUrl
@@ -223,7 +260,21 @@ class HermesApiService @Inject constructor(
                 // response.use closes the body - a leaked body pins a socket
                 // (readTimeout 300s) that can't be pooled; the 5s poll loop
                 // would accumulate connections over time.
-                client.newCall(request).execute().use { it.isSuccessful }
+                client.newCall(request).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use false
+                    // Side-capture: refresh the model_routes alias set while
+                    // we're here (streamChat omits provider for these).
+                    try {
+                        val body = resp.body?.string() ?: ""
+                        val arr = JSONObject(body).optJSONArray("data")
+                        if (arr != null) {
+                            aliasIds = (0 until arr.length())
+                                .mapNotNull { i -> arr.optJSONObject(i)?.optString("id") }
+                                .toSet()
+                        }
+                    } catch (_: Exception) { }
+                    true
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -266,8 +317,9 @@ class HermesApiService @Inject constructor(
             put("model", safeModel)
             put("messages", JSONArray(messages))
             put("stream", true)
-            // Send provider if specified (enables model_routes lookup on server)
-            if (!provider.isNullOrBlank()) {
+            // Provider rides only for NON-alias models: /v1/models aliases are
+            // route-pinned server-side and reject an explicit provider (400).
+            if (!provider.isNullOrBlank() && safeModel !in aliasIds) {
                 put("provider", provider)
             }
         }
@@ -843,6 +895,16 @@ class HermesApiService @Inject constructor(
                 throw e
             } catch (_: Exception) { null }
         }
+    }
+
+    /** Live server-side context fill for a session (active-row token sum;
+     * accurate even after a compression rotation while the app was away).
+     * Returns 0 when unknown (older gateway without the route). */
+    suspend fun fetchContextUsage(localSessionId: String): Long {
+        val sid = serverIdFor(localSessionId) ?: localSessionId
+        val json = getJson("/api/mobile/context-usage?session_id=" +
+            java.net.URLEncoder.encode(sid, "UTF-8"))
+        return json?.optLong("last_prompt_tokens", 0L) ?: 0L
     }
 
     suspend fun fetchContextWindow(modelId: String, providerSlug: String?): Long {

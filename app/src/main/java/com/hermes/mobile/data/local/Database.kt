@@ -63,6 +63,9 @@ interface MessageDao {
     @Query("UPDATE messages SET toolActivity = :activity WHERE id = :messageId")
     suspend fun updateMessageToolActivity(messageId: Long, activity: String)
 
+    @Query("UPDATE messages SET contextTokens = :tokens WHERE id = :messageId")
+    suspend fun updateMessageContextTokens(messageId: Long, tokens: Long)
+
     @Query("UPDATE messages SET status = :status WHERE id = :messageId")
     suspend fun updateMessageStatus(messageId: Long, status: com.hermes.mobile.data.model.MessageStatus)
 
@@ -103,7 +106,7 @@ interface MessageDao {
 
 @Database(
     entities = [Message::class, Session::class],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -146,13 +149,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v6 -> v7: per-turn context fill (prompt tokens) on assistant rows. */
+        val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN contextTokens INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun create(context: Context): AppDatabase {
             return Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
                 "hermes_mobile.db"
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 // NO fallbackToDestructiveMigration: a missed migration must
                 // crash LOUDLY at open (caught upstream) rather than silently
                 // wipe every session and message the user ever had.

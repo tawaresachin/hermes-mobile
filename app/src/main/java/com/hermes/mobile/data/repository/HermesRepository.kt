@@ -389,6 +389,11 @@ class HermesRepository @Inject constructor(
         sessionDao.incrementMessageCount(sessionId)
 
         // Real token usage on the assistant row → Settings → Usage sums truth.
+        if (usagePrompt > 0) {
+            try { messageDao.updateMessageContextTokens(msgId, usagePrompt) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { }
+        }
         if (usagePrompt + usageCompletion > 0) {
             try {
                 messageDao.updateMessageTokens(msgId, usagePrompt + usageCompletion)
@@ -750,6 +755,9 @@ class HermesRepository @Inject constructor(
         }
     }
 
+    suspend fun isServerReachable(config: ServerConfig): Boolean =
+        apiService.isReachable(config)
+
     suspend fun checkConnectionRaw(config: ServerConfig): Boolean {
         return apiService.healthCheck(config)
     }
@@ -783,6 +791,9 @@ class HermesRepository @Inject constructor(
 
     // ─── Dark Theme ───
 
+    fun isCaveman(): Boolean = apiService.isCaveman()
+    fun saveCaveman(on: Boolean) = apiService.saveCaveman(on)
+
     fun saveDarkTheme(isDark: Boolean) {
         apiService.saveDarkTheme(isDark)
     }
@@ -815,6 +826,9 @@ class HermesRepository @Inject constructor(
 
     suspend fun fetchContextWindow(modelId: String, providerSlug: String?): Long =
         apiService.fetchContextWindow(modelId, providerSlug)
+
+    suspend fun fetchContextUsage(localSessionId: String): Long =
+        apiService.fetchContextUsage(localSessionId)
 
     /** Server-truth usage (falls back to local counts when offline). */
     suspend fun getServerUsageStats(): HermesApiService.ServerUsage? =

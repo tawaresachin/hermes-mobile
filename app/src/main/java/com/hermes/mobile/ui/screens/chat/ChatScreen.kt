@@ -258,7 +258,13 @@ class ChatViewModel @Inject constructor(
             // live text into the orphaned bubble too.
             repository.finalizeStaleStreaming(sessionId)
             observeMessages(sessionId)
-            repository.resumeSession(sessionId) // warm cache
+            val warm = repository.resumeSession(sessionId) // warm cache
+            // Seed the context meter from the last persisted turn so the
+            // bar shows usage the moment the session opens, not only after
+            // the next reply.
+            warm.lastOrNull { it.role == MessageRole.ASSISTANT && it.contextTokens > 0 }
+                ?.let { _contextUsed.value = it.contextTokens }
+            refreshContextTotal()
             // Safety net: if the LAST response was lost (stream died while
             // the user was away), recover it from the server.
             repository.repairBlankAssistantResponse(sessionId)
@@ -751,8 +757,23 @@ class ChatViewModel @Inject constructor(
                 _messages.value = repository.resumeSession(sid)
             }
             resubscribe()
+            var tick = 0
             while (true) {
                 kotlinx.coroutines.delay(5_000)
+                // Every ~20s while the session is open (and NOT mid-stream,
+                // where onUsage already gives the exact number): pull the
+                // server-side live context fill. Catches compression
+                // rotations / other-surface turns that happened while away.
+                tick++
+                if (tick % 4 == 0 && !_isStreaming.value) {
+                    val live = try {
+                        repository.fetchContextUsage(sid)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) { 0L }
+                    if (live > 0) _contextUsed.value = live
+                    if (_contextTotal.value == 0L) refreshContextTotal()
+                }
                 if (!subActive) {
                     // Subscription down — pull fallback + try to resubscribe.
                     val changed = try {
@@ -1828,7 +1849,15 @@ fun ChatScreen(
             enter = fadeIn(), exit = fadeOut()
         ) {
             val fraction = (contextUsed.toFloat() / contextTotal.toFloat()).coerceIn(0f, 1f)
+            // Traffic bands keyed to the server's OWN behaviour: the Hermes
+            // compressor fires at ~50% of the window, so green = plenty of
+            // headroom, yellow = compression zone, red = near the limit.
             val warn = fraction > 0.85f
+            val meterColor = when {
+                fraction >= 0.80f -> MaterialTheme.colorScheme.error
+                fraction >= 0.50f -> Color(0xFFF9A825)
+                else -> Color(0xFF43A047)
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1841,20 +1870,18 @@ fun ChatScreen(
                         .weight(1f)
                         .height(2.dp)
                         .clip(RoundedCornerShape(1.dp)),
-                    color = when {
-                        fraction > 0.95f -> MaterialTheme.colorScheme.error
-                        warn -> Color(0xFFF9A825)
-                        else -> HermesPrimary.copy(alpha = 0.65f)
-                    },
+                    color = meterColor,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
                     strokeCap = androidx.compose.ui.graphics.StrokeCap.Round,
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "${meterFmt(contextUsed)} / ${meterFmt(contextTotal)}" +
-                        if (warn) " · auto-compress soon" else "",
+                        if (warn) " · auto-compress soon"
+                        else if (fraction >= 0.5f) " · auto-compress zone"
+                        else "",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                    color = meterColor.copy(alpha = 0.9f),
                 )
             }
         }

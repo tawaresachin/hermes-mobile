@@ -39,7 +39,10 @@ data class Message(
     val tokens: Long = 0,
     // JSON array of tool activity lines [{n,e,l,s}] captured during the
     // turn (Telegram-style grouped display; persisted with the bubble).
-    val toolActivity: String? = null
+    val toolActivity: String? = null,
+    // prompt_tokens of this turn = the session's context fill right after
+    // it (seeds the context meter when the session is reopened).
+    val contextTokens: Long = 0
 )
 
 // ─── Session Models ───

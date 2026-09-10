@@ -65,6 +65,7 @@ data class SettingsUiState(
     val sessionsCount: Int = 0,
     val messagesCount: Int = 0,
     val tokensUsed: Long = 0,
+    val caveman: Boolean = true,
     // True when the numbers came from the server ledger, false = local fallback.
     val usageIsServer: Boolean = true,
     // Auth fields
@@ -170,6 +171,7 @@ class SettingsViewModel @Inject constructor(
         }
         // Load usage stats
         loadUsageStats()
+        _uiState.update { it.copy(caveman = repository.isCaveman()) }
         // Direct-API posture (v0.0.1+): "signed in" == a saved base URL + API
         // key. The old bridge JWT session is gone; do not resurrect it.
         viewModelScope.launch {
@@ -228,6 +230,11 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun toggleCaveman(on: Boolean) {
+        _uiState.update { it.copy(caveman = on) }
+        repository.saveCaveman(on)
+    }
+
     fun toggleTheme() {
         val newValue = !_uiState.value.isDarkTheme
         _uiState.update { it.copy(isDarkTheme = newValue) }
@@ -246,9 +253,22 @@ class SettingsViewModel @Inject constructor(
             val config = ServerConfig(baseUrl = normalizedUrl, apiKey = _uiState.value.apiKey)
             try {
                 val connected = repository.checkConnectionRaw(config)
-                _uiState.update {
-                    if (connected) it.copy(connectionStatus = ConnectionStatus.CONNECTED, errorDetail = null)
-                    else it.copy(connectionStatus = ConnectionStatus.ERROR, errorDetail = "Server returned an error. Check the URL and that the Hermes gateway is reachable.")
+                if (!connected) {
+                    // Distinguish the two failure classes honestly: a server
+                    // that answers at all (even 401) is reachable — then the
+                    // KEY is wrong; no answer at all is a URL/network problem.
+                    val reachable = repository.isServerReachable(config)
+                    _uiState.update {
+                        if (reachable) it.copy(
+                            connectionStatus = ConnectionStatus.ERROR,
+                            errorDetail = "Server is reachable but rejected this API key. Re-scan the QR or fix the key."
+                        ) else it.copy(
+                            connectionStatus = ConnectionStatus.ERROR,
+                            errorDetail = "Can't reach the server at this URL. Check the address/port (Tailscale IP:8642) and that the gateway is running."
+                        )
+                    }
+                } else {
+                    _uiState.update { it.copy(connectionStatus = ConnectionStatus.CONNECTED, errorDetail = null) }
                 }
                 // Only persist the URL once the connection actually works.
                 // API key IS the credential — nothing else to sign in to.
@@ -619,26 +639,15 @@ fun SettingsScreen(
 
             // ─── 6. PREFERENCES ───
             SettingsSection("Preferences") {
-                // Honest info row: compression is the server's own engine
-                // (identical to Telegram/CLI sessions). A client toggle
-                // controlled nothing — the switch was a lie, so it is gone.
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
-                ) {
-                    Icon(Icons.Filled.Compress, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(22.dp))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Context Compression",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface)
-                        Text("Automatic — handled by the Hermes server, the same engine Telegram and CLI use",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+                SettingsToggle(
+                    icon = Icons.Filled.Compress,
+                    title = "Caveman Mode",
+                    subtitle = if (uiState.caveman)
+                        "ON — terse replies, saves output tokens"
+                    else "OFF — full detailed replies",
+                    checked = uiState.caveman,
+                    onCheckedChange = { viewModel.toggleCaveman(it) }
+                )
                 SettingsToggle(
                     icon = Icons.Filled.PowerSettingsNew,
                     title = "Keep Computer Awake",
