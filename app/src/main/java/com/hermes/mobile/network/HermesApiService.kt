@@ -372,6 +372,25 @@ class HermesApiService @Inject constructor(
                         }
                         return
                     }
+                    // Tool chrome rides the SSE `event:` line (server frames
+                    // carry NO "type" field in the body). Match it here —
+                    // otherwise the frame falls through to the plain-text
+                    // fallback and raw JSON leaks into the bubble.
+                    if (type == "hermes.tool.progress") {
+                        try {
+                            val o = JSONObject(data)
+                            onToolProgress(
+                                o.optString("toolCallId", ""),
+                                o.optString("emoji", "⚙️"),
+                                o.optString("tool", ""),
+                                o.optString("label", ""),
+                                o.optString("status", "running")
+                            )
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (_: Exception) { }
+                        return
+                    }
                     try {
                         val json = JSONObject(data)
                         // Final usage frame (may arrive with or without choices):
