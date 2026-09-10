@@ -385,7 +385,7 @@ fun VoiceScreen(onExit: () -> Unit) {
             availableModels = availableModels,
             currentModel = currentModel,
             modelsLoading = modelsLoading,
-            onSelect = { modelId, _ ->
+            onSelect = { modelId, _, _ ->
                 vm.switchModel(modelId)
                 showModelPicker = false
             },

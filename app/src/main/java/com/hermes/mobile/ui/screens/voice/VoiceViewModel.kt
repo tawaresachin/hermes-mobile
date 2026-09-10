@@ -112,7 +112,11 @@ class VoiceViewModel @Inject constructor(
                 val sid = _selectedSessionId.value
                     ?: repository.createSession().id.also { _selectedSessionId.value = it }
                 val model = _currentModel.value.ifBlank { null }
-                model?.let { repository.saveModelForSession(sid, it) }
+                model?.let {
+                    val slug = _availableModels.value
+                        .firstOrNull { m -> m.id == it }?.providerSlug.orEmpty()
+                    repository.saveModelForSession(sid, it, slug)
+                }
                 // Provider SLUG, never the display label (server contract).
                 val provider = _availableModels.value
                     .firstOrNull { it.id == model }

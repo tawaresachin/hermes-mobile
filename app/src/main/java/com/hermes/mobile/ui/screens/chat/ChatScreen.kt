@@ -105,7 +105,8 @@ enum class ToolCallStatus { RUNNING, COMPLETED, FAILED }
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val repository: HermesRepository,
-    savedStateHandle: SavedStateHandle
+    savedStateHandle: SavedStateHandle,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
 
     // ── Session state ──
@@ -230,6 +231,7 @@ class ChatViewModel @Inject constructor(
      * can pick the server default for a session that never chose one). */
     private fun restoreSessionModel(sessionId: String) {
         _currentModel.value = repository.savedModelForSession(sessionId) ?: ""
+        _currentProviderSlug.value = repository.savedModelSlugForSession(sessionId)
         _contextTotal.value = 0L
         _contextUsed.value = 0L
     }
@@ -295,24 +297,166 @@ class ChatViewModel @Inject constructor(
 
     /** Provider SLUG for a model id (server contract). The display label
      * ("FreeLLM") must never go on the wire — it yields custom:custom:... 404s. */
-    fun providerFor(modelId: String): String? =
-        _availableModels.value.firstOrNull { it.id == modelId }
-            ?.providerSlug?.takeIf { it.isNotBlank() }
+    /** Provider SLUG for a model id, disambiguated by the pinned slug when
+     * the same id exists under several providers (bare-id collision). */
+    fun providerFor(modelId: String): String? {
+        val matches = _availableModels.value.filter { it.id == modelId }
+        val m = matches.firstOrNull { it.providerSlug == _currentProviderSlug.value }
+            ?: matches.firstOrNull()
+        return m?.providerSlug?.takeIf { it.isNotBlank() }
+    }
+
+    private val _currentProviderSlug = MutableStateFlow("")
+    val currentProviderSlug: String get() = _currentProviderSlug.value
 
     /** Pin this session to `modelId` (persisted). Unknown ids are still
      * accepted — the server decides; we never substitute silently. */
-    private fun pinModel(sessionId: String, modelId: String) {
+    private fun pinModel(sessionId: String, modelId: String, providerSlug: String = _currentProviderSlug.value) {
         _currentModel.value = modelId
+        _currentProviderSlug.value = providerSlug
         _contextTotal.value = 0L
-        repository.saveModelForSession(sessionId, modelId)
+        repository.saveModelForSession(sessionId, modelId, providerSlug)
         refreshContextTotal()
-        val found = _availableModels.value.firstOrNull { it.id == modelId }
+        val found = _availableModels.value.firstOrNull {
+            it.id == modelId && (providerSlug.isBlank() || it.providerSlug == providerSlug)
+        }
         _selectedModelName.value = found?.name ?: modelId.substringAfterLast("/").take(20)
         _selectedModelProvider.value = found?.provider ?: ""
     }
 
+    // ── Slash command executor ──────────────────────────────────────────
+    // Mirrors what the Telegram adapter does client-side: commands act on
+    // THIS session locally; info commands read server truth. Unknown slash
+    // text falls through to the agent (so "/me lol" style typing still works).
+    private suspend fun handleSlashCommand(sid: String, raw: String) {
+        val parts = raw.removePrefix("/").trim().split(Regex("[\\s]+"), limit = 2)
+        val cmd = (parts.firstOrNull() ?: "").lowercase()
+        val arg = if (parts.size > 1) parts[1].trim() else ""
+
+        fun reply(text: String) {
+            viewModelScope.launch {
+                repository.insertLocalSystemMessage(sid, text)
+                _messages.value = repository.resumeSession(sid)
+            }
+        }
+
+        suspend fun systemModelLine(): String {
+            val opts = repository.fetchModelOptions()
+            val cur = opts?.current ?: "?"
+            val prov = opts?.provider ?: "?"
+            return cur + if (prov.isNotBlank() && prov != cur) " ($prov)" else ""
+        }
+
+        when (cmd) {
+            "new", "reset", "clear" -> {
+                stopStreaming()
+                createNewSession()
+            }
+            "stop" -> {
+                stopStreaming()
+                reply("⏹ Stopped the current response.")
+            }
+            "model" -> {
+                if (arg.isBlank()) showModelPickerGlobal.value = true
+                else {
+                    val hit = _availableModels.value.firstOrNull {
+                        it.id.equals(arg, true) || it.name.equals(arg, true)
+                    }
+                    if (hit != null) {
+                        switchModel(hit.id, hit.providerSlug)
+                        reply("Model set to ${hit.name} (${hit.provider}).")
+                    } else {
+                        val avail = _availableModels.value.take(12).joinToString(", ") { it.name }
+                        reply("Model '$arg' not found.\nCurrent: ${_currentModel.value.ifBlank { "(server default)" }}\nAvailable: $avail${if (_availableModels.value.size > 12) " … (open the picker for all)" else ""}")
+                    }
+                }
+            }
+            "help" -> reply(
+                "Slash commands\n" +
+                "/new /reset — new chat\n" +
+                "/stop — stop current response\n" +
+                "/model — model list · /model <name> — switch\n" +
+                "/status — this session\n" +
+                "/context — token window usage\n" +
+                "/title <text> — rename session\n" +
+                "/retry — resend last message\n" +
+                "/skills — installed skills\n" +
+                "/version — server + app version"
+            )
+            "status" -> reply(
+                "Session: ${(sid.take(10))}\n" +
+                "Model: ${_currentModel.value.ifBlank { "(default)" }}" +
+                (providerFor(_currentModel.value)?.let { " · provider $it" } ?: "") + "\n" +
+                "Messages: ${_messages.value.size}\n" +
+                "Server: " + run {
+                    val s = repository.getServerUsageStats()
+                    if (s != null) "connected · ${s.sessions} sessions" else "offline?"
+                }
+            )
+            "context" -> {
+                val used = _contextUsed.value
+                val total = _contextTotal.value
+                reply(if (total > 0) {
+                    val pct = (used * 100 / total).coerceAtMost(100L)
+                    "Context: ${meterFmt(used)} / ${meterFmt(total)} tokens (${pct}%)\n" +
+                    (if (pct >= 85) "Auto-compression will kick in soon." else "Auto-compression active below 50% headroom.")
+                } else "No context data yet — send a message first.")
+            }
+            "title" -> {
+                if (arg.isBlank()) reply("Usage: /title <new session name>")
+                else {
+                    repository.renameSession(sid, arg)
+                    reply("Session renamed to '$arg'.")
+                }
+            }
+            "retry" -> {
+                val lastUser = _messages.value.lastOrNull { it.role == MessageRole.USER }
+                if (lastUser == null) reply("Nothing to retry yet.")
+                else sendMessage(lastUser.content)
+            }
+            "skills" -> {
+                val json = repository.getJson("/v1/skills")
+                val names = json?.optJSONArray("data")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { i ->
+                        arr.optJSONObject(i)?.optString("name")?.takeIf { it.isNotBlank() }
+                    }
+                }.orEmpty()
+                reply(if (names.isEmpty()) "No skills reported by the server."
+                      else "Skills (${names.size}): " + names.take(25).joinToString(", ") +
+                           if (names.size > 25) " …" else "")
+            }
+            "version" -> {
+                val status = repository.getJson("/health")
+                val pkg = try {
+                    val pi = appContext.packageManager
+                        .getPackageInfo(appContext.packageName, 0)
+                    pi.versionName
+                } catch (_: Exception) { "?" }
+                reply("App v$pkg\nServer: Hermes " +
+                    (status?.optString("version")?.takeIf { it.isNotBlank() } ?: "unknown") +
+                    " · plugin " + (repository.getJson("/api/audio/health")
+                        ?.optString("plugin_version") ?: "?"))
+            }
+            else -> sendMessage(raw)   // unknown "/…" — let the agent handle it
+        }
+    }
+
+    // Picker open-state as flow so the slash executor can raise it.
+    private val showModelPickerGlobal = MutableStateFlow(false)
+    val showModelPickerState: StateFlow<Boolean> = showModelPickerGlobal.asStateFlow()
+    fun consumeModelPickerRequest() { showModelPickerGlobal.value = false }
+
     fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, replyTo: Message? = null) {
         val sid = _sessionId.value ?: return
+        // ── Slash commands ──
+        // The gateway's slash handlers are messaging-platform-only (adapter
+        // command table); api_server chats never see them — the raw text
+        // would go to the MODEL instead. The Telegram adapter answers these
+        // client-side too, so the app mirrors it with real executors below.
+        if (attachmentUrl.isNullOrBlank() && query.trim().startsWith("/") && query.length <= 200) {
+            viewModelScope.launch { handleSlashCommand(sid, query.trim()) }
+            return
+        }
         val model = _currentModel.value
         val provider = providerFor(model)
         // TELEGRAM QUEUE MODEL: one message → ONE complete response, and
@@ -460,12 +604,14 @@ class ChatViewModel @Inject constructor(
                             _toolCalls.value = _toolCalls.value + tc
                         }
                     },
-                    onToolResult = { id, output ->
+                    onToolResult = { id, status ->
                         if (gen == streamGeneration) {
+                            val st = if (status == "failed")
+                                ToolCallStatus.FAILED else ToolCallStatus.COMPLETED
                             _toolCalls.value = _toolCalls.value.map {
                                 if (it.id == id) it.copy(
-                                    result = output,
-                                    status = ToolCallStatus.COMPLETED
+                                    result = null,
+                                    status = st
                                 ) else it
                             }
                         }
@@ -477,7 +623,7 @@ class ChatViewModel @Inject constructor(
                             // it — the header must never lie about which
                             // model answered this session now.
                             _currentModel.value = reverted
-                            repository.saveModelForSession(sid, reverted)
+                            repository.saveModelForSession(sid, reverted, _currentProviderSlug.value)
                         }
                     },
                     onAttachment = { url, _ ->
@@ -664,6 +810,7 @@ class ChatViewModel @Inject constructor(
                     // from the catalog — per-session choice must not be
                     // silently replaced) > server default > previous value.
                     val saved = repository.savedModelForSession(sid)
+                    if (saved != null) _currentProviderSlug.value = repository.savedModelSlugForSession(sid)
                     val serverDefault = response.current.takeIf { c -> models.any { it.id == c } }
                     val keepCurrent = _currentModel.value.takeIf { c -> models.any { it.id == c } }
                     val currentModel = saved ?: keepCurrent ?: serverDefault ?: models.firstOrNull()?.id ?: ""
@@ -671,6 +818,8 @@ class ChatViewModel @Inject constructor(
                     val found = models.firstOrNull { it.id == currentModel }
                     _selectedModelName.value = found?.name ?: currentModel.substringAfterLast("/").take(20)
                     _selectedModelProvider.value = found?.provider ?: ""
+                    // Slug follows whatever was chosen (saved restore set it above).
+                    if (saved == null) found?.providerSlug?.let { _currentProviderSlug.value = it }
                     refreshContextTotal()
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -680,12 +829,12 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun switchModel(modelId: String, global: Boolean = false) {
+    fun switchModel(modelId: String, providerSlug: String = "", global: Boolean = false) {
         val sid = _sessionId.value ?: return
         viewModelScope.launch {
             val success = repository.switchModel(sid, modelId, global)
             if (success) {
-                pinModel(sid, modelId)
+                pinModel(sid, modelId, providerSlug)
                 if (global) {
                     // Reload to show the new global default
                     loadModels()
@@ -1035,6 +1184,8 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     // ── Model picker state ──
     var showModelPicker by remember { mutableStateOf(false) }
+    // /model (no args) from the slash executor raises the sheet via this flow.
+    LaunchedEffect(Unit) { vm.showModelPickerState.collect { if (it) { showModelPicker = true; vm.consumeModelPickerRequest() } } }
     // ── Telegram-style interactions ──
     var pendingReply by remember { mutableStateOf<Message?>(null) }
     var menuTarget by remember { mutableStateOf<Message?>(null) }
@@ -1769,8 +1920,9 @@ fun ChatScreen(
             ModelPickerSheet(
                 availableModels = availableModels,
                 currentModel = currentModel,
+                currentProviderSlug = vm.currentProviderSlug,
                 modelsLoading = modelsLoading,
-                onSelect = { modelId, global -> vm.switchModel(modelId, global = global) },
+                onSelect = { modelId, slug, global -> vm.switchModel(modelId, slug, global = global) },
                 onDismiss = { showModelPicker = false }
             )
         }
@@ -2578,6 +2730,12 @@ fun MessageBubble(
                             )
                         }
                     }
+                    // ── Grouped tool activity (Telegram: one compact line
+                    //    per call, persisted with the bubble) ──
+                    if (!isStreaming && !message.toolActivity.isNullOrBlank()) {
+                        ToolActivityGroup(jsonLines = message.toolActivity!!)
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
                     // ── Text content ──
                     if (displayContent.isNotBlank()) {
                         // Check if content contains a table
@@ -2914,6 +3072,70 @@ fun TypingIndicator() {
 // Tool call card — polished with expandable results
 // ═══════════════════════════════════════════════════════════════
 
+/** Telegram-style: compact grouped lines for a completed turn's tool calls.
+ * Parses the persisted [{n,e,l,s}] JSON; renders nothing when malformed. */
+@Composable
+fun ToolActivityGroup(jsonLines: String) {
+    val lines = remember(jsonLines) {
+        try {
+            val arr = org.json.JSONArray(jsonLines)
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                Triple(
+                    o.optString("e", "⚙️") + " " + o.optString("n", "tool"),
+                    o.optString("l", ""),
+                    o.optString("s", "completed")
+                )
+            }
+        } catch (_: Exception) { emptyList() }
+    }
+    if (lines.isEmpty()) return
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            lines.forEach { (head, label, status) ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(vertical = 1.dp)
+                ) {
+                    Text(
+                        text = if (status == "failed") "✕" else if (status == "running") "◌" else "✓",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = when (status) {
+                            "failed" -> ErrorRed
+                            "running" -> WarningAmber
+                            else -> SuccessGreen
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = head,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                    if (label.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun ToolCallCard(toolCall: ToolCallInfo) {
     var expanded by remember { mutableStateOf(false) }
@@ -3128,18 +3350,20 @@ data class SlashCommand(
     val description: String
 )
 
+// Mirrors the app-side command executor (see ChatViewModel.handleSlashCommand).
 private val SLASH_COMMANDS = listOf(
-    SlashCommand("/help", "Show available commands and tips"),
-    SlashCommand("/reset", "Start a fresh conversation (clears history)"),
-    SlashCommand("/new", "Same as /reset"),
-    SlashCommand("/model", "Show the current AI model"),
-    SlashCommand("/skills", "List available Hermes skills"),
-    SlashCommand("/version", "Show version info"),
-    SlashCommand("/info", "Show session info"),
-    SlashCommand("/stats", "Show usage statistics"),
-    SlashCommand("/archive", "Archive/unarchive a session"),
-    SlashCommand("/export", "Export session data"),
-    SlashCommand("/cron", "List cron jobs"),
+    SlashCommand("/new", "Start a fresh conversation"),
+    SlashCommand("/reset", "Same as /new"),
+    SlashCommand("/clear", "Same as /new"),
+    SlashCommand("/stop", "Stop the current response"),
+    SlashCommand("/model", "Pick a model (or: /model <name>)"),
+    SlashCommand("/status", "Session, model & connection info"),
+    SlashCommand("/context", "Token window usage for this chat"),
+    SlashCommand("/title", "Rename this session: /title <text>"),
+    SlashCommand("/retry", "Resend the last message"),
+    SlashCommand("/skills", "Installed Hermes skills (server)"),
+    SlashCommand("/version", "App + server + plugin versions"),
+    SlashCommand("/help", "List these commands"),
 )
 
 @Composable

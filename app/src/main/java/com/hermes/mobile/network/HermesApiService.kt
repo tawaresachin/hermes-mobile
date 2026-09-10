@@ -90,8 +90,14 @@ class HermesApiService @Inject constructor(
     fun savedModelForSession(sessionId: String): String? =
         prefs.getString("session_model:$sessionId", null)
 
-    fun saveModelForSession(sessionId: String, modelId: String) {
-        prefs.edit().putString("session_model:$sessionId", modelId).apply()
+    fun savedModelSlugForSession(sessionId: String): String =
+        prefs.getString("session_model_slug:$sessionId", "") ?: ""
+
+    fun saveModelForSession(sessionId: String, modelId: String, providerSlug: String) {
+        prefs.edit()
+            .putString("session_model:$sessionId", modelId)
+            .putString("session_model_slug:$sessionId", providerSlug)
+            .apply()
     }
 
     // ── HTTP Client with AuthInterceptor ──
@@ -234,6 +240,9 @@ class HermesApiService @Inject constructor(
         onChunk: (String) -> Unit,
         onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
         onToolResult: (String, String) -> Unit = { _, _ -> },
+        // Server's real tool chrome: hermes.tool.progress frames carry
+        // {tool, emoji, label, toolCallId, status: running|completed|failed}.
+        onToolProgress: (String, String, String, String, String) -> Unit = { _, _, _, _, _ -> },
         onModelReverted: (String) -> Unit = {},
         onAttachment: (String, String) -> Unit = { _, _ -> },
         onTurnEnd: () -> Unit = {},
@@ -361,6 +370,15 @@ class HermesApiService @Inject constructor(
                             "text" -> {
                                 val content = json.optString("content", "")
                                 if (content.isNotEmpty()) onChunk(content)
+                            }
+                            "hermes.tool.progress" -> {
+                                onToolProgress(
+                                    json.optString("toolCallId", ""),
+                                    json.optString("emoji", "⚙️"),
+                                    json.optString("tool", ""),
+                                    json.optString("label", ""),
+                                    json.optString("status", "running")
+                                )
                             }
                             "tool_call" -> {
                                 val tcId = json.optString("id", "")
@@ -807,6 +825,26 @@ class HermesApiService @Inject constructor(
     /** Context window for a model via the plugin's resolver (server truth,
      * cached server-side). providerSlug is e.g. "custom:freellm". Returns
      * null when unknown/offline — the UI hides the meter instead of guessing. */
+    /** GET $path as JSON (Bearer auth). Null on any failure. Used by slash
+     * commands (/skills, /version) that need server truth. */
+    suspend fun getJson(path: String): JSONObject? {
+        val cfg = config ?: getConfig()
+        val base = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: return null
+        val key = cfg.apiKey?.takeIf { it.isNotBlank() } ?: ""
+        return withContext(Dispatchers.IO) {
+            try {
+                val builder = Request.Builder().url(base.trimEnd('/') + path).get()
+                if (key.isNotBlank()) builder.header("Authorization", "Bearer $key")
+                client.newCall(builder.build()).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use null
+                    JSONObject(resp.body?.string() ?: return@use null)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { null }
+        }
+    }
+
     suspend fun fetchContextWindow(modelId: String, providerSlug: String?): Long {
         if (modelId.isBlank()) return 0L
         val cfg = config ?: getConfig()

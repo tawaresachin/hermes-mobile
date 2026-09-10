@@ -31,8 +31,9 @@ import com.hermes.mobile.ui.theme.SuccessGreen
 fun ModelPickerSheet(
     availableModels: List<ModelInfo>,
     currentModel: String,
+    currentProviderSlug: String = "",
     modelsLoading: Boolean,
-    onSelect: (modelId: String, global: Boolean) -> Unit,
+    onSelect: (modelId: String, providerSlug: String, global: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -126,11 +127,16 @@ fun ModelPickerSheet(
                             }
                         }
                         // Models in this provider group
-                        items(models, key = { it.id }) { model ->
-                            val isCurrent = model.id == currentModel
+                        // CRASH FIX: model ids are bare, so the SAME id can
+                        // exist under several providers (gemini-3.6-flash in
+                        // both Custom and FreeLLM). Duplicate LazyColumn keys
+                        // threw while scrolling. Composite key per provider.
+                        items(models, key = { "${provider}|${it.id}" }) { model ->
+                            val isCurrent = model.id == currentModel &&
+                                (currentProviderSlug.isBlank() || model.providerSlug == currentProviderSlug)
                             Surface(
                                 onClick = {
-                                    onSelect(model.id, global)
+                                    onSelect(model.id, model.providerSlug, global)
                                     onDismiss()
                                 },
                                 modifier = Modifier.fillMaxWidth(),

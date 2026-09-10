@@ -36,7 +36,10 @@ data class Message(
     // When this message was last edited (0 = never).
     val editedAt: Long = 0,
     // Token count for this message (for usage stats).
-    val tokens: Long = 0
+    val tokens: Long = 0,
+    // JSON array of tool activity lines [{n,e,l,s}] captured during the
+    // turn (Telegram-style grouped display; persisted with the bubble).
+    val toolActivity: String? = null
 )
 
 // ─── Session Models ───

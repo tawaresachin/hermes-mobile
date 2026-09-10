@@ -153,6 +153,9 @@ class HermesRepository @Inject constructor(
         // Real per-turn usage captured from the SSE usage frame.
         var usagePrompt = 0L
         var usageCompletion = 0L
+        // Telegram-style tool chrome lines (deduped by toolCallId), persisted
+        // onto the assistant row so history keeps showing them after reopen.
+        val toolActivity = java.util.concurrent.ConcurrentHashMap<String, org.json.JSONObject>()
         // Save user message ONLY on first attempt (retries must not duplicate it)
         var userMsgIdFinal: Long? = userMsgId
         if (attempt == 1 && userMsgId == null) {
@@ -272,6 +275,16 @@ class HermesRepository @Inject constructor(
                 attachmentUrl = attachmentUrl,
                 attachType = attachType,
                 replyTo = replyTo,
+                onToolProgress = { id, emoji, tool, label, status ->
+                    val key = id.ifBlank { "$tool|$label|$status" }
+                    val line = toolActivity.getOrPut(key) { org.json.JSONObject() }
+                    line.put("n", tool).put("e", emoji).put("l", label)
+                    // running -> completed only overwrites; failed sticks out
+                    val cur = line.optString("s", "running")
+                    if (!(cur == "completed" && status == "running")) line.put("s", status)
+                    if (status == "running") onToolCall(id, tool, label)
+                    else onToolResult(id, status)
+                },
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Interrupted (Stop button / interrupt mode): the server saved
@@ -364,6 +377,15 @@ class HermesRepository @Inject constructor(
         // Finalize message (strip upload URLs — the attachment bubble
         // replaces them, Telegram never shows raw media links)
         finalizeMessage(msgId, sessionId, fullResponse.toString())
+        if (toolActivity.isNotEmpty()) {
+            try {
+                val arr = org.json.JSONArray()
+                toolActivity.values.forEach { arr.put(it) }
+                messageDao.updateMessageToolActivity(msgId, arr.toString())
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { }
+        }
         sessionDao.incrementMessageCount(sessionId)
 
         // Real token usage on the assistant row → Settings → Usage sums truth.
@@ -669,6 +691,19 @@ class HermesRepository @Inject constructor(
         return apiService.setSystemAwake(awake)
     }
 
+    /** Local SYSTEM reply (slash-command output). Rendered as an assistant
+     * bubble; never reaches the server or the conversation history. */
+    suspend fun insertLocalSystemMessage(sessionId: String, content: String) {
+        messageDao.insertMessage(
+            Message(
+                sessionId = sessionId,
+                role = MessageRole.ASSISTANT,
+                content = content
+            )
+        )
+        sessionDao.incrementMessageCount(sessionId)
+    }
+
     /** Local user bubble for a queued follow-up (the server persists its
      * own copy as the backup; the local row drives the UI). */
     suspend fun insertLocalUserMessage(sessionId: String, content: String) {
@@ -726,6 +761,9 @@ class HermesRepository @Inject constructor(
     }
 
     // Grouped provider inventory — same source as the Hermes picker.
+    suspend fun getJson(path: String): org.json.JSONObject? =
+        apiService.getJson(path)
+
     suspend fun fetchModelOptions(): ModelListResponse? {
         return apiService.fetchModelOptions()
     }
@@ -737,8 +775,11 @@ class HermesRepository @Inject constructor(
     fun savedModelForSession(sessionId: String): String? =
         apiService.savedModelForSession(sessionId)
 
-    fun saveModelForSession(sessionId: String, modelId: String) =
-        apiService.saveModelForSession(sessionId, modelId)
+    fun savedModelSlugForSession(sessionId: String): String =
+        apiService.savedModelSlugForSession(sessionId)
+
+    fun saveModelForSession(sessionId: String, modelId: String, providerSlug: String) =
+        apiService.saveModelForSession(sessionId, modelId, providerSlug)
 
     // ─── Dark Theme ───
 
