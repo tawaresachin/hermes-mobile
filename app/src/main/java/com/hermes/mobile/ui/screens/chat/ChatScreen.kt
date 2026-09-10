@@ -2561,10 +2561,10 @@ fun MessageBubble(
     // (6dp); the group's exposed ends stay rounded (18dp). Standalone
     // bubbles keep the exact same shape as before.
     val bubbleShape = RoundedCornerShape(
-        topStart = if (isUser) 18.dp else (if (isFirstInGroup && !isLastInGroup) 18.dp else 6.dp),
-        topEnd = if (isUser) (if (isFirstInGroup && !isLastInGroup) 18.dp else 6.dp) else 18.dp,
-        bottomStart = if (isUser) 18.dp else (if (isLastInGroup) 18.dp else 6.dp),
-        bottomEnd = if (isUser) (if (isLastInGroup) 18.dp else 6.dp) else 18.dp
+        topStart = if (isUser) 17.dp else (if (isFirstInGroup && !isLastInGroup) 17.dp else 3.dp),
+        topEnd = if (isUser) (if (isFirstInGroup && !isLastInGroup) 17.dp else 3.dp) else 17.dp,
+        bottomStart = if (isUser) 17.dp else (if (isLastInGroup) 17.dp else 3.dp),
+        bottomEnd = if (isUser) (if (isLastInGroup) 17.dp else 3.dp) else 17.dp
     )
     val textColor = if (isUser) {
         if (isDark) Color.White else Color(0xFF000000)
@@ -2884,7 +2884,8 @@ fun MessageBubble(
                             }
                             Text(
                                 text = formatTime(message.timestamp),
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp)),
                                 color = if (isUser) Color.White.copy(alpha = 0.65f)
                                 else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                             )
