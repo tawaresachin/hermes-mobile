@@ -1869,7 +1869,8 @@ fun ChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 12.dp, vertical = 0.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 LinearProgressIndicator(
@@ -1884,6 +1885,8 @@ fun ChatScreen(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
+                    maxLines = 1,
+                    lineHeight = 14.sp,
                     text = "${meterFmt(contextUsed)} / ${meterFmt(contextTotal)}" +
                         if (warn) " · auto-compress soon"
                         else if (fraction >= 0.5f) " · auto-compress zone"
@@ -2680,15 +2683,18 @@ fun MessageBubble(
                     onClick = onMenu ?: onLongPress!!,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(top = 2.dp, end = 2.dp)
-                        .size(24.dp)
+                        .padding(top = 3.dp, end = 3.dp)
+                        .size(18.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.MoreVert,
-                        contentDescription = "Message options",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-                        modifier = Modifier.size(16.dp)
-                    )
+                    Box(contentAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = "Message options",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
                 }
             }
             Column(
