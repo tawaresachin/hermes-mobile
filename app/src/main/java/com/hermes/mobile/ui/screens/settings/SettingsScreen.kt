@@ -66,6 +66,7 @@ data class SettingsUiState(
     val messagesCount: Int = 0,
     val tokensUsed: Long = 0,
     val caveman: Boolean = true,
+    val chatFontSp: Float = 15f,
     // True when the numbers came from the server ledger, false = local fallback.
     val usageIsServer: Boolean = true,
     // Auth fields
@@ -171,7 +172,12 @@ class SettingsViewModel @Inject constructor(
         }
         // Load usage stats
         loadUsageStats()
-        _uiState.update { it.copy(caveman = repository.isCaveman()) }
+        _uiState.update {
+            it.copy(
+                caveman = repository.isCaveman(),
+                chatFontSp = repository.prefs().getFloat("chat_font_sp", 15f)
+            )
+        }
         // Direct-API posture (v0.0.1+): "signed in" == a saved base URL + API
         // key. The old bridge JWT session is gone; do not resurrect it.
         viewModelScope.launch {
@@ -233,6 +239,11 @@ class SettingsViewModel @Inject constructor(
     fun toggleCaveman(on: Boolean) {
         _uiState.update { it.copy(caveman = on) }
         repository.saveCaveman(on)
+    }
+
+    fun setChatFont(sp: Float) {
+        _uiState.update { it.copy(chatFontSp = sp) }
+        repository.prefs().edit().putFloat("chat_font_sp", sp).apply()
     }
 
     fun toggleTheme() {
@@ -639,6 +650,37 @@ fun SettingsScreen(
 
             // ─── 6. PREFERENCES ───
             SettingsSection("Preferences") {
+                // Chat text size: same key ChatViewModel reads live via prefs.
+                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.TextFormat, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Chat Text Size",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f))
+                        Text("${uiState.chatFontSp.toInt()} sp",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = HermesPrimary)
+                    }
+                    Slider(
+                        value = uiState.chatFontSp,
+                        onValueChange = { viewModel.setChatFont(it) },
+                        valueRange = 12f..20f,
+                        steps = 7,
+                        colors = SliderDefaults.colors(
+                            thumbColor = HermesPrimary,
+                            activeTrackColor = HermesPrimary)
+                    )
+                    Text("Applies to new messages; restart chat tab to refresh",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 SettingsToggle(
                     icon = Icons.Filled.Compress,
                     title = "Caveman Mode",

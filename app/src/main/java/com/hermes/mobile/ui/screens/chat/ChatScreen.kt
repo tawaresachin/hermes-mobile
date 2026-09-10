@@ -143,6 +143,16 @@ class ChatViewModel @Inject constructor(
     private val _contextTotal = MutableStateFlow(0L)
     val contextTotal: StateFlow<Long> = _contextTotal.asStateFlow()
 
+    // Bubble text size: user-tunable (Preferences). Default 15sp — the
+    // 16sp Telegram parity read too heavy on a phone in practice.
+    private val _chatFontSp = MutableStateFlow(
+        repository.prefs().getFloat("chat_font_sp", 15f))
+    val chatFontSp: Float get() = _chatFontSp.value
+    fun setChatFontSp(sp: Float) {
+        _chatFontSp.value = sp
+        repository.prefs().edit().putFloat("chat_font_sp", sp).apply()
+    }
+
     /** Resolve the selected model's context window once per model id. */
     fun refreshContextTotal() {
         val model = _currentModel.value
@@ -1167,6 +1177,8 @@ fun ChatScreen(
     val selectedModelProvider by vm.selectedModelProvider.collectAsState()
     val contextUsed by vm.contextUsed.collectAsState()
     val contextTotal by vm.contextTotal.collectAsState()
+    // User-tunable chat text size (Preferences slider; default 15sp).
+    val chatFontSp = vm.chatFontSp
 
     // ── Telegram-style delete snackbar (same UX as session delete:
     //    destructive actions get an Undo, never instant removal) ──
@@ -1726,6 +1738,8 @@ fun ChatScreen(
                                     { vm.toggleReaction(message) }
                                 },
                                 highlighted = message.id == highlightId,
+                                fontSizeSp = chatFontSp,
+                                onMenu = { menuTarget = message },
                                 onAttachmentTap = { msg ->
                                     // Telegram: tap attachment bubble = download
                                     // + open (image → gallery, file → viewer).
@@ -2028,6 +2042,14 @@ fun ChatScreen(
                     forwardTarget = target
                     menuTarget = null
                 },
+                onEdit = if (target.role == com.hermes.mobile.data.model.MessageRole.USER
+                    && target.content.isNotBlank()) {
+                    {
+                        editingMessageId = target.id
+                        inputText = target.content
+                        menuTarget = null
+                    }
+                } else null,
                 onDelete = {
                     if (pendingReply?.id == target.id) pendingReply = null
                     vm.deleteMessage(target)
@@ -2533,8 +2555,10 @@ fun MessageBubble(
     onReply: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
+    onMenu: (() -> Unit)? = null,
     onReact: (() -> Unit)? = null,
     highlighted: Boolean = false,
+    fontSizeSp: Float = 15f,
     isFirstInGroup: Boolean = true,
     isLastInGroup: Boolean = true,
     selectionMode: Boolean = false,
@@ -2773,14 +2797,18 @@ fun MessageBubble(
                             if (isStreaming) {
                                 StreamingText(
                                     text = displayContent,
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontSize = fontSizeSp.sp,
+                                        lineHeight = (fontSizeSp + 6).sp),
                                     color = textColor,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             } else {
                                 MarkdownText(
                                     text = displayContent,
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontSize = fontSizeSp.sp,
+                                        lineHeight = (fontSizeSp + 6).sp),
                                     color = textColor,
                                     modifier = Modifier.fillMaxWidth()
                                 )
@@ -2808,28 +2836,29 @@ fun MessageBubble(
                             )
                         }
                     }
-                    // Actions row (Telegram-style, end-aligned): Edit (pencil)
-                    // and Stop (square) SIDE BY SIDE — icons only, no labels.
-                    val showEditAction = onEdit != null && !isStreaming && isUser && displayContent.isNotBlank()
+                    // Overflow ⋮ (replaces the edit pencil): opens the full
+                    // action sheet (reply/copy/edit/forward/select/delete) —
+                    // one affordance instead of icon sprawl per bubble.
                     val showStopAction = onStop != null && isUser
-                    if (showEditAction || showStopAction) {
+                    val showMenuAction = !isStreaming && (onMenu != null || onLongPress != null)
+                    if (showMenuAction || showStopAction) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 4.dp),
+                                .padding(top = 2.dp),
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (showEditAction) {
+                            if (showMenuAction) {
                                 IconButton(
-                                    onClick = onEdit,
-                                    modifier = Modifier.size(24.dp)
+                                    onClick = onMenu ?: onLongPress!!,
+                                    modifier = Modifier.size(22.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Filled.Edit,
-                                        contentDescription = "Edit message",
-                                        tint = textColor.copy(alpha = 0.6f),
-                                        modifier = Modifier.size(14.dp)
+                                        imageVector = Icons.Filled.MoreVert,
+                                        contentDescription = "Message options",
+                                        tint = textColor.copy(alpha = 0.45f),
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
@@ -3104,6 +3133,7 @@ fun TypingIndicator() {
  * Parses the persisted [{n,e,l,s}] JSON; renders nothing when malformed. */
 @Composable
 fun ToolActivityGroup(jsonLines: String) {
+    var expanded by remember(jsonLines) { mutableStateOf(false) }
     val lines = remember(jsonLines) {
         try {
             val arr = org.json.JSONArray(jsonLines)
@@ -3118,13 +3148,32 @@ fun ToolActivityGroup(jsonLines: String) {
         } catch (_: Exception) { emptyList() }
     }
     if (lines.isEmpty()) return
+    // Bluish, collapsed to the first two calls + "N more" — tap to expand.
+    // Tints the whole agent-work trail (tools/MCP/skills) distinctly from
+    // the prose answer, like IDE fold regions.
+    val shown = if (expanded) lines else lines.take(2)
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
-        modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
+        color = HermesPrimary.copy(alpha = 0.07f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, HermesPrimary.copy(alpha = 0.16f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 2.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { expanded = !expanded }
     ) {
         Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-            lines.forEach { (head, label, status) ->
+            if (!expanded && lines.size > 2) {
+                Text(
+                    text = "Agent work · ${lines.size} steps",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = HermesPrimary,
+                    modifier = Modifier.padding(bottom = 3.dp)
+                )
+            }
+            shown.forEach { (head, label, status) ->
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(vertical = 1.dp)
@@ -3143,7 +3192,7 @@ fun ToolActivityGroup(jsonLines: String) {
                         text = head,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = HermesPrimary.copy(alpha = 0.95f),
                         maxLines = 1
                     )
                     if (label.isNotBlank()) {
@@ -3152,13 +3201,28 @@ fun ToolActivityGroup(jsonLines: String) {
                             text = label,
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                            color = HermesPrimary.copy(alpha = 0.6f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
+            }
+            if (!expanded && lines.size > 2) {
+                Text(
+                    text = "show all ${lines.size} steps",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = HermesPrimary.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(top = 3.dp)
+                )
+            } else if (expanded && lines.size > 2) {
+                Text(
+                    text = "collapse",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = HermesPrimary.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(top = 3.dp)
+                )
             }
         }
     }

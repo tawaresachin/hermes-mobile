@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forward
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
@@ -48,6 +49,7 @@ fun MessageActionSheet(
     onDelete: () -> Unit,
     onForward: (() -> Unit)? = null,
     onRegenerate: (() -> Unit)? = null,
+    onEdit: (() -> Unit)? = null,
     onSelect: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
@@ -76,6 +78,9 @@ fun MessageActionSheet(
             }
             SheetActionRow(Icons.Filled.ContentCopy, "Copy") { onCopy() }
             SheetActionRow(Icons.Filled.Reply, "Reply") { onReply() }
+            if (isUser && onEdit != null) {
+                SheetActionRow(Icons.Filled.Edit, "Edit") { onEdit() }
+            }
             if (onForward != null) {
                 SheetActionRow(Icons.Filled.Forward, "Forward") { onForward() }
             }
