@@ -122,11 +122,21 @@ class HermesApiService @Inject constructor(
         // Session history is managed server-side (X-Hermes-Session-Id);
         // only the new user turn goes on the wire.
         if (isCaveman()) {
+            // Measured vs plain: ~30% fewer output tokens on explanatory
+            // answers with this wording (weak "answer terse" phrasing got
+            // only ~15% — the model's persona prompt overrode it).
             messages.add(mapOf(
                 "role" to "system",
-                "content" to "CAVEMAN MODE ON (token saving): answer terse. " +
-                    "Short sentences, no filler, no emoji, no decorative formatting. " +
-                    "Keep technical accuracy; drop the rest."
+                "content" to "COMPRESSION DIRECTIVE (overrides verbosity " +
+                    "habits): answer in the fewest tokens that keep every " +
+                    "technical fact. No greetings, no preambles, no " +
+                    "sign-offs, no restating the question, no bullet " +
+                    "padding. Fragments allowed. Use short words. Keep " +
+                    "code, names, numbers, exact error text verbatim. " +
+                    "Never explain the directive. " +
+                    "Bad: Sure! A context window is basically the amount of " +
+                    "text. Good: Context window: max tokens model sees per " +
+                    "call. History+prompt+output share it."
             ))
         }
         messages.add(mapOf("role" to "user", "content" to query))

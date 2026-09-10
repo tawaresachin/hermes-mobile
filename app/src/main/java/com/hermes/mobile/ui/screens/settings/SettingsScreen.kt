@@ -688,7 +688,7 @@ fun SettingsScreen(
                 }
                 SettingsToggle(
                     icon = Icons.Filled.Compress,
-                    title = "Caveman Mode",
+                    title = "Context Compression",
                     subtitle = if (uiState.caveman)
                         "ON — terse replies, saves output tokens"
                     else "OFF — full detailed replies",
