@@ -690,11 +690,8 @@ fun SettingsScreen(
                     icon = Icons.Filled.Compress,
                     title = "Token Optimizer",
                     subtitle = if (uiState.caveman)
-                        "ON — asks verbose models for terse answers (learns per " +
-                            "model from real usage; skips models already terse). " +
-                            "Not context compression."
-                    else "OFF — normal replies everywhere. Context auto-compresses " +
-                        "server-side past ~50%, always on",
+                        "Shorter replies from verbose models"
+                    else "Normal replies. Auto-compression stays on",
                     checked = uiState.caveman,
                     onCheckedChange = { viewModel.toggleCaveman(it) }
                 )
@@ -908,7 +905,7 @@ fun SettingsScreen(
             confirmButton = {
                 Button(onClick = { showSetupHelp = false }) { Text("Got it") }
             },
-            title = { Text("Setup Guide — End to End") },
+            title = { Text("How to connect") },
             text = {
                 Column(
                     modifier = Modifier
@@ -917,47 +914,41 @@ fun SettingsScreen(
                 ) {
                     // Current direct-API flow (v0.0.1+): plugin QR -> 8642.
                     SetupHelpSection(
-                        title = "0. Prerequisite — Tailscale (both devices)",
+                        title = "1. On your computer",
                         steps = listOf(
-                            "Install the free Tailscale app on BOTH the server machine and this phone",
-                            "Install from tailscale.com/download (Windows / macOS / Linux / Android)",
-                            "Sign in BOTH devices to the SAME Tailscale account and enable the VPN",
-                            "Each device gets a 100.x address — that's the secure P2P link to your server",
-                            "Verify both show online in the Tailscale app before continuing"
+                            "Install the plugin once:  pip install git+https://github.com/tawaresachin/hermes-mobile-plugin",
+                            "Then run:  hermes-mobile-plugin install",
+                            "Start Hermes:  hermes gateway run",
+                            "Show the pairing QR:  hermes-mobile-plugin qr"
                         )
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     SetupHelpSection(
-                        title = "1. Server-side (the machine running Hermes Agent)",
+                        title = "2. On this phone",
                         steps = listOf(
-                            "Install the mobile plugin once:",
-                            "   pip install git+https://github.com/tawaresachin/hermes-mobile-plugin",
-                            "   hermes-mobile-plugin install",
-                            "Start the Hermes Agent gateway:  hermes gateway run",
-                            "Show the pairing QR:  hermes-mobile-plugin qr",
-                            "(Add --no-browser if the browser cannot open there)"
+                            "Settings → tap 'QR Code' → scan the code on your computer",
+                            "You can also pick a QR screenshot from the gallery",
+                            "URL and key fill in by themselves",
+                            "Tap 'Test' — green means you are connected"
                         )
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     SetupHelpSection(
-                        title = "2. App-side (this phone)",
+                        title = "3. Different Wi-Fi networks?",
                         steps = listOf(
-                            "Open Settings → tap 'QR Code' → scan the pairing QR",
-                            "(or screenshot it and use the gallery option)",
-                            "The app fills in the server URL + API key automatically",
-                            "Tap 'Test' — Connection turns green",
-                            "Chat, Voice & Sessions unlock right away"
+                            "Same Wi-Fi: skip this step.",
+                            "Different networks: install free Tailscale on BOTH devices",
+                            "Sign in to the same Tailscale account, turn the VPN on",
+                            "Scan the QR again — it will carry the new address"
                         )
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     SetupHelpSection(
-                        title = "⚠️ Tips & troubleshooting",
+                        title = "Good to know",
                         steps = listOf(
-                            "The pairing QR carries the server URL + API key — keep it private",
-                            "Server IP changed? Regenerate with: hermes-mobile-plugin qr",
-                            "Connection shows 'Connected via Tailscale' when the P2P link is live",
-                            "Not connecting? Confirm BOTH devices are online in Tailscale",
-                            "Log out → Chat/Voice/Sessions lock until you scan the QR again"
+                            "The QR contains your key — do not share it",
+                            "Connection lost? On the computer run:  hermes-mobile-plugin qr",
+                            "Log out clears the pairing; scan again to reconnect"
                         )
                     )
                 }
@@ -992,7 +983,7 @@ fun SettingsScreen(
                         showQrDialog = false
                         val options = ScanOptions().apply {
                             setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                            setPrompt("Scan Hermes Bridge QR code")
+                            setPrompt("Scan the Hermes QR code")
                             setBeepEnabled(false)
                             setOrientationLocked(false)
                             addExtra("SCAN_ORIENTATION", "portrait")
