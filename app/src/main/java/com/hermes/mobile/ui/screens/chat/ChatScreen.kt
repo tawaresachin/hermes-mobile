@@ -908,6 +908,11 @@ class ChatViewModel @Inject constructor(
     }
 
     // ── Send with attachment (ViewModel scope — survives recomposition cancellation) ──
+        // Double-tap guard: an attachment upload takes seconds (2.7 MB PDF
+        // over Tailscale ~10s). _isStreaming only flips AFTER the upload, so
+        // every tap during upload queued another identical message — the
+        // "4-5 copies" bug. In-flight flag + immediate UI clear close the gap.
+        private var sendInFlight = false
         fun sendWithAttachment(
             text: String,
             attachment: PendingAttachment?,
@@ -916,31 +921,39 @@ class ChatViewModel @Inject constructor(
             replyTo: Message? = null
         ) {
             val sid = _sessionId.value ?: return
+            if (sendInFlight) return
+            sendInFlight = true
+            // Clear the composer BEFORE the slow upload starts: the send
+            // slot falls back to the mic and a second tap has nothing to
+            // resend. (Was: cleared only in onAttachComplete AFTER upload.)
+            onAttachComplete()
             viewModelScope.launch {
-                var attachUrl: String? = null
-                var attachType: String? = null
-                if (attachment != null) {
-                    try {
-                        val tempFile = cacheAttachmentToTemp(context, attachment.uri)
-                        if (tempFile == null) {
-                            _errorMessage.value = "Attachment too large or unreadable (max 50 MB)"
-                            onAttachComplete()
-                            return@launch
+                try {
+                    var attachUrl: String? = null
+                    var attachType: String? = null
+                    if (attachment != null) {
+                        try {
+                            val tempFile = cacheAttachmentToTemp(context, attachment.uri)
+                            if (tempFile == null) {
+                                _errorMessage.value = "Attachment too large or unreadable (max 50 MB)"
+                                return@launch
+                            }
+                            attachUrl = repository.uploadFile(
+                                tempFile, attachment.fileName, attachment.mimeType, sid)
+                            tempFile.delete()
+                            attachType = attachment.attachType
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            _errorMessage.value = "Upload failed — check the connection and try again"
                         }
-                        attachUrl = repository.uploadFile(
-                            tempFile, attachment.fileName, attachment.mimeType, sid)
-                        tempFile.delete()
-                        attachType = attachment.attachType
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        _errorMessage.value = "Upload failed — check the connection and try again"
                     }
+                    if (text.isNotBlank() || attachUrl != null) {
+                        sendMessage(text, attachUrl, attachType, replyTo = replyTo)
+                    }
+                } finally {
+                    sendInFlight = false
                 }
-                if (text.isNotBlank() || attachUrl != null) {
-                    sendMessage(text, attachUrl, attachType, replyTo = replyTo)
-                }
-                onAttachComplete()
             }
         }
 
@@ -948,19 +961,25 @@ class ChatViewModel @Inject constructor(
          * flattened PNG, then send it as a normal image attachment. */
         fun sendMarkedImage(text: String, file: java.io.File, replyTo: Message?) {
             val sid = _sessionId.value ?: return
+            if (sendInFlight) { file.delete(); return }
+            sendInFlight = true
             viewModelScope.launch {
-                val url = try {
-                    repository.uploadFile(file, file.name, "image/png", sid)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    _errorMessage.value = "Upload failed — check the connection and try again"
-                    null
+                try {
+                    val url = try {
+                        repository.uploadFile(file, file.name, "image/png", sid)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        _errorMessage.value = "Upload failed — check the connection and try again"
+                        null
+                    } finally {
+                        file.delete()
+                    }
+                    if (url != null) {
+                        sendMessage(text, url, "image", replyTo = replyTo)
+                    }
                 } finally {
-                    file.delete()
-                }
-                if (url != null) {
-                    sendMessage(text, url, "image", replyTo = replyTo)
+                    sendInFlight = false
                 }
             }
         }
