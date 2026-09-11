@@ -936,24 +936,32 @@ class ChatViewModel @Inject constructor(
                     var attachType: String? = null
                     var attachPath: String = ""
                     if (attachment != null) {
+                        // Server truth: aiohttp client_max_size on the api_server
+                        // app rejects ANY body > 10 MB with 413 body_too_large
+                        // before the upload route runs — so 10 MB is the real
+                        // cap, not the route's own 25 MB constant.
+                        var tempFile: java.io.File? = null
                         try {
-                            val tempFile = cacheAttachmentToTemp(context, attachment.uri)
+                            tempFile = cacheAttachmentToTemp(context, attachment.uri)
                             if (tempFile == null) {
-                                _errorMessage.value = "Attachment too large or unreadable (max 25 MB)"
+                                _errorMessage.value = "Attachment too large or unreadable (max 9 MB — gateway limit)"
                                 return@launch
                             }
                             repository.uploadFile(
-                                tempFile, attachment.fileName, attachment.mimeType, sid
+                                tempFile!!, attachment.fileName, attachment.mimeType, sid
                             )?.let { (url, path) ->
                                 attachUrl = url
                                 attachPath = path
+                                attachType = attachment.attachType
                             }
-                            tempFile.delete()
-                            attachType = attachment.attachType
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (e: Exception) {
                             _errorMessage.value = "Upload failed — check the connection and try again"
+                        } finally {
+                            // The cacheDir copy must vanish even when the
+                            // upload throws or the scope is cancelled.
+                            tempFile?.delete()
                         }
                     }
                     if (text.isNotBlank() || attachUrl != null) {
@@ -1155,7 +1163,10 @@ class ChatViewModel @Inject constructor(
                                 val n = ins.read(buf)
                                 if (n < 0) break
                                 total += n
-                                if (total > 25L * 1024 * 1024) return@use false
+                                // The gateway 413s any body over 10 MB
+                                // (aiohttp client_max_size); 9 MB leaves
+                                // headroom for multipart framing overhead.
+                                if (total > 9L * 1024 * 1024) return@use false
                                 out.write(buf, 0, n)
                             }
                             true
