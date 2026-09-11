@@ -939,7 +939,7 @@ class ChatViewModel @Inject constructor(
                         try {
                             val tempFile = cacheAttachmentToTemp(context, attachment.uri)
                             if (tempFile == null) {
-                                _errorMessage.value = "Attachment too large or unreadable (max 50 MB)"
+                                _errorMessage.value = "Attachment too large or unreadable (max 25 MB)"
                                 return@launch
                             }
                             repository.uploadFile(
@@ -1155,7 +1155,7 @@ class ChatViewModel @Inject constructor(
                                 val n = ins.read(buf)
                                 if (n < 0) break
                                 total += n
-                                if (total > 50L * 1024 * 1024) return@use false
+                                if (total > 25L * 1024 * 1024) return@use false
                                 out.write(buf, 0, n)
                             }
                             true
