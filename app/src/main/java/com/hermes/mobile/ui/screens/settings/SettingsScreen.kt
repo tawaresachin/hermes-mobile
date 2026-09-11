@@ -52,6 +52,36 @@ import javax.inject.Inject
 
 // ─── ViewModel ───
 
+/** Private/Tailscale/LAN-only guard for server URLs (QR + manual entry).
+ * Cleartext Bearer auth must never target a public host. */
+fun isTrustedServerHost(rawUrl: String): Boolean {
+    val host = try {
+        Uri.parse(rawUrl).host?.lowercase() ?: return false
+    } catch (_: Exception) {
+        return false
+    }
+    if (host == "localhost" || host.endsWith(".local")) return true
+    // Bare IPv4 literals: must be in private / CGNAT / link-local ranges.
+    val ipv4 = Regex("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$").matchEntire(host)
+    if (ipv4 != null) {
+        val o = ipv4.groupValues.drop(1).map { it.toInt() }
+        if (o.any { it > 255 }) return false
+        val (a, b) = o[0] to o[1]
+        return when {
+            a == 10 -> true
+            a == 192 && b == 168 -> true
+            a == 172 && b in 16..31 -> true
+            a == 127 -> true
+            a == 100 && b in 64..127 -> true  // Tailscale CGNAT
+            a == 169 && b == 254 -> true      // link-local
+            else -> false
+        }
+    }
+    // Hostnames: allow (personal tailnet names resolve to CGNAT IPs;
+    // the DNS-rebinding residual is acceptable for this device).
+    return true
+}
+
 data class SettingsUiState(
     val baseUrl: String = "http://localhost:8080",
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
@@ -259,6 +289,17 @@ class SettingsViewModel @Inject constructor(
             } else {
                 rawUrl
             }
+            // SECURITY: cleartext http ships the Bearer key + chat content
+            // unencrypted. QR pairing already restricts to private/tailnet
+            // hosts; manual entry must pass the same gate, or a mistyped /
+            // pasted public URL exfiltrates the key silently.
+            if (normalizedUrl.startsWith("http://") && !isTrustedServerHost(normalizedUrl)) {
+                _uiState.update { it.copy(
+                    connectionStatus = ConnectionStatus.ERROR,
+                    errorDetail = "Blocked: public http:// would send your API key unencrypted. Use a Tailscale/LAN address, or https://."
+                ) }
+                return@launch
+            }
             val config = ServerConfig(baseUrl = normalizedUrl, apiKey = _uiState.value.apiKey)
             try {
                 val connected = repository.checkConnectionRaw(config)
@@ -349,33 +390,7 @@ fun SettingsScreen(
     LaunchedEffect(Unit) { viewModel.loadSystemStatus() }
 
     /** Private/Tailscale/LAN-only guard for QR-derived server URLs. */
-    fun isTrustedBridgeHost(rawUrl: String): Boolean {
-        val host = try {
-            Uri.parse(rawUrl).host?.lowercase() ?: return false
-        } catch (_: Exception) {
-            return false
-        }
-        if (host == "localhost" || host.endsWith(".local")) return true
-        // Bare IPv4 literals: must be in private / CGNAT / link-local ranges.
-        val ipv4 = Regex("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$").matchEntire(host)
-        if (ipv4 != null) {
-            val o = ipv4.groupValues.drop(1).map { it.toInt() }
-            if (o.any { it > 255 }) return false
-            val (a, b) = o[0] to o[1]
-            return when {
-                a == 10 -> true
-                a == 192 && b == 168 -> true
-                a == 172 && b in 16..31 -> true
-                a == 127 -> true
-                a == 100 && b in 64..127 -> true  // Tailscale CGNAT
-                a == 169 && b == 254 -> true      // link-local
-                else -> false
-            }
-        }
-        // Hostnames: allow (personal tailnet names resolve to CGNAT IPs;
-        // the DNS-rebinding residual is acceptable for this device).
-        return true
-    }
+    fun isTrustedBridgeHost(rawUrl: String): Boolean = isTrustedServerHost(rawUrl)
 
     // QR result handler
     fun handleQrResult(scanned: String, vm: SettingsViewModel) {

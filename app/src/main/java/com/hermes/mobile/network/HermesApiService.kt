@@ -112,6 +112,17 @@ class HermesApiService @Inject constructor(
             .apply()
     }
 
+    /** Purge every per-session key this class owns. Called on session
+     * delete — without it, srv_session:/session_model(:_slug): entries for
+     * dead sessions accumulate in prefs forever. */
+    fun forgetSessionKeys(sessionId: String) {
+        prefs.edit()
+            .remove("srv_session:$sessionId")
+            .remove("session_model:$sessionId")
+            .remove("session_model_slug:$sessionId")
+            .apply()
+    }
+
     // ── HTTP Client with AuthInterceptor ──
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -1176,42 +1187,6 @@ class HermesApiService @Inject constructor(
                 } else {
                     response.close()
                     null
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                null
-            }
-        }
-    }
-
-    // ─── Speech-to-text (Whisper on bridge server) ───
-
-    /**
-     * Transcribe raw 16kHz mono PCM WAV bytes via the bridge's whisper
-     * endpoint. Returns the transcript, or null on any failure (caller
-     * falls back to the system SpeechRecognizer).
-     */
-    suspend fun transcribeAudio(wav: ByteArray, lang: String? = null): String? {
-        val baseUrl = config?.baseUrl ?: return null
-        return withContext(Dispatchers.IO) {
-            try {
-                val urlBuilder = "$baseUrl/api/stt".toHttpUrlOrNull()?.newBuilder()?.apply {
-                    if (!lang.isNullOrBlank()) addQueryParameter("lang", lang)
-                }
-                val request = Request.Builder()
-                    .url(urlBuilder?.build() ?: return@withContext null)
-                    .post(wav.toRequestBody("audio/wav".toMediaType()))
-                    .build()
-                // AuthInterceptor adds the Authorization header (replace
-                // semantics) to every request - no manual header needed.
-                client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        val json = JSONObject(response.body?.string() ?: "{}")
-                        json.optString("text").takeIf { it.isNotBlank() }
-                    } else {
-                        null
-                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e

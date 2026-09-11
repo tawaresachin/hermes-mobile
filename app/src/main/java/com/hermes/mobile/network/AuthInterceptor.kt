@@ -22,15 +22,22 @@ class AuthInterceptor @Inject constructor(
         private const val KEY_API_KEY = "api_key"
     }
 
+    /** Cached encrypted store. Building EncryptedSharedPreferences means a
+     * KeyStore master-key derivation + full prefs-file decrypt EVERY time —
+     * this runs on every HTTP request (including every Coil image load).
+     * SharedPreferences instances are internally thread-safe and live-view
+     * updates, so one cached instance stays correct after pairing/logout. */
+    private val securePrefs by lazy {
+        try {
+            com.hermes.mobile.security.SecurePrefs.get(context, SECURE_PREFS_NAME)
+        } catch (_: Exception) { null }
+    }
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
         // Primary: secure store (HermesApiService.updateConfig writes here).
         // Fallback: plain store (legacy installs).
-        var apiKey = ""
-        try {
-            apiKey = com.hermes.mobile.security.SecurePrefs.get(context, SECURE_PREFS_NAME)
-                .getString(KEY_API_KEY, "") ?: ""
-        } catch (_: Exception) { }
+        var apiKey = securePrefs?.getString(KEY_API_KEY, "").orEmpty()
         if (apiKey.isBlank()) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             apiKey = prefs.getString(KEY_API_KEY, "") ?: ""

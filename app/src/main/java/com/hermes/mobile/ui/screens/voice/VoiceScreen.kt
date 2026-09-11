@@ -38,7 +38,7 @@ import com.hermes.mobile.ui.components.AutoPlayAudio
 import com.hermes.mobile.ui.components.BigMicButton
 import com.hermes.mobile.ui.components.ModelPickerSheet
 import com.hermes.mobile.ui.theme.HermesPrimary
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
@@ -172,6 +172,7 @@ fun VoiceScreen(onExit: () -> Unit) {
                 bufSize
             )
             if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+                runCatching { recorder.release() }  // failed init still holds resources
                 phase = VoicePhase.Idle
                 statusMsg = "Microphone unavailable"
                 return@launch
@@ -181,14 +182,23 @@ fun VoiceScreen(onExit: () -> Unit) {
             val buffer = ByteArray(4096)
             val endTime = System.currentTimeMillis() + 30000
             releaseRequested = false
-            while (!releaseRequested && System.currentTimeMillis() < endTime) {
-                val read = recorder.read(buffer, 0, buffer.size)
-                if (read > 0) audioData.write(buffer, 0, read)
-                delay(10)
+            val heldMs: Long
+            // Blocking AudioRecord.read on Main stalls the UI for the whole
+            // 30s window (~100-250ms per frame fill); run capture on IO.
+            try {
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    while (!releaseRequested && System.currentTimeMillis() < endTime) {
+                        val read = recorder.read(buffer, 0, buffer.size)
+                        if (read > 0) audioData.write(buffer, 0, read)
+                    }
+                }
+            } finally {
+                // Back-press / scope cancellation must not leave the mic held:
+                // release runs on EVERY exit path, not just the happy one.
+                runCatching { recorder.stop() }
+                runCatching { recorder.release() }
             }
-            recorder.stop()
-            recorder.release()
-            val heldMs = System.currentTimeMillis() - lastPressAt
+            heldMs = System.currentTimeMillis() - lastPressAt
             if (heldMs < 300 || audioData.size() < 3200) {
                 phase = VoicePhase.Idle
                 statusMsg = "Hold the mic while speaking"

@@ -40,6 +40,14 @@ class HermesRepository @Inject constructor(
         // Always delete locally
         messageDao.deleteSessionMessages(sessionId)
         sessionDao.deleteSession(sessionId)
+        purgeSessionKeys(sessionId)
+    }
+
+    /** Remove prefs state owned by a deleted session (continuity map,
+     * model pin, draft) so deletes leave zero orphans behind. */
+    private fun purgeSessionKeys(sessionId: String) {
+        apiService.forgetSessionKeys(sessionId)
+        com.hermes.mobile.data.local.DraftStore.clear(sessionId)
     }
 
     // ─── Messages ───
@@ -659,6 +667,7 @@ class HermesRepository @Inject constructor(
     suspend fun deleteSessionLocal(sessionId: String) {
         messageDao.deleteSessionMessages(sessionId)
         sessionDao.deleteSession(sessionId)
+        purgeSessionKeys(sessionId)
     }
 
     /** Rename a session (local-only metadata change). */
@@ -844,11 +853,6 @@ class HermesRepository @Inject constructor(
 
     suspend fun textToSpeech(text: String, voice: String = "en-IN-NeerjaNeural"): ByteArray? {
         return apiService.textToSpeech(text, voice)
-    }
-
-    /** Whisper STT via the gateway audio route (null → caller falls back to system). */
-    suspend fun transcribeAudio(wav: ByteArray, lang: String? = null): String? {
-        return apiService.transcribeAudio(wav, lang)
     }
 
     // ─── Usage Stats ───

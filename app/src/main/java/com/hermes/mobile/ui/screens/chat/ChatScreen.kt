@@ -839,6 +839,16 @@ class ChatViewModel @Inject constructor(
         subActive = false
     }
 
+    /** Last safety net for the push SSE + poll loop: the composable's
+     * onDispose handles the normal path, but any VM cleared without
+     * composition-dispose (config edge cases) would otherwise leak an
+     * open socket that the 5s resubscription loop keeps resurrecting. */
+    override fun onCleared() {
+        streamingJob?.cancel()
+        stopResponsePolling()
+        super.onCleared()
+    }
+
     // ── Clear session ──
     fun clearSession() {
         val sid = _sessionId.value ?: return
@@ -3081,7 +3091,6 @@ fun FullWidthTableOverlay(
     modifier: Modifier = Modifier
 ) {
     val tableRows = parseMarkdownTable(displayContent)
-    android.util.Log.d("TableParse", "FullWidthTableOverlay: message.role=${message.role}, isStreaming=$isStreaming, tableRows=${tableRows?.size ?: 0}")
     if (tableRows == null || tableRows.size < 2 || isStreaming) return
     
     Box(
@@ -3920,7 +3929,6 @@ private fun parseMarkdownTable(text: String): List<List<String>>? {
     }
 
     if (tableStart < 0) {
-        android.util.Log.d("TableParse", "No pipe chars found in ${lines.size} lines")
         return null
     }
 
@@ -3936,30 +3944,24 @@ private fun parseMarkdownTable(text: String): List<List<String>>? {
 
     // Parse table rows - extract only the pipe-delimited parts
     val tableLines = lines.subList(tableStart, tableEnd)
-    android.util.Log.d("TableParse", "Table lines: ${tableLines.joinToString(", ")}")
     val parsedRows = tableLines.mapNotNull { line ->
         val trimmed = line.trim()
         // Skip separator lines like |---|---| or |---|----------|----------------|
         val parts = trimmed.split("|").map { it.trim() }.filter { it.isNotEmpty() }
         if (parts.size >= 2 && parts.all { cell -> cell.matches("[-:| ]+".toRegex()) }) {
-            android.util.Log.d("TableParse", "Skipping separator: $trimmed")
             return@mapNotNull null
         }
         // Extract the pipe-delimited portion (after any markdown like **bold**)
         val pipeStart = trimmed.indexOf('|')
         if (pipeStart < 0) {
-            android.util.Log.d("TableParse", "No pipe start in: $trimmed")
             return@mapNotNull null
         }
         val pipeContent = trimmed.substring(pipeStart)
         val cells = pipeContent.removePrefix("|").removeSuffix("|")
             .split("|").map { cell -> cell.trim() }
             .filter { it.isNotEmpty() }
-        android.util.Log.d("TableParse", "Parsed cells: $cells from: $trimmed")
         if (cells.size >= 2) cells else null
     }.filter { it.isNotEmpty() }
-
-    android.util.Log.d("TableParse", "Found ${parsedRows.size} rows, need >= 2")
     // Need at least 2 rows (header + at least one data row)
     return if (parsedRows.size >= 2) parsedRows else null
 }
