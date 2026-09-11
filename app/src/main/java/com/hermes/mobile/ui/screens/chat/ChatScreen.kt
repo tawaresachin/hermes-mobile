@@ -70,6 +70,7 @@ import coil.compose.AsyncImage
 import com.hermes.mobile.data.local.DraftStore
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.ui.markdown.MarkdownTableParse
 import com.hermes.mobile.ui.components.AttachSheet
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.components.MessageActionSheet
@@ -2893,14 +2894,18 @@ fun MessageBubble(
                     }
                     // ── Text content ──
                     if (displayContent.isNotBlank()) {
-                        // Check if content contains a table
-                        val tableRows = parseMarkdownTable(displayContent)
-                        if (tableRows != null && tableRows.size >= 2) {
-                            // Tables rendered outside bubble at full width (handled below)
-                        } else {
+                        // A markdown table gets lifted into the full-width
+                        // overlay (wide grids don't fit bubble width) — but
+                        // the surrounding prose must STAY in the bubble
+                        // (the old code hid all text when a table existed,
+                        // so "Here's the comparison:" and the closing note
+                        // silently vanished).
+                        val table = parseMarkdownTable(displayContent)
+                        val bubbleText = table?.prose ?: displayContent
+                        if (bubbleText.isNotBlank()) {
                             if (isStreaming) {
                                 StreamingText(
-                                    text = displayContent,
+                                    text = bubbleText,
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         fontSize = fontSizeSp.sp,
                                         lineHeight = (fontSizeSp + 6).sp),
@@ -2909,7 +2914,7 @@ fun MessageBubble(
                                 )
                             } else {
                                 MarkdownText(
-                                    text = displayContent,
+                                    text = bubbleText,
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         fontSize = fontSizeSp.sp,
                                         lineHeight = (fontSizeSp + 6).sp),
@@ -3090,15 +3095,15 @@ fun FullWidthTableOverlay(
     isDark: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val tableRows = parseMarkdownTable(displayContent)
-    if (tableRows == null || tableRows.size < 2 || isStreaming) return
-    
+    val table = parseMarkdownTable(displayContent)
+    if (table == null || isStreaming) return
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp)
     ) {
-        MarkdownTable(tableRows, isDark)
+        MarkdownTable(table.rows, isDark)
     }
 }
 
@@ -3913,72 +3918,19 @@ private fun parseMarkdownBody(
 /** Render a markdown table as formatted text. */
 
 
-/** Parse markdown and return table rows if present, null otherwise. */
-private fun parseMarkdownTable(text: String): List<List<String>>? {
-    val lines = text.split("\n")
-    var tableStart = -1
-
-    // Find first line that contains pipe characters
-    for ((idx, line) in lines.withIndex()) {
-        val trimmed = line.trim()
-        // Match lines containing pipe chars
-        if (trimmed.contains("|")) {
-            tableStart = idx
-            break
-        }
-    }
-
-    if (tableStart < 0) {
-        return null
-    }
-
-    // Find table end - stop at first empty line
-    var tableEnd = lines.size
-    for (idx in tableStart + 1 until lines.size) {
-        val trimmed = lines[idx].trim()
-        if (trimmed.isEmpty()) {
-            tableEnd = idx
-            break
-        }
-    }
-
-    // Parse table rows - extract only the pipe-delimited parts
-    val tableLines = lines.subList(tableStart, tableEnd)
-    val parsedRows = tableLines.mapNotNull { line ->
-        val trimmed = line.trim()
-        // Skip separator lines like |---|---| or |---|----------|----------------|
-        val parts = trimmed.split("|").map { it.trim() }.filter { it.isNotEmpty() }
-        if (parts.size >= 2 && parts.all { cell -> cell.matches("[-:| ]+".toRegex()) }) {
-            return@mapNotNull null
-        }
-        // Extract the pipe-delimited portion (after any markdown like **bold**)
-        val pipeStart = trimmed.indexOf('|')
-        if (pipeStart < 0) {
-            return@mapNotNull null
-        }
-        val pipeContent = trimmed.substring(pipeStart)
-        val cells = pipeContent.removePrefix("|").removeSuffix("|")
-            .split("|").map { cell -> cell.trim() }
-            .filter { it.isNotEmpty() }
-        if (cells.size >= 2) cells else null
-    }.filter { it.isNotEmpty() }
-    // Need at least 2 rows (header + at least one data row)
-    return if (parsedRows.size >= 2) parsedRows else null
-}
+/**
+ * Detect ONE GitHub-flavored markdown table in [text]. Implementation lives
+ * in ui/markdown/MarkdownTableParser.kt with JVM tests; kept as a local
+ * alias so the call sites (bubble + overlay) stay terse.
+ */
+private fun parseMarkdownTable(text: String): MarkdownTableParse? =
+    com.hermes.mobile.ui.markdown.parseMarkdownTable(text)
 
 /** Telegram-style markdown table rendering as a proper Compose UI. */
 @Composable
 fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
     val columnCount = tableRows.maxOfOrNull { it.size } ?: 0
     if (columnCount == 0 || tableRows.size < 2) return
-
-    // Calculate column widths
-    val colWidths = IntArray(columnCount) { 0 }
-    tableRows.forEach { row ->
-        row.forEachIndexed { idx, cell ->
-            colWidths[idx] = maxOf(colWidths[idx], cell.length)
-        }
-    }
 
     Card(
         modifier = Modifier
@@ -3994,8 +3946,11 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        // Header is row 0 (the separator was stripped at
+                        // parse time — the old code painted row 1, i.e. the
+                        // first DATA row, as a second header).
                         .then(
-                            if (rowIdx == 1) Modifier
+                            if (rowIdx == 0) Modifier
                                 .background(
                                     if (darkTheme) Color(0xFF1E2D3D) else Color(0xFFDCE4ED),
                                     shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
@@ -4013,8 +3968,8 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
                             Text(
                                 text = cell,
                                 style = MaterialTheme.typography.bodySmall.copy(
-                                    fontWeight = if (rowIdx == 0 || rowIdx == 1) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = if (rowIdx <= 1)
+                                    fontWeight = if (rowIdx == 0) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (rowIdx == 0)
                                         (if (darkTheme) Color.White else Color(0xFF1A1A1A))
                                     else
                                         (if (darkTheme) Color(0xFFB0BEC5) else Color(0xFF425262))
@@ -4032,8 +3987,9 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
                         }
                     }
                 }
-                // Horizontal divider (except after header or last row)
-                if (rowIdx > 0 && rowIdx < tableRows.size - 1) {
+                // Divider under the header + between data rows, none after
+                // the last row.
+                if (rowIdx < tableRows.size - 1) {
                     HorizontalDivider(
                         color = if (darkTheme) Color(0xFF3D4F60) else Color(0xFFC4CDD4),
                         thickness = 0.5.dp
