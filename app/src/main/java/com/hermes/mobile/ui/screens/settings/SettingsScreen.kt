@@ -688,11 +688,12 @@ fun SettingsScreen(
                 }
                 SettingsToggle(
                     icon = Icons.Filled.Compress,
-                    title = "Terse Replies",
+                    title = "Token Optimizer",
                     subtitle = if (uiState.caveman)
-                        "ON — asks the model for short answers (output style; " +
-                            "not context compression)"
-                    else "OFF — normal detailed replies. Context auto-compresses " +
+                        "ON — asks verbose models for terse answers (learns per " +
+                            "model from real usage; skips models already terse). " +
+                            "Not context compression."
+                    else "OFF — normal replies everywhere. Context auto-compresses " +
                         "server-side past ~50%, always on",
                     checked = uiState.caveman,
                     onCheckedChange = { viewModel.toggleCaveman(it) }

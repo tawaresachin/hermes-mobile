@@ -116,12 +116,63 @@ class HermesApiService @Inject constructor(
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
+    // ── Token Optimizer (smart terse application) ──────────────────────
+    // The terse directive saves ~30% OUTPUT on verbose models but costs
+    // ~80 INPUT tokens every turn and does nothing (or hurts) on models
+    // that already answer terse (measured: agnes-2.5-flash 402 vs 320).
+    // Decide per model from REAL usage frames — no hardcoded model list:
+    //   - every 8th turn runs WITHOUT the directive (probe) until 3 probes
+    //   - probe average >= 500 completion tokens  -> model is verbose: apply
+    //   - probe average <  500                     -> already terse: skip
+    //   - < 3 probes                               -> apply (give benefit
+    //     of the doubt until measured)
+    // Verdict persists per model; switching sessions/models re-evaluates.
+    private fun optimizerState(modelId: String): org.json.JSONObject {
+        val raw = prefs.getString("terse_opt:$modelId", null)
+        return try { if (raw != null) org.json.JSONObject(raw) else org.json.JSONObject() }
+            catch (_: Exception) { org.json.JSONObject() }
+    }
+
+    /** Decide + rotate: was the directive applied on THIS turn for modelId? */
+    private fun terseShouldApply(modelId: String): Boolean {
+        if (!isCaveman()) return false
+        if (modelId.isBlank()) return true
+        val st = optimizerState(modelId)
+        val verdict = st.optString("verdict", "")
+        if (verdict == "skip") return false
+        val turn = st.optInt("turn", 0) + 1
+        st.put("turn", turn).put("probes", st.optInt("probes", 0))
+        // Probe turn: every 8th, until we have 3 measurements.
+        val probing = verdict == "" && st.optInt("probes", 0) < 3 && turn % 8 == 0
+        st.put("probing", if (probing) 1 else 0)
+        prefs.edit().putString("terse_opt:$modelId", st.toString()).apply()
+        return !probing
+    }
+
+    /** Feed the real completion_tokens for this turn back into the model verdict. */
+    private fun optimizerObserve(modelId: String, completionTokens: Long, directiveApplied: Boolean) {
+        if (modelId.isBlank() || completionTokens <= 0L) return
+        val st = optimizerState(modelId)
+        if (directiveApplied) {
+            val a = st.optDouble("onAvg", completionTokens.toDouble())
+            st.put("onAvg", a * 0.7 + completionTokens * 0.3)   // EMA
+        } else if (st.optInt("probing", 0) == 1) {
+            val avg = st.optDouble("probeAvg", 0.0)
+            val newAvg = if (st.optInt("probes", 0) == 0) completionTokens.toDouble()
+                else avg * 0.5 + completionTokens * 0.5
+            val n = st.optInt("probes", 0) + 1
+            st.put("probeAvg", newAvg).put("probes", n).put("probing", 0)
+            if (n >= 3) st.put("verdict", if (newAvg >= 500.0) "apply" else "skip")
+        }
+        prefs.edit().putString("terse_opt:$modelId", st.toString()).apply()
+    }
+
     // Helper: build OpenAI-format messages array from session history + new query
-    private fun buildOpenAIMessages(sessionId: String, query: String): List<Map<String, String>> {
+    private fun buildOpenAIMessages(sessionId: String, query: String, applyTerse: Boolean): List<Map<String, String>> {
         val messages = mutableListOf<Map<String, String>>()
         // Session history is managed server-side (X-Hermes-Session-Id);
         // only the new user turn goes on the wire.
-        if (isCaveman()) {
+        if (applyTerse) {
             // Measured vs plain: ~30% fewer output tokens on explanatory
             // answers with this wording (weak "answer terse" phrasing got
             // only ~15% — the model's persona prompt overrode it).
@@ -354,10 +405,11 @@ class HermesApiService @Inject constructor(
         }
         val finalQuery = if (mediaNote.isEmpty()) wireQuery
             else if (query.isBlank()) mediaNote else "$wireQuery\n\n$mediaNote"
-        val messages = buildOpenAIMessages(sessionId, finalQuery)
-        // Dynamic default: server inventory decides. No hardcoded model id.
-        // Resolved here (suspend scope) - not inside the callback below.
         val safeModel = if (!model.isNullOrBlank()) model else fetchDefaultModelId()
+        // Token Optimizer: apply the terse directive only where it pays —
+        // learned per model from real usage (probe turns without it).
+        val applyTerse = terseShouldApply(safeModel)
+        val messages = buildOpenAIMessages(sessionId, finalQuery, applyTerse)
         val payload = JSONObject().apply {
             put("model", safeModel)
             put("messages", JSONArray(messages))
@@ -443,7 +495,12 @@ class HermesApiService @Inject constructor(
                         json.optJSONObject("usage")?.let { u ->
                             val pt = u.optLong("prompt_tokens", 0L)
                             val ct = u.optLong("completion_tokens", 0L)
-                            if (pt + ct > 0) onUsage(pt, ct)
+                            if (pt + ct > 0) {
+                                // Token Optimizer feedback: this turn's real
+                                // output size trains the per-model verdict.
+                                optimizerObserve(safeModel, ct, applyTerse)
+                                onUsage(pt, ct)
+                            }
                         }
                         // OpenAI SSE format: {"choices":[{"delta":{"content":".."},"message":{...}}]}
                         // Server sends this. Must handle before custom type check.
