@@ -75,8 +75,100 @@ class MarkdownTableParserTest {
         assertEquals(1, t!!.tables[0].size)
     }
 
-    @Test fun `table inside a code fence stays literal text`() {
-        assertNull(parseTables("Example:\n```\n| A | B |\n|---|---|\n| 1 | 2 |\n```\nDone."))
+    @Test fun `table inside a code fence of real code stays literal text`() {
+        // Mixed content = genuine code example -> no lifting
+        val md = "```\nif x:\n    y = a|b\n```\nDone."
+        assertNull(parseTables(md))
+    }
+
+    @Test fun `pure table wrapped in a fence is lifted (models fence tables)`() {
+        val md = "Summary:\n```\n| A | B |\n|---|---|\n| 1 | 2 |\n```\nEnd."
+        val t = parseTables(md)
+        assertNotNull(t)
+        assertEquals(1, t!!.tables.size)
+        assertEquals(listOf("A", "B"), t.tables[0][0])
+        assertEquals(listOf("1", "2"), t.tables[0][1])
+        assertEquals("Summary:\nEnd.", t.prose)   // fence markers consumed too
+    }
+
+    @Test fun `regression real stored reply - padded fenced table without edge pipes`() {
+        // Verbatim shape of a 2026-09-11 mobile session reply that rendered
+        // as raw pipes in v0.0.26: fence-wrapped, space-padded, no outer pipes.
+        val stored = "Provider Status Summary:\n\n```\nProvider           | Status      | Notes\n" +
+            "-------------------|-------------|----------------------\n" +
+            "copilot            | Works       | Full access\n" +
+            "zen                | Fails (401) | Auth error\n```\n\nBug found: something else."
+        val t = parseTables(stored)
+        assertNotNull(t)
+        val rows = t!!.tables.single()
+        assertEquals(listOf("Provider", "Status", "Notes"), rows[0])
+        assertEquals(listOf("copilot", "Works", "Full access"), rows[1])
+        assertEquals(listOf("zen", "Fails (401)", "Auth error"), rows[2])
+        assertEquals(3, rows.size)
+        assertEquals("Provider Status Summary:\n\nBug found: something else.", t.prose)
+    }
+
+    @Test fun `unicode box-drawing table (rich CLI) parses after normalization`() {
+        // Shape of Hermes CLI output the mobile app kept rendering raw in
+        // v0.0.26: │ separators, ─ rule, ┼ junctions, padded columns.
+        val box = "Status:\n\n" +
+            "Provider          │ Model        │ Status\n" +
+            "──────────────────┼──────────────┼─────────\n" +
+            "copilot           │ gpt-4.1      │ OK\n" +
+            "zen               │ glm-5.3      │ 401\n\n" +
+            "Done."
+        val t = parseTables(box)
+        assertNotNull(t)
+        val rows = t!!.tables.single()
+        assertEquals(listOf("Provider", "Model", "Status"), rows[0])
+        assertEquals(listOf("copilot", "gpt-4.1", "OK"), rows[1])
+        assertEquals(listOf("zen", "glm-5.3", "401"), rows[2])
+        assertEquals(3, rows.size)
+        assertEquals("Status:\n\nDone.", t.prose)
+    }
+
+    @Test fun `bordered box table drops rule and border lines`() {
+        val box = "┌──────────┬────────┐\n│ A        │ B      │\n├──────────┼────────┤\n│ 1        │ 2      │\n└──────────┴────────┘"
+        val t = parseTables(box)
+        assertNotNull(t)
+        val rows = t!!.tables.single()
+        assertEquals(2, rows.size)  // header + 1 data row, no border noise
+        assertEquals(listOf("A", "B"), rows[0])
+        assertEquals(listOf("1", "2"), rows[1])
+        assertEquals("", t.prose)
+    }
+
+    @Test fun `box table inside fence is lifted too`() {
+        val box = "```\nProvider │ Status\n─────────┼───────\ncopilot  │ OK\n```\nAfter."
+        val t = parseTables(box)
+        assertNotNull(t)
+        assertEquals(listOf("Provider", "Status"), t!!.tables[0][0])
+        assertEquals("After.", t.prose)
+    }
+
+    @Test fun `plus-junction ascii rules between rows do not become cells`() {
+        val t = parseTables("+-----+-----+\n| H1  | H2  |\n+-----+-----+\n| a   | b   |\n+-----+-----+\n| c   | d   |")
+        assertNotNull(t)
+        val rows = t!!.tables.single()
+        assertEquals(3, rows.size)  // header + 2 data rows, rules dropped
+        assertEquals(listOf("H1", "H2"), rows[0])
+        assertEquals(listOf("a", "b"), rows[1])
+        assertEquals(listOf("c", "d"), rows[2])
+        assertEquals("", t.prose)
+    }
+
+    @Test fun `prose line with a single dash cell survives`() {
+        val t = parseTables("| A | B |\n|---|---|\n| - | x |")
+        assertNotNull(t)
+        assertEquals(2, t!!.tables[0].size)   // header + the dash-cell row
+        assertEquals(listOf("-", "x"), t.tables[0][1])
+    }
+
+    @Test fun `horizontal rule in prose is not consumed`() {
+        val md = "Before\n\n---\n\nAfter:\n| A | B |\n|---|---|\n| 1 | 2 |"
+        val t = parseTables(md)
+        assertNotNull(t)
+        assertTrue(t!!.prose.contains("---"))
     }
 
     @Test fun `inline markdown styling is stripped from cells`() {

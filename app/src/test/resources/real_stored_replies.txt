@@ -1,0 +1,247 @@
+Provider Status Summary:
+
+```
+Provider           | Status      | Notes
+-------------------|-------------|----------------------
+copilot            | Works       | Full access
+zen                | Fails (401) | Auth error
+openrouter-free    | Works       | Free models only
+opencode-free      | Works       | 
+custom-localhost   | Rate-limited| Runs, but throttled
+```
+
+Bug found: Hermes CLI uses Unicode box-drawing chars (│, ─, ╭, ╰) for tables. Mobile app parser looks for `|` pipes - should detect them. Need to test if it renders.
+
+Fix needed in ChatScreen.kt parseMarkdownTable() - current regex may be too strict. Want me to patch and rebuild?
+<<<SPLIT>>>
+Found the bug. The Hermes CLI outputs tables using **Unicode box-drawing characters** (│, ─, ┼), but the mobile app parser only looks for markdown `|` pipes. Let me verify:
+<<<SPLIT>>>
+```markdown
+| Provider      | Model              | Status | Error/Note                        |
+|---------------|--------------------|--------|-----------------------------------|
+| copilot       | gpt-4.1            | OK     | Works                             |
+| copilot       | gpt-5.5            | OK     | Works                             |
+| copilot       | gpt-5.6-sol        | OK     | Works                             |
+| copilot       | exec-agent-a       | OK     | Works                             |
+| custom        | auto (localhost)   | OK     | Works (rate-limited now)          |
+| openrouter    | meta/muse-spark-1.2| OK     | Free tier                         |
+| openrouter    | poolside/laguna-s  | OK     | Free tier                         |
+| openrouter    | nemotron-3-super-12| OK     | Free tier                         |
+| opencode-free | deepseek-v4-flash  | OK     | Free                              |
+| zen           | claude-opus-5      | FAIL   | 401 No payment method             |
+| zen           | gemini-3.6-flash   | FAIL   | 401 No payment method             |
+| zen           | deepseek-v4-pro    | FAIL   | 401 No payment method             |
+| openrouter    | gpt-4.1            | FAIL   | 402 Insufficient credits          |
+| openrouter    | claude-sonnet-4.5  | FAIL   | 402 Insufficient credits          |
+| custom        | gemini-3.6-flash   | FAIL   | 429 Rate limited                  |
+| ollama-cloud  | any                | FAIL   | No API key                        |
+| deepseek      | any                | FAIL   | No API key                        |
+| gemini        | any                | FAIL   | No API key                        |
+| xai           | any                | FAIL   | No API key                        |
+| huggingface   | any                | FAIL   | No API key                        |
+```
+<<<SPLIT>>>
+Based on testing, here's the provider-wise status:
+
+```
+Provider          │ Model               │ Status   │ Error/Note
+──────────────────┼─────────────────────┼──────────┼────────────────────────────
+copilot           │ gpt-4.1             │ ✅ OK    │ Works
+copilot           │ gpt-5.5             │ ✅ OK    │ Works  
+copilot           │ gpt-5.6-sol         │ ✅ OK    │ Works
+copilot           │ exec-agent-a        │ ✅ OK    │ Works
+custom            │ auto (localhost)    │ ✅ OK    │ Works (rate-limited now)
+openrouter        │ meta/muse-spark-1.2 │ ✅ OK    │ Free tier
+openrouter        │ poolside/laguna-s-2│ ✅ OK    │ Free tier
+openrouter        │ nemotron-3-super-12│ ✅ OK    │ Free tier
+opencode-free     │ deepseek-v4-flash   │ ✅ OK    │ Free
+──────────────────┼─────────────────────┼──────────┼────────────────────────────
+zen               │ claude-opus-5       │ ❌ 401   │ No payment method
+zen               │ gemini-3.6-flash    │ ❌ 401   │ No payment method
+zen               │ deepseek-v4-pro     │ ❌ 401   │ No payment method
+openrouter        │ gpt-4.1             │ ❌ 402   │ Insufficient credits
+openrouter        │ claude-sonnet-4.5   │ ❌ 402   │ Insufficient credits
+custom            │ gemini-3.6-flash    │ ❌ 429   │ Rate limited
+──────────────────┼─────────────────────┼──────────┼────────────────────────────
+ollama-cloud      │ any                 │ ❌ 401   │ No API key
+deepseek          │ any                 │ ❌ 401   │ No API key
+gemini            │ any                 │ ❌ 401   │ No API key
+xai               │ any                 │ ❌ 401   │ No API key
+huggingface       │ any                 │ ❌ 401   │ No API key
+```
+
+**Summary:**
+- 8 models working across copilot/custom/openrouter/opencode-free
+- zen provider needs billing update
+- openrouter needs credit top-up
+- gemini/xai/deepseek/ollama need API keys configured
+<<<SPLIT>>>
+**Providers Summary (based on live API polling):**
+
+| Provider | Base URL | Status | Models |
+|---|---|---|---|
+| **FreeLLM** | `localhost:3001` | READY | 218 |
+| **Agnes** | `apihub.agnes-ai.com` | READY | 12 |
+| **HuggingFace Router** | `router.huggingface.co` | READY | 139 |
+| Cloudflare AI | `api.cloudflare.com` | BROKEN (405) | 0 |
+| Omnirouter | `localhost:20128` | BROKEN (auth) | 0 |
+| DeepSeek | `api.deepseek.com` | BROKEN (401) | 0 |
+| AiAnd | `api.aiand.com` | BROKEN (auth) | 0 |
+
+**Total: 369 working models**
+
+---
+
+**Top models from FreeLLM (localhost:3001):**
+
+| ID | Name | Context |
+|---|---|---|
+| gemini-3.6-flash | Gemini 3.6 Flash | 1M |
+| gemini-3.7-flash | Gemini 3.7 Flash | 1M |
+| gemini-3.8-flash | Gemini 3.8 Flash | 1M |
+| glm-5.3-flash | GLM 5.3 Flash | 1M |
+| deepseek-v4-flash | DeepSeek V4 Flash | 1M |
+| deepseek-v4-pro | DeepSeek V4 Pro | 1M |
+| kimi-k3 | Kimi K3 | 1M |
+| minimax-m3 | MiniMax M3 | 1M |
+| nemotron-3-ultra-550b | Nemotron-3 Ultra 550B | 1M |
+| gpt-oss-120b | GPT-OSS 120B | 128K |
+| agnes-2.5-flash | Agnes 2.5 Flash | 256K |
+| compound | Compound | 128K |
+| auto | Auto (router) | 1M |
+| fusion | Fusion (panel) | 1M |
+
+**Agnes (12 models):**
+agnes-2.0-flash, agnes-2.5-flash, agnes-2.5-pro, agnes-3.0-flash, agnes-image-*, agnes-video-*
+
+**HuggingFace (139 models):**
+deepseek-ai/DeepSeek-V4.1-Flash, Qwen/Qwen3.8-27B, zai-org/GLM-5.3, moonshotai/Kimi-K3, google/gemma-4-31B-it, openai/gpt-oss-120b, Cohere c4ai-command-r, etc.
+<<<SPLIT>>>
+Here's the complete table of configured providers and their working models:
+
+**Provider Summary Table**
+
+| Provider | Base URL | API Key | Status | Working Models |
+|---|---|---|---|---|
+| FreeLLM (localhost:3001) | `http://localhost:3001/v1` | freellmapi... | READY | 219 |
+| Agnes (apihub.agnes-ai.com) | `https://apihub.agnes-ai.com/v1` | sk-M84OUzb... | READY | 12 |
+| HuggingFace Router | `https://router.huggingface.co/v1` | hf_UIV...uYKr | READY | 139 |
+| Cloudflare AI | `https://api.cloudflare.com/...` | Invalid | BROKEN | 0 |
+| Omnirouter (localhost:20128) | `http://localhost:20128/v1` | Missing | BROKEN | 0 |
+| DeepSeek | `https://api.deepseek.com/v1` | Invalid | BROKEN | 0 |
+| AiAnd | `https://api.aiand.com/v1` | Invalid | BROKEN | 0 |
+
+**Working Models Breakdown**
+
+| Provider | Count | Key Models |
+|---|---|---|
+| FreeLLM | 219 | gemini-3.x-flash, deepseek-v4-flash/pro, glm-5.x, kimi-k2/k3, qwen3.x, minimax-m3, nemotron-3-ultra-550b, gpt-oss-120b, compound, agnes-2.5-flash, auto, fusion |
+| Agnes | 12 | agnes-2.5-flash, agnes-2.0-flash, agnes-2.5-pro, agnes-3.0-flash, agnes-image-*, agnes-video-* |
+| HuggingFace | 139 | deepseek-ai/DeepSeek-V4.1-Flash, Qwen/Qwen3.8-27B, zai-org/GLM-5.3, moonshotai/Kimi-K3, google/gemma-4-31B-it, openai/gpt-oss-120b, Cohere c4ai-command-r, etc. |
+
+**Total: 370 working models across 3 functional providers**
+
+**Default model:** `gemini-3.6-flash` (via FreeLLM)
+<<<SPLIT>>>
+Here's the summary of configured providers and their working models:
+
+**Provider | Status | Models Available**
+
+| Provider | Base URL | Status | Working Models |
+|---|---|---|---|
+| **FreeLLM (localhost:3001)** | `http://localhost:3001/v1` | ✓ Working | **219 ready** + 6 slots (Claude/ Gemini) needing key |
+| **Agnes** | `https://apihub.agnes-ai.com/v1` | ✓ Working | **12 models** |
+| **HuggingFace Router** | `https://router.huggingface.co/v1` | ✓ Working | **139 models** |
+| **Cloudflare AI** | `https://api.cloudflare.com/...` | ✗ API key invalid | 0 |
+| **Omnirouter (localhost:20128)** | `http://localhost:20128/v1` | ✗ Auth required | 0 |
+| **DeepSeek** | `https://api.deepseek.com/v1` | ✗ Invalid key | 0 |
+| **AiAnd** | `https://api.aiand.com/v1` | ✗ Invalid key | 0 |
+| **Alibaba Cloud** | `http://ws-ckud4o4mw80mn8l0...` | Unknown | Not queried |
+
+---
+
+**FreeLLM (localhost:3001) — 219 Ready Models (top highlights):**
+
+| ID | Name | Context |
+|---|---|---|
+| `gemini-3.6-flash` | Gemini 3.6 Flash | 1M |
+| `gemini-3.7-flash` | Gemini 3.7 Flash | 1M |
+| `gemini-3.8-flash` | Gemini 3.8 Flash | 1M |
+| `gemini-3.5-flash` | Gemini 3.5 Flash | 1M |
+| `glm-5.3-flash` | GLM 5.3 Flash | 1M |
+| `glm-5.2` | GLM 5.2 | 1M |
+| `glm-5` | GLM 5 | 200K |
+| `deepseek-v4-flash` | DeepSeek V4 Flash | 1M |
+| `deepseek-v4-flash-0731` | DeepSeek V4 Flash 0731 | 1M |
+| `deepseek-v4-pro` | DeepSeek V4 Pro | 1M |
+| `deepseek-v4-pro-0813` | DeepSeek V4 Pro 0813 | 1M |
+| `deepseek-r1` | DeepSeek R1 | 160K |
+| `deepseek-v3.2` | DeepSeek V3.2 | 160K |
+| `kimi-k3` | Kimi K3 | 1M |
+| `kimi-k2.7-code` | Kimi K2.7 Code | 262K |
+| `kimi-k2.6` | Kimi K2.6 | 262K |
+| `kimi-k2.5` | Kimi K2.5 | 262K |
+| `minimax-m3` | MiniMax M3 | 1M |
+| `minimax-m2` | MiniMax M2 | 200K |
+| `qwen3.8-flash` | Qwen3.8 Flash | 1M |
+| `qwen3-coder-480b` | Qwen3-Coder 480B | 262K |
+| `qwen3.5-397b-a17b` | Qwen3.5 397B A17B | 262K |
+| `qwen3.5-122b-a10b` | Qwen3.5 122B A10B | 262K |
+| `qwen3.5-35b-a3b` | Qwen3.5 35B A3B | 262K |
+| `qwen3.5-27b` | Qwen3.5 27B | 262K |
+| `qwen3-235b-a22b-thinking-2507` | Qwen3 235B A22B Thinking | 262K |
+| `compound` | Compound | 128K |
+| `mimo-v2.5` | MiMo V2.5 | 1M |
+| `nemotron-3-ultra-550b` | Nemotron-3 Ultra 550B | 1M |
+| `gpt-oss-120b` | GPT-OSS 120B | 131K |
+| `auto` | Auto (router) | 1M |
+| `fusion` | Fusion (panel) | 1M |
+
+---
+
+**Agnes (12 models):**
+`agnes-2.5-flash`, `agnes-2.0-flash`, `agnes-2.5-pro`, `agnes-2.5-pro-alpha`, `agnes-2.5-pro-beta`, `agnes-3.0-flash`, `agnes-image-2.5-flash`, `agnes-image-2.0-flash`, `agnes-image-2.1-flash`, `agnes-video-2.5-flash`, `agnes-video-2.5`, `agnes-video-v2.0`
+
+---
+
+**HuggingFace Router (139 models — top):**
+`deepseek-ai/DeepSeek-V4.1-Flash`, `Qwen/Qwen3.8-27B`, `deepseek-ai/DeepSeek-V4-Flash-Vision-Exp`, `zai-org/GLM-5.3-Flash`, `moonshotai/Kimi-K3`, `google/gemma-4-31B-it`, `openai/gpt-oss-120b`, `c4ai/command-r`, `aya-expanse-32b`, and 129 more...
+
+---
+
+**Currently active default:** `gemini-3.6-flash` via FreeLLM (localhost:3001).
+
+**Broken providers needing attention:**
+- Cloudflare API key invalid
+- Omnirouter (localhost:20128) auth failing
+- DeepSeek API key invalid
+- AiAnd API key invalid
+<<<SPLIT>>>
+**PDF Summary: RAG-LLM Evaluation & Test Automation**
+
+**Title:** Chapter 2 from "AI-Driven Test Automation with Large Language Models: Frameworks, Agents, and Future Trends"
+
+**Author:** Lamhot Siagian | Version 1.0 | August 20, 2025
+
+**Key Topics:**
+
+1. **RAG Evaluation Challenges** - Assessing both retrieval quality and generative quality jointly is complex. Traditional metrics (BLEU/ROUGE) fail to capture factual grounding.
+
+2. **Evaluation Frameworks:**
+   - RAGAS: Reference-free evaluation for faithfulness
+   - ARES: Lightweight evaluators with minimal human annotation
+   - Synthetic exam methods: Auto-generated domain-specific test items
+
+3. **Practical Integration:** Java + Playwright + OpenAI API example showing:
+   - DOM text extraction as "retrieval" step
+   - LLM-as-oracle pattern for UI acceptance criteria
+   - Structured JSON verdicts (pass/fail + evidence)
+
+4. **Best Practices:**
+   - Combine LLM judges with deterministic assertions
+   - Use structured JSON output for reliable parsing
+   - Avoid over-relying on sparse lexical metrics
+
+5. **Case Study:** DevOps RAG assistant showed ~80% accuracy on single queries but ~90% failure rate on multi-document reasoning
+
+**Target Audience:** Software testers, SDETs, QA leaders, and developers leveraging AI for test automation.
