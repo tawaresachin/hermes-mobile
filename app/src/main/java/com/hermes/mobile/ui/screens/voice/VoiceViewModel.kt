@@ -151,10 +151,13 @@ class VoiceViewModel @Inject constructor(
         onSuccess: (String) -> Unit,
         onError: (String) -> Unit = {},
     ) {
-        val model = _currentModel.value
+        // NOTE: never forward the chat model here — STT model is a server
+        // setting (whisper). Sending "agnes-2.5-flash" as the whisper model
+        // made the adapter download ggml-agnes-2.5-flash.bin -> fail ->
+        // "Transcription failed" on every press.
         viewModelScope.launch {
             try {
-                val text = audioRepo.transcribeFromBase64(base64Audio, model = model)
+                val text = audioRepo.transcribeFromBase64(base64Audio)
                 onSuccess(text)
             } catch (ce: CancellationException) {
                 throw ce
