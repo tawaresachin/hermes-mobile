@@ -2679,9 +2679,24 @@ fun MessageBubble(
     }
 
     // Build absolute URL for images served by the gateway plugin
-    val absoluteImageUrl = remember(message.attachmentUrl, baseUrl) {
-        val rel = message.attachmentUrl ?: return@remember null
-        if (rel.startsWith("http")) rel
+    // Response media (Telegram parity): an assistant reply can CARRY media —
+    // an inlined `![img](data:...)` from api_server or a trailing
+    // `MEDIA:/abs/file.ext` tag (any file; fetched via the plugin's
+    // /api/mobile/file route). Resolved at render time only (stored text is
+    // never rewritten); a persisted attachment row always wins.
+    val responseMedia = remember(displayContent) {
+        if (message.role == MessageRole.USER) null
+        else com.hermes.mobile.ui.chat.ResponseMedia.extract(displayContent)
+    }
+    val effAttachmentUrl = message.attachmentUrl ?: responseMedia?.url
+    val effAttachmentType = if (message.attachmentUrl != null) message.attachmentType
+        else responseMedia?.type
+    val effAttachmentName = if (message.attachmentUrl != null) message.attachmentName
+        else responseMedia?.name
+    val bubbleContent = responseMedia?.cleanText ?: displayContent
+    val absoluteImageUrl = remember(effAttachmentUrl, baseUrl) {
+        val rel = effAttachmentUrl ?: return@remember null
+        if (rel.startsWith("http") || rel.startsWith("data:")) rel
         else baseUrl.trimEnd('/') + rel
     }
 
@@ -2830,19 +2845,19 @@ fun MessageBubble(
                             )
                         }
                     }
-                    // ── Image attachment ──
-                    if (absoluteImageUrl != null && message.attachmentType?.startsWith("image") == true) {
-                        val isGif = message.attachmentType == "image/gif"
+                    // ── Image attachment (persisted OR carried in the reply text) ──
+                    if (absoluteImageUrl != null && effAttachmentType?.startsWith("image") == true) {
+                        val isGif = effAttachmentType == "image/gif"
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp)
+                                .padding(bottom = if (bubbleContent.isNotBlank()) 8.dp else 0.dp)
                         ) {
                             if (isGif) {
                                 // GIF: use Coil with animation enabled
                                 AsyncImage(
                                     model = absoluteImageUrl,
-                                    contentDescription = message.attachmentName ?: "GIF",
+                                    contentDescription = effAttachmentName ?: "GIF",
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(300.dp)
@@ -2856,7 +2871,7 @@ fun MessageBubble(
                                 // Static image
                                 AsyncImage(
                                     model = absoluteImageUrl,
-                                    contentDescription = message.attachmentName ?: "Image",
+                                    contentDescription = effAttachmentName ?: "Image",
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 100.dp, max = 400.dp)
@@ -2869,20 +2884,32 @@ fun MessageBubble(
                             }
                         }
                     }
-                    // ── File attachment (non-image) ──
-                    if (message.attachmentUrl != null && (message.attachmentType == null || !message.attachmentType!!.startsWith("image"))) {
+                    // ── File attachment (non-image; persisted OR from a MEDIA tag) ──
+                    if (effAttachmentUrl != null && (effAttachmentType == null || !effAttachmentType!!.startsWith("image"))) {
                         // Video support
-                        if (message.attachmentType?.startsWith("video") == true) {
+                        if (effAttachmentType?.startsWith("video") == true) {
                             VideoAttachmentRow(
-                                name = message.attachmentName ?: "Video",
-                                url = message.attachmentUrl,
-                                onClick = { onImageTap?.invoke(message.attachmentUrl) }
+                                name = effAttachmentName ?: "Video",
+                                url = effAttachmentUrl,
+                                onClick = { onImageTap?.invoke(effAttachmentUrl) }
                             )
                         } else {
                             FileAttachmentRow(
-                                name = message.attachmentName ?: message.attachmentUrl ?: "File",
-                                modifier = Modifier.padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp),
-                                onClick = { onAttachmentTap?.invoke(message) }
+                                name = effAttachmentName ?: "File",
+                                modifier = Modifier.padding(bottom = if (bubbleContent.isNotBlank()) 8.dp else 0.dp),
+                                onClick = {
+                                    // Persisted row: full Message flow (save/open).
+                                    // Response-carried MEDIA tag: build a transient
+                                    // Message so the same download+viewer path runs.
+                                    if (message.attachmentUrl != null) onAttachmentTap?.invoke(message)
+                                    else onAttachmentTap?.invoke(
+                                        message.copy(
+                                            attachmentUrl = effAttachmentUrl,
+                                            attachmentType = effAttachmentType,
+                                            attachmentName = effAttachmentName,
+                                        )
+                                    )
+                                }
                             )
                         }
                     }
@@ -2893,15 +2920,15 @@ fun MessageBubble(
                         Spacer(modifier = Modifier.height(6.dp))
                     }
                     // ── Text content ──
-                    if (displayContent.isNotBlank()) {
+                    if (bubbleContent.isNotBlank()) {
                         // A markdown table gets lifted into the full-width
                         // overlay (wide grids don't fit bubble width) — but
                         // the surrounding prose must STAY in the bubble
                         // (the old code hid all text when a table existed,
                         // so "Here's the comparison:" and the closing note
                         // silently vanished).
-                        val table = parseMarkdownTable(displayContent)
-                        val bubbleText = table?.prose ?: displayContent
+                        val table = parseTablesOf(bubbleContent)
+                        val bubbleText = table?.prose ?: bubbleContent
                         if (bubbleText.isNotBlank()) {
                             if (isStreaming) {
                                 StreamingText(
@@ -3086,7 +3113,7 @@ fun MessageBubble(
     }
 }
 
-// ── Full-width table overlay for assistant AND user messages ──
+// ── Full-width table overlay for assistant messages ──
 @Composable
 fun FullWidthTableOverlay(
     message: Message,
@@ -3095,15 +3122,12 @@ fun FullWidthTableOverlay(
     isDark: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val table = parseMarkdownTable(displayContent)
-    if (table == null || isStreaming) return
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp)
-    ) {
-        MarkdownTable(table.rows, isDark)
+    if (isStreaming || message.role == MessageRole.USER) return
+    val table = parseTablesOf(displayContent) ?: return
+    // EVERY table in the message renders (the first parser silently left a
+    // second table as raw pipe text); prose is handled by the bubble itself.
+    Column(modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+        table.tables.forEach { rows -> MarkdownTable(rows, isDark) }
     }
 }
 
@@ -3919,12 +3943,12 @@ private fun parseMarkdownBody(
 
 
 /**
- * Detect ONE GitHub-flavored markdown table in [text]. Implementation lives
- * in ui/markdown/MarkdownTableParser.kt with JVM tests; kept as a local
- * alias so the call sites (bubble + overlay) stay terse.
+ * Table detection lives in ui/markdown/MarkdownTableParser.kt (JVM-tested).
+ * All tables in a message render as full-width overlays below the bubble;
+ * the bubble keeps the prose between/around them.
  */
-private fun parseMarkdownTable(text: String): MarkdownTableParse? =
-    com.hermes.mobile.ui.markdown.parseMarkdownTable(text)
+private fun parseTablesOf(text: String): com.hermes.mobile.ui.markdown.MarkdownTableParse? =
+    com.hermes.mobile.ui.markdown.parseMarkdownTables(text)
 
 /** Telegram-style markdown table rendering as a proper Compose UI. */
 @Composable
