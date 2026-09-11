@@ -87,7 +87,7 @@ class HermesApiService @Inject constructor(
         prefs.edit().putString("srv_session:$localSessionId", serverId).apply()
     }
 
-    // ── Caveman mode (user's "Context Compression" setting) ──
+    // ── Terse-replies mode (Settings "Terse Replies", pref key kept: caveman_mode) ──
     // ON = terse replies to save output tokens. The gateway extracts a
     // leading system-role message as the turn's ephemeral system prompt,
     // so the flag rides the payload — no server change needed.

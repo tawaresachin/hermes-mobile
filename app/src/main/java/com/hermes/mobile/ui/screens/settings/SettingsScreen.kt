@@ -65,7 +65,7 @@ data class SettingsUiState(
     val sessionsCount: Int = 0,
     val messagesCount: Int = 0,
     val tokensUsed: Long = 0,
-    val caveman: Boolean = true,
+    val caveman: Boolean = false,
     // True when the numbers came from the server ledger, false = local fallback.
     val usageIsServer: Boolean = true,
     // Auth fields
@@ -688,10 +688,12 @@ fun SettingsScreen(
                 }
                 SettingsToggle(
                     icon = Icons.Filled.Compress,
-                    title = "Context Compression",
+                    title = "Terse Replies",
                     subtitle = if (uiState.caveman)
-                        "ON — terse replies, saves output tokens"
-                    else "OFF — full detailed replies",
+                        "ON — asks the model for short answers (output style; " +
+                            "not context compression)"
+                    else "OFF — normal detailed replies. Context auto-compresses " +
+                        "server-side past ~50%, always on",
                     checked = uiState.caveman,
                     onCheckedChange = { viewModel.toggleCaveman(it) }
                 )
