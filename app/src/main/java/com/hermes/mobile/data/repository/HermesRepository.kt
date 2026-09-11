@@ -109,11 +109,19 @@ class HermesRepository @Inject constructor(
     private fun stripUploadUrls(sessionId: String, text: String): String {
         if (text.isBlank()) return text
         val ext = "(?:\\.png|\\.jpe?g|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.webm|\\.mov|\\.mkv" +
-            "|\\.mp3|\\.wav|\\.ogg|\\.m4a|\\.opus|\\.flac|\\.pdf|\\.zip|\\.docx?|\\.xlsx?" +
-            "|\\.pptx?|\\.txt|\\.md|\\.csv|\\.json|\\.log|\\.bin)"
+            "|\\.mp3|\\.wav|\\.ogg|\\.m4a|\\.opus|\\.flac|\\.pdf|\\.zip|\\.docx?" +
+            "|\\.xlsx?|\\.pptx?|\\.txt|\\.md|\\.csv|\\.json|\\.log|\\.bin)"
         val sid = java.util.regex.Pattern.quote(sessionId)
         val re = Regex("(?:/uploads/" + sid + "/|/api/audio/download/" + sid + "/)[^\\s)\\]]*?" + ext)
-        return text.replace(re, "").replace(Regex("\\s+"), " ").trim()
+        // CRITICAL: whitespace runs inside a LINE may be collapsed, but
+        // newlines are markdown structure. The old blanket \s+ -> " "
+        // flattened every message into one line, which destroyed tables,
+        // lists and paragraphs at persist time (parser fixes never even
+        // got a chance to run on the stored text).
+        return text.replace(re, "")
+            .replace(Regex("[ \\t]{2,}"), " ")
+            .replace(Regex("\n{3,}"), "\n\n")
+            .trim()
     }
 
     /** Finalize a streamed turn: strip upload URLs before persisting. */

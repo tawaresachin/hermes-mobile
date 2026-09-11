@@ -70,7 +70,7 @@ import coil.compose.AsyncImage
 import com.hermes.mobile.data.local.DraftStore
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
-import com.hermes.mobile.ui.markdown.MarkdownTableParse
+import com.hermes.mobile.ui.markdown.TableParse
 import com.hermes.mobile.ui.components.AttachSheet
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.components.MessageActionSheet
@@ -3947,8 +3947,8 @@ private fun parseMarkdownBody(
  * All tables in a message render as full-width overlays below the bubble;
  * the bubble keeps the prose between/around them.
  */
-private fun parseTablesOf(text: String): com.hermes.mobile.ui.markdown.MarkdownTableParse? =
-    com.hermes.mobile.ui.markdown.parseMarkdownTables(text)
+private fun parseTablesOf(text: String): TableParse? =
+    com.hermes.mobile.ui.markdown.parseTables(text)
 
 /** Telegram-style markdown table rendering as a proper Compose UI. */
 @Composable
