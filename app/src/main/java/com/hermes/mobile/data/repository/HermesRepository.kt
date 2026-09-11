@@ -151,6 +151,7 @@ class HermesRepository @Inject constructor(
         attempt: Int = 1,
         attachmentUrl: String = "",
         attachType: String = "",
+        attachmentPath: String = "",
         replyTo: String? = null,
         // Pre-inserted row (queued messages) — reuse it for the tick chain
         // instead of creating a duplicate user message.
@@ -283,6 +284,7 @@ class HermesRepository @Inject constructor(
                 },
                 attachmentUrl = attachmentUrl,
                 attachType = attachType,
+                attachmentPath = attachmentPath,
                 replyTo = replyTo,
                 onToolProgress = { id, emoji, tool, label, status ->
                     val key = id.ifBlank { "$tool|$label|$status" }
@@ -331,6 +333,7 @@ class HermesRepository @Inject constructor(
                     attempt = attempt + 1,
                     attachmentUrl = attachmentUrl,
                     attachType = attachType,
+                    attachmentPath = attachmentPath,
                     replyTo = replyTo,
                     onUsage = onUsage,
                     model = model,
@@ -360,6 +363,7 @@ class HermesRepository @Inject constructor(
                     attempt = attempt + 1,
                     attachmentUrl = attachmentUrl,
                     attachType = attachType,
+                    attachmentPath = attachmentPath,
                     replyTo = replyTo,
                     onUsage = onUsage,
                     model = model,
@@ -683,7 +687,7 @@ class HermesRepository @Inject constructor(
 
     suspend fun uploadFile(
         file: java.io.File, fileName: String, mimeType: String, sessionId: String = ""
-    ): String? {
+    ): Pair<String, String>? {
         return apiService.uploadFile(file, fileName, mimeType, sessionId)
     }
 

@@ -486,7 +486,7 @@ class ChatViewModel @Inject constructor(
     val showModelPickerState: StateFlow<Boolean> = showModelPickerGlobal.asStateFlow()
     fun consumeModelPickerRequest() { showModelPickerGlobal.value = false }
 
-    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, replyTo: Message? = null, bypassSlash: Boolean = false) {
+    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, replyTo: Message? = null, bypassSlash: Boolean = false, attachmentPath: String = "") {
         val sid = _sessionId.value ?: return
         // ── Slash commands ──
         // The gateway's slash handlers are messaging-platform-only (adapter
@@ -513,7 +513,7 @@ class ChatViewModel @Inject constructor(
                         replyTo?.content
                     )
                     pendingQueue.addLast(
-                        QueuedMessage(query, attachmentUrl, attachType, replyTo, uid)
+                        QueuedMessage(query, attachmentUrl, attachType, replyTo, uid, attachmentPath)
                     )
                     _queuedIds.value = _queuedIds.value + uid
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -522,7 +522,7 @@ class ChatViewModel @Inject constructor(
             }
             return
         }
-        startStream(sid, query, attachmentUrl, attachType, replyTo, null, model, provider)
+        startStream(sid, query, attachmentUrl, attachType, replyTo, null, model, provider, attachmentPath)
     }
 
     private data class QueuedMessage(
@@ -530,7 +530,8 @@ class ChatViewModel @Inject constructor(
         val attachmentUrl: String?,
         val attachType: String?,
         val replyTo: Message?,
-        val userMsgId: Long?
+        val userMsgId: Long?,
+        val attachmentPath: String = ""
     )
 
     private val pendingQueue = ArrayDeque<QueuedMessage>()
@@ -594,6 +595,7 @@ class ChatViewModel @Inject constructor(
         userMsgId: Long?,
         model: String? = null,
         provider: String? = null,
+        attachmentPath: String = "",
     ) {
         val gen = ++streamGeneration
         _isStreaming.value = true
@@ -614,6 +616,7 @@ class ChatViewModel @Inject constructor(
                     userMsgId = userMsgId,
                     attachmentUrl = attachmentUrl ?: "",
                     attachType = attachType ?: "",
+                    attachmentPath = attachmentPath,
                     replyTo = replyTo?.content,
                     model = model ?: _currentModel.value,
                     provider = provider,
@@ -709,7 +712,7 @@ class ChatViewModel @Inject constructor(
                     if (next.userMsgId != null) {
                         _queuedIds.value = _queuedIds.value - next.userMsgId
                     }
-                    startStream(sid, next.query, next.attachmentUrl, next.attachType, next.replyTo, next.userMsgId, _currentModel.value, providerFor(_currentModel.value))
+                    startStream(sid, next.query, next.attachmentUrl, next.attachType, next.replyTo, next.userMsgId, _currentModel.value, providerFor(_currentModel.value), next.attachmentPath)
                 }
             }
         }
@@ -931,6 +934,7 @@ class ChatViewModel @Inject constructor(
                 try {
                     var attachUrl: String? = null
                     var attachType: String? = null
+                    var attachPath: String = ""
                     if (attachment != null) {
                         try {
                             val tempFile = cacheAttachmentToTemp(context, attachment.uri)
@@ -938,8 +942,12 @@ class ChatViewModel @Inject constructor(
                                 _errorMessage.value = "Attachment too large or unreadable (max 50 MB)"
                                 return@launch
                             }
-                            attachUrl = repository.uploadFile(
-                                tempFile, attachment.fileName, attachment.mimeType, sid)
+                            repository.uploadFile(
+                                tempFile, attachment.fileName, attachment.mimeType, sid
+                            )?.let { (url, path) ->
+                                attachUrl = url
+                                attachPath = path
+                            }
                             tempFile.delete()
                             attachType = attachment.attachType
                         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -949,7 +957,7 @@ class ChatViewModel @Inject constructor(
                         }
                     }
                     if (text.isNotBlank() || attachUrl != null) {
-                        sendMessage(text, attachUrl, attachType, replyTo = replyTo)
+                        sendMessage(text, attachUrl, attachType, replyTo = replyTo, attachmentPath = attachPath)
                     }
                 } finally {
                     sendInFlight = false
@@ -965,8 +973,11 @@ class ChatViewModel @Inject constructor(
             sendInFlight = true
             viewModelScope.launch {
                 try {
+                    var attachPath: String = ""
                     val url = try {
-                        repository.uploadFile(file, file.name, "image/png", sid)
+                        repository.uploadFile(file, file.name, "image/png", sid)?.let { (u, p) ->
+                            attachPath = p; u
+                        }
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -976,7 +987,7 @@ class ChatViewModel @Inject constructor(
                         file.delete()
                     }
                     if (url != null) {
-                        sendMessage(text, url, "image", replyTo = replyTo)
+                        sendMessage(text, url, "image", replyTo = replyTo, attachmentPath = attachPath)
                     }
                 } finally {
                     sendInFlight = false

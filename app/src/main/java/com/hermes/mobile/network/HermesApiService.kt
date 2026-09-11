@@ -314,6 +314,7 @@ class HermesApiService @Inject constructor(
         onUsage: (Long, Long) -> Unit = { _, _ -> },
         attachmentUrl: String = "",
         attachType: String = "",
+        attachmentPath: String = "",
         replyTo: String? = null,
         model: String? = null,
         provider: String? = null,
@@ -330,7 +331,30 @@ class HermesApiService @Inject constructor(
             val quoted = replyTo.trim().replace("\n", " ").take(400)
             "Re: \"" + quoted + "\"\n\n" + query
         } else query
-        val messages = buildOpenAIMessages(sessionId, wireQuery)
+        // ATTACHMENT CONTEXT (Telegram parity): the wire carries ONLY this
+        // user turn — history lives server-side — so without this note the
+        // agent never learns a file was attached. When the first model fails
+        // and the user switches + says "summarize the attachment", there was
+        // nothing to pick up. The plugin-stored absolute path lets the agent
+        // read the file with its own tools (same host).
+        val mediaNote = when {
+            attachmentUrl.isBlank() -> ""
+            attachmentPath.isNotBlank() && attachType == "file" ->
+                "[The user sent a document: '$attachmentPath'. It is saved at: $attachmentPath. " +
+                    "Its text is not inlined here (binary formats such as PDF/DOCX). To read it, " +
+                    "extract the document's text yourself — for example with the terminal tool or " +
+                    "the ocr-and-documents skill — before answering, instead of asking the user to " +
+                    "paste the contents.]"
+            attachmentPath.isNotBlank() ->
+                "[The user sent a $attachType: '$attachmentPath'. It is saved at: $attachmentPath — " +
+                    "read or analyze that file directly if the request involves it.]"
+            else ->
+                "[The user sent a $attachType attachment at: $attachmentUrl (downloadable with the " +
+                    "session API key). If you cannot access it, ask them to resend.]"
+        }
+        val finalQuery = if (mediaNote.isEmpty()) wireQuery
+            else if (query.isBlank()) mediaNote else "$wireQuery\n\n$mediaNote"
+        val messages = buildOpenAIMessages(sessionId, finalQuery)
         // Dynamic default: server inventory decides. No hardcoded model id.
         // Resolved here (suspend scope) - not inside the callback below.
         val safeModel = if (!model.isNullOrBlank()) model else fetchDefaultModelId()
@@ -1142,7 +1166,9 @@ class HermesApiService @Inject constructor(
 
     // ─── File Upload ───
 
-    suspend fun uploadFile(file: java.io.File, fileName: String, mimeType: String, sessionId: String = ""): String? {
+    suspend fun uploadFile(file: java.io.File, fileName: String, mimeType: String, sessionId: String = ""): Pair<String, String>? {
+        // (relative download URL, absolute server path) — the path rides the
+        // media note so the agent can read the file directly (Telegram parity).
         val baseUrl = config?.baseUrl ?: return null
         return withContext(Dispatchers.IO) {
             try {
@@ -1151,7 +1177,7 @@ class HermesApiService @Inject constructor(
                     .addFormDataPart("file", fileName, file.asRequestBody(mimeType.toMediaTypeOrNull()))
                     .build()
                 // hermes-mobile-qr plugin route: /api/audio/upload?session_id=<sid>
-                // -> {url:"/api/audio/download/<sid>/<stored>"}. The URL is
+                // -> {url:"/api/audio/download/<sid>/<stored>", path:"..."}. The URL is
                 // relative; bubbles resolve it against baseUrl on display.
                 val urlBuilder = ("$baseUrl/api/audio/upload").toHttpUrlOrNull()?.newBuilder()?.apply {
                     if (sessionId.isNotBlank()) addQueryParameter("session_id", sessionId)
@@ -1164,7 +1190,9 @@ class HermesApiService @Inject constructor(
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         val json = JSONObject(response.body?.string() ?: "{}")
-                        json.optString("url")?.takeIf { it.isNotEmpty() }
+                        val url = json.optString("url").takeIf { it.isNotEmpty() }
+                        val path = json.optString("path")
+                        url?.let { it to path }
                     } else {
                         null
                     }
