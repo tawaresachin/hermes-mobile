@@ -78,4 +78,15 @@ class MarkdownTableParserTest {
         assertNotNull(t)
         assertEquals(1, t!!.tables[0].size)
     }
+
+    @Test fun `table inside a code fence stays literal text`() {
+        val md = "Example syntax:\n```\n| A | B |\n|---|---|\n| 1 | 2 |\n```\nDone."
+        assertNull(parseMarkdownTables(md))   // no table lifted out of the fence
+    }
+
+    @Test fun `inline markdown styling is stripped from cells`() {
+        val t = parseMarkdownTables("| **Model** | `cost` |\n|---|---|\n| *GPT* | $1 |")
+        assertEquals(listOf("Model", "cost"), t!!.tables[0][0])
+        assertEquals(listOf("GPT", "$1"), t.tables[0][1])
+    }
 }

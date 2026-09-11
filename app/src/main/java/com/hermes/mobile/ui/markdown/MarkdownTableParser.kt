@@ -24,7 +24,28 @@ private fun isSeparator(s: String): Boolean {
 }
 
 private fun cellsOf(s: String): List<String> =
-    s.trim().removePrefix("|").removeSuffix("|").split("|").map { it.trim() }
+    s.trim().removePrefix("|").removeSuffix("|").split("|").map { raw ->
+        // Cells are rendered as plain Text (no MarkdownText per cell), so
+        // strip the inline styling the model loves in headers — **bold**,
+        // *italic*, `code` — instead of showing literal asterisks.
+        var cell = raw.trim()
+        cell = cell.replace(Regex("""\*\*(.+?)\*\*"""), "$1")
+            .replace(Regex("""`([^`]+)`"""), "$1")
+            .replace(Regex("""^\*([^*]+)\*$"""), "$1")
+            .trim()
+        cell
+    }
+
+/** True when line index [i] sits inside an open ``` fence. */
+private fun fenceFlags(lines: List<String>): BooleanArray {
+    val inside = BooleanArray(lines.size)
+    var open = false
+    for (i in lines.indices) {
+        if (lines[i].trim().startsWith("```")) { inside[i] = open; open = !open; continue }
+        inside[i] = open
+    }
+    return inside
+}
 
 private fun normalizeBlock(block: List<String>): List<List<String>>? {
     // block = header + separator + optional data rows. Header-only tables
@@ -41,11 +62,12 @@ private fun normalizeBlock(block: List<String>): List<List<String>>? {
 
 fun parseMarkdownTables(text: String): MarkdownTableParse? {
     val lines = text.split("\n")
+    val fenced = fenceFlags(lines)
     val tables = mutableListOf<List<List<String>>>()
     val consumed = mutableSetOf<Int>()
     var i = 0
     while (i < lines.lastIndex) {
-        val isHeader = lines[i].contains('|') && !isSeparator(lines[i]) &&
+        val isHeader = !fenced[i] && lines[i].contains('|') && !isSeparator(lines[i]) &&
             isSeparator(lines[i + 1]) && lines[i].count { it == '|' } >= 1
         if (isHeader) {
             var end = i + 2

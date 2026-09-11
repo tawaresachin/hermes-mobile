@@ -3955,6 +3955,11 @@ private fun parseTablesOf(text: String): com.hermes.mobile.ui.markdown.MarkdownT
 fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
     val columnCount = tableRows.maxOfOrNull { it.size } ?: 0
     if (columnCount == 0 || tableRows.size < 2) return
+    // Wide tables crush into illegible ellipses when every column weights
+    // to fill the screen (5+ cols x min 60dp > phone width). Few columns:
+    // weighted fill (looks great). Many: fixed 140dp columns in a
+    // horizontally scrollable strip — Telegram's answer for wide grids.
+    val wide = columnCount > 4
 
     Card(
         modifier = Modifier
@@ -3965,11 +3970,14 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Column {
+        Column(
+            modifier = Modifier
+                .then(if (wide) Modifier.horizontalScroll(rememberScrollState()) else Modifier)
+        ) {
             tableRows.forEachIndexed { rowIdx, row ->
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .then(if (wide) Modifier else Modifier.fillMaxWidth())
                         // Header is row 0 (the separator was stripped at
                         // parse time — the old code painted row 1, i.e. the
                         // first DATA row, as a second header).
@@ -3985,7 +3993,7 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
                     row.forEachIndexed { colIdx, cell ->
                         Box(
                             modifier = Modifier
-                                .weight(1f)
+                                .then(if (wide) Modifier.width(140.dp) else Modifier.weight(1f))
                                 .padding(horizontal = 8.dp, vertical = 6.dp)
                                 .defaultMinSize(minWidth = 60.dp)
                         ) {
@@ -3998,7 +4006,7 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
                                     else
                                         (if (darkTheme) Color(0xFFB0BEC5) else Color(0xFF425262))
                                 ),
-                                maxLines = 2,
+                                maxLines = if (wide) 4 else 2,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
