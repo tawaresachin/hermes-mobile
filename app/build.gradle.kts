@@ -14,8 +14,8 @@ android {
         applicationId = "com.hermes.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 27
-        versionName = "0.0.27"
+        versionCode = 28
+        versionName = "0.0.28"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -141,6 +141,10 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    // The mockable android.jar STUBS org.json (throws "not mocked") — the run
+    // event codec tests exercise real JSON frames, so put the reference impl
+    // ahead of the stubs on the unit-test classpath.
+    testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("io.mockk:mockk:1.13.13")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

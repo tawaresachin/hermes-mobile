@@ -23,12 +23,17 @@ import javax.inject.Inject
 class HermesApp : Application(), ImageLoaderFactory {
 
     @Inject lateinit var authInterceptor: AuthInterceptor
+    @Inject lateinit var runController: com.hermes.mobile.data.runs.RunController
 
     override fun onCreate() {
         super.onCreate()
         DiagLog.init(this)
         DiagLog.i("APP", "onCreate version=${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
         installCrashHandler()
+        // Re-adopt turns that were live when the process died: poll each
+        // persisted run id once, finalize completed ones (notification!),
+        // re-attach watchers for still-running ones.
+        runController.recover()
         // Foreground tracking for the response-notification (only ping when
         // the user is NOT looking at the app).
         registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {

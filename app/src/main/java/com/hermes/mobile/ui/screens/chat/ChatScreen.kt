@@ -124,8 +124,6 @@ class ChatViewModel @Inject constructor(
 
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
-    private var streamingJob: kotlinx.coroutines.Job? = null
-    private var toolClearJob: kotlinx.coroutines.Job? = null
 
     // ── Tool calls detected during streaming ──
     private val _toolCalls = MutableStateFlow<List<ToolCallInfo>>(emptyList())
@@ -198,7 +196,10 @@ class ChatViewModel @Inject constructor(
         initJob = viewModelScope.launch {
             when {
                 sessionId != null -> resumeSession(sessionId)
-                _sessionId.value != null -> observeMessages(_sessionId.value!!)
+                _sessionId.value != null -> {
+                    observeMessages(_sessionId.value!!)
+                    observeLiveTurn(_sessionId.value!!)
+                }
                 else -> {
                     // Bottom-tab open with no active session: RESUME the
                     // latest session instead of silently starting a new one.
@@ -247,6 +248,7 @@ class ChatViewModel @Inject constructor(
             _sessionId.value = session.id
             restoreSessionModel(session.id)
             observeMessages(session.id)
+            observeLiveTurn(session.id)
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Legitimate cancellation when scope is torn down — suppress
         } catch (e: Exception) {
@@ -258,10 +260,15 @@ class ChatViewModel @Inject constructor(
         try {
             _sessionId.value = sessionId
             restoreSessionModel(sessionId)
+            observeLiveTurn(sessionId)
             // Clean stale streaming placeholders (app died mid-stream last
             // time) BEFORE observing — otherwise the next stream renders its
-            // live text into the orphaned bubble too.
-            repository.finalizeStaleStreaming(sessionId)
+            // live text into the orphaned bubble too. SKIPPED while a
+            // RunController turn is live for this session: the durable run
+            // survived the process death and owns that placeholder row.
+            if (!repository.runController.isBusy(sessionId)) {
+                repository.finalizeStaleStreaming(sessionId)
+            }
             observeMessages(sessionId)
             val warm = repository.resumeSession(sessionId) // warm cache
             // Seed the context meter from the last persisted turn so the
@@ -302,9 +309,6 @@ class ChatViewModel @Inject constructor(
     }
 
     // ── Send message ──
-    // Generation counter: bump on every send so stale SSE chunks from a
-    // cancelled stream can't clobber the new stream's UI content.
-    private var streamGeneration = 0
 
     /** Provider SLUG for a model id (server contract). The display label
      * ("FreeLLM") must never go on the wire — it yields custom:custom:... 404s. */
@@ -487,7 +491,7 @@ class ChatViewModel @Inject constructor(
     val showModelPickerState: StateFlow<Boolean> = showModelPickerGlobal.asStateFlow()
     fun consumeModelPickerRequest() { showModelPickerGlobal.value = false }
 
-    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, replyTo: Message? = null, bypassSlash: Boolean = false, attachmentPath: String = "") {
+    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, replyTo: Message? = null, bypassSlash: Boolean = false, attachmentPath: String = "", steer: Boolean = false) {
         val sid = _sessionId.value ?: return
         // ── Slash commands ──
         // The gateway's slash handlers are messaging-platform-only (adapter
@@ -500,30 +504,27 @@ class ChatViewModel @Inject constructor(
         }
         val model = _currentModel.value
         val provider = providerFor(model)
+        // STEER MODE: the user chose to redirect the RUNNING turn instead
+        // of queueing behind it (Telegram mid-run message parity). If the
+        // run rejects the steer (already settled), fall through to queue.
+        if (steer && _isStreaming.value && attachmentUrl.isNullOrBlank()) {
+            steerRunning(query) {
+                // Run rejected the steer (settled between tap and request):
+                // the message still gets its own turn — queue it.
+                viewModelScope.launch { enqueueMessage(sid, query, attachmentUrl, attachType, replyTo, attachmentPath) }
+            }
+            return
+        }
         // TELEGRAM QUEUE MODEL: one message → ONE complete response, and
         // NO QUERY IS EVER DISCARDED. If the agent is already working, the
         // new message is saved locally + queued; it gets its own turn the
         // moment the current response completes (FIFO). Nothing is
         // cancelled, nothing is dropped, responses never interleave.
         if (_isStreaming.value) {
-            viewModelScope.launch {
-                try {
-                    val uid = repository.insertLocalUserMessage(
-                        sid, query,
-                        attachmentUrl ?: "", attachType ?: "",
-                        replyTo?.content
-                    )
-                    pendingQueue.addLast(
-                        QueuedMessage(query, attachmentUrl, attachType, replyTo, uid, attachmentPath)
-                    )
-                    _queuedIds.value = _queuedIds.value + uid
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (_: Exception) { }
-            }
+            viewModelScope.launch { enqueueMessage(sid, query, attachmentUrl, attachType, replyTo, attachmentPath) }
             return
         }
-        startStream(sid, query, attachmentUrl, attachType, replyTo, null, model, provider, attachmentPath)
+        startTurn(sid, query, attachmentUrl, attachType, replyTo, null, model, provider, attachmentPath)
     }
 
     private data class QueuedMessage(
@@ -560,34 +561,130 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** Telegram INTERRUPT mode — the Stop button. Cancels the current run
-     * (server saves whatever text arrived), finalizes the placeholder, and
-     * clears the queue. Queued messages stay in the chat with SENDING ticks
-     * but do NOT auto-fire: the operator chose to stop, not to batch-send. */
+    /** Telegram INTERRUPT mode — the Stop button. Asks the SERVER to stop
+     * the durable run (POST /v1/runs/{id}/stop): the agent interrupts, the
+     * partial persists, the terminal event finalizes the bubble. Clears the
+     * queue: the operator chose to stop, not to batch-send. */
     fun stopStreaming() {
         val sid = _sessionId.value ?: return
-        val gen = streamGeneration
-        viewModelScope.launch {
-            try {
-                repository.cancelChat(sid)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) { }
-            // Cancel the local stream; the repo's sendMessage finally-path
-            // finalizes the placeholder with whatever text arrived.
-            streamingJob?.cancel()
-            pendingQueue.clear()
-            _queuedIds.value = emptySet()
+        repository.runController.stop(sid)
+        pendingQueue.clear()
+        _queuedIds.value = emptySet()
+        if (repository.runController.liveTurn(sid) == null) {
             _isStreaming.value = false
             _streamingContent.value = ""
             _toolCalls.value = emptyList()
-            if (gen == streamGeneration) {
-                _connectionStatus.value = ConnectionStatus.CONNECTED
-            }
         }
     }
 
-    private fun startStream(
+    // ── Live turn observation (durable runs) ──
+    // The RunController owns the turn in an APP-level scope: navigating away
+    // or losing the socket cannot cancel it. This collector is the screen's
+    // window onto it — re-attached on every session open, dropped on clear.
+
+    private var liveJob: kotlinx.coroutines.Job? = null
+    private var lastBusySid: String? = null
+
+    private fun observeLiveTurn(sid: String) {
+        liveJob?.cancel()
+        liveJob = viewModelScope.launch {
+            repository.runController.turns
+                .map { it[sid] }
+                .distinctUntilChanged()
+                .collect { turn ->
+                    _isStreaming.value = turn != null
+                    _streamingContent.value = turn?.streamingText ?: ""
+                    _toolCalls.value = turn?.toolLines?.map {
+                        ToolCallInfo(
+                            id = it.name, name = it.name, arguments = it.label,
+                            status = when (it.status) {
+                                "completed" -> ToolCallStatus.COMPLETED
+                                "failed" -> ToolCallStatus.FAILED
+                                else -> ToolCallStatus.RUNNING
+                            })
+                    } ?: emptyList()
+                    _pendingApproval.value = turn?.pendingApproval
+                        ?.let { ApprovalUi(it.command, it.description, it.choices) }
+                    // Turn settled (busy → idle for THIS session): drain the
+                    // FIFO queue — the next queued message gets its turn now.
+                    if (turn == null && lastBusySid == sid) {
+                        lastBusySid = null
+                        drainQueue(sid)
+                        refreshContextMeter()
+                    } else if (turn != null) {
+                        lastBusySid = sid
+                    }
+                }
+        }
+        // Re-attach the event stream: the controller kept the run alive while
+        // this screen was gone; now the UI should see its deltas again.
+        repository.runController.attach(sid)
+    }
+
+    private suspend fun enqueueMessage(
+        sid: String, query: String, attachmentUrl: String?, attachType: String?,
+        replyTo: Message?, attachmentPath: String
+    ) {
+        try {
+            val uid = repository.insertLocalUserMessage(
+                sid, query, attachmentUrl ?: "", attachType ?: "", replyTo?.content)
+            pendingQueue.addLast(
+                QueuedMessage(query, attachmentUrl, attachType, replyTo, uid, attachmentPath))
+            _queuedIds.value = _queuedIds.value + uid
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) { }
+    }
+
+    private fun drainQueue(sid: String) {
+        val next = pendingQueue.removeFirstOrNull() ?: return
+        if (next.userMsgId != null) _queuedIds.value = _queuedIds.value - next.userMsgId
+        startTurn(sid, next.query, next.attachmentUrl, next.attachType, next.replyTo,
+            next.userMsgId, _currentModel.value, providerFor(_currentModel.value), next.attachmentPath)
+    }
+
+    private fun refreshContextMeter() {
+        val sid = _sessionId.value ?: return
+        viewModelScope.launch {
+            val live = try { repository.fetchContextUsage(sid) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { 0L }
+            if (live > 0) _contextUsed.value = live
+            if (_contextTotal.value == 0L) refreshContextTotal()
+        }
+    }
+
+    /** A tool call waiting for the user's decision (rendered as an inline
+     * approval card above the composer). */
+    data class ApprovalUi(val command: String, val description: String, val choices: List<String>)
+
+    private val _pendingApproval = MutableStateFlow<ApprovalUi?>(null)
+    val pendingApproval: StateFlow<ApprovalUi?> = _pendingApproval.asStateFlow()
+
+    fun resolveApproval(choice: String) {
+        val sid = _sessionId.value ?: return
+        repository.runController.resolveApproval(sid, choice)
+    }
+
+    /** Telegram mid-run steer: inject guidance into the RUNNING turn.
+     * Returns false (caller falls back to queue) when the run rejects it. */
+    fun steerRunning(text: String, onRejected: () -> Unit = {}) {
+        val sid = _sessionId.value ?: return
+        repository.runController.steer(sid, text) { accepted ->
+            if (!accepted) onRejected()
+        }
+    }
+
+    /** Branch this chat from here (server-side transcript copy). */
+    fun forkSession(onDone: (String?) -> Unit = {}) {
+        val sid = _sessionId.value ?: return
+        viewModelScope.launch {
+            val newId = try { repository.forkSession(sid) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+            onDone(newId)
+        }
+    }
+
+    private fun startTurn(
         sid: String,
         query: String,
         attachmentUrl: String?,
@@ -598,126 +695,28 @@ class ChatViewModel @Inject constructor(
         provider: String? = null,
         attachmentPath: String = "",
     ) {
-        val gen = ++streamGeneration
-        _isStreaming.value = true
-        _streamingContent.value = ""
-        _toolCalls.value = emptyList()
         _errorMessage.value = null
-
-        // StringBuilder avoids O(n²) re-concat per chunk; emissions are
-        // time-throttled (≤20/s) so the UI doesn't recompose per chunk.
-        val streamBuilder = StringBuilder()
-        var lastEmitMs = 0L
-
-        streamingJob = viewModelScope.launch {
-            try {
-                repository.sendMessage(
-                    sessionId = sid,
-                    query = query,
-                    userMsgId = userMsgId,
-                    attachmentUrl = attachmentUrl ?: "",
-                    attachType = attachType ?: "",
-                    attachmentPath = attachmentPath,
-                    replyTo = replyTo?.content,
-                    model = model ?: _currentModel.value,
-                    provider = provider,
-                    onUsage = { pt, _ ->
-                        // prompt_tokens IS the live context fill (what the next
-                        // turn pays for) — same value Hermes' /status shows.
-                        _contextUsed.value = pt
-                        if (_contextTotal.value == 0L) refreshContextTotal()
-                    },
-                    onChunk = { chunk ->
-                        if (gen == streamGeneration) {
-                            streamBuilder.append(chunk)
-                            val now = android.os.SystemClock.elapsedRealtime()
-                            if (now - lastEmitMs >= 50L) {
-                                lastEmitMs = now
-                                _streamingContent.value = streamBuilder.toString()
-                            }
-                        }
-                    },
-                    onToolCall = { id, name, args ->
-                        if (gen == streamGeneration) {
-                            val tc = ToolCallInfo(
-                                id = id,
-                                name = name,
-                                arguments = args,
-                                status = ToolCallStatus.RUNNING
-                            )
-                            _toolCalls.value = _toolCalls.value + tc
-                        }
-                    },
-                    onToolResult = { id, status ->
-                        if (gen == streamGeneration) {
-                            val st = if (status == "failed")
-                                ToolCallStatus.FAILED else ToolCallStatus.COMPLETED
-                            _toolCalls.value = _toolCalls.value.map {
-                                if (it.id == id) it.copy(
-                                    result = null,
-                                    status = st
-                                ) else it
-                            }
-                        }
-                    },
-                    onModelReverted = { reverted ->
-                        if (gen == streamGeneration && reverted.isNotBlank()) {
-                            // Server fell back to its default after a hard
-                            // provider failure. Surface the truth AND persist
-                            // it — the header must never lie about which
-                            // model answered this session now.
-                            _currentModel.value = reverted
-                            repository.saveModelForSession(sid, reverted, _currentProviderSlug.value)
-                        }
-                    },
-                    onAttachment = { url, _ ->
-                        if (gen == streamGeneration && url.isNotBlank()) {
-                            // In-stream attachment — refresh so the image/
-                            // file bubble renders immediately (Telegram:
-                            // media + caption arrive together).
-                            kotlinx.coroutines.CoroutineScope(
-                                kotlinx.coroutines.Dispatchers.IO
-                            ).launch {
-                                try {
-                                    _messages.value = repository.resumeSession(sid)
-                                } catch (e: kotlinx.coroutines.CancellationException) {
-                                    throw e
-                                } catch (_: Exception) { }
-                            }
-                        }
-                    }
-                )
-                _streamingContent.value = ""
-                toolClearJob?.cancel()
-                val genAtComplete = streamGeneration
-                toolClearJob = viewModelScope.launch {
-                    delay(3000)
-                    if (genAtComplete == streamGeneration) {
-                        _toolCalls.value = emptyList()
-                    }
+        repository.runController.startTurn(
+            sessionId = sid,
+            query = query,
+            model = model ?: _currentModel.value,
+            provider = provider,
+            attachmentUrl = attachmentUrl ?: "",
+            attachType = attachType ?: "",
+            attachmentPath = attachmentPath,
+            replyTo = replyTo?.content,
+            userMsgId = userMsgId,
+            onAdmitError = { msg ->
+                _errorMessage.value = when {
+                    msg.contains("401") -> "API key rejected. Update it in Settings → Account."
+                    msg.contains("429") -> "Server is busy (concurrency limit). Try again shortly."
+                    else -> msg
                 }
-                _connectionStatus.value = ConnectionStatus.CONNECTED
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _errorMessage.value = null
                 _connectionStatus.value = ConnectionStatus.ERROR
-            } finally {
-                _isStreaming.value = false
-                _streamingContent.value = ""
-                // Drain the queue: the next queued message gets its turn
-                // now that this response completed (or failed). FIFO —
-                // every message eventually gets its own complete response.
-                val next = pendingQueue.removeFirstOrNull()
-                if (next != null) {
-                    if (next.userMsgId != null) {
-                        _queuedIds.value = _queuedIds.value - next.userMsgId
-                    }
-                    startStream(sid, next.query, next.attachmentUrl, next.attachType, next.replyTo, next.userMsgId, _currentModel.value, providerFor(_currentModel.value), next.attachmentPath)
-                }
-            }
-        }
+            },
+        )
     }
+
 
     fun getBaseUrl(): String = repository.getBaseUrl()
 
@@ -740,69 +739,23 @@ class ChatViewModel @Inject constructor(
     // 'response_ready' the instant a response is saved (instant, idle).
     // Catch-up: one poll on open (covers responses saved while away).
     // Fallback: a 5s poll ONLY while the subscription is down + retry.
-    private var eventSource: okhttp3.sse.EventSource? = null
     private var pollJob: kotlinx.coroutines.Job? = null
-    private var subActive = false
 
-    private fun applyResponse(content: String, ts: Long, attachmentUrl: String = "", attachmentType: String = "") {
-        val sid = _sessionId.value ?: return
-        viewModelScope.launch {
-            val changed = try {
-                repository.applyServerResponse(sid, content, ts, attachmentUrl, attachmentType)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                false
-            }
-            if (changed) {
-                // Patched from the push channel — drop stale live state.
-                _streamingContent.value = ""
-                _isStreaming.value = false
-                _messages.value = repository.resumeSession(sid)
-            }
-        }
-    }
-
+    /** Cross-surface catch-up: a turn answered on Telegram/CLI while this
+     * session was open must appear here too. One lightweight GET per 5s
+     * (the old per-tick SSE resubscribe targeted a route the gateway never
+     * served — a 404 storm). Own durable runs never rely on this: the
+     * RunController pushes their state directly. */
     fun startResponsePolling() {
         pollJob?.cancel()
         val sid = _sessionId.value ?: return
-
-        fun resubscribe() {
-            try { eventSource?.cancel() } catch (_: Exception) { }
-            eventSource = repository.subscribeSessionEvents(
-                sid,
-                onResponseReady = { content, ts, attachUrl, attachType ->
-                    applyResponse(content, ts, attachUrl, attachType)
-                },
-                onFailure = { subActive = false }
-            )
-            subActive = eventSource != null
-        }
-
         pollJob = viewModelScope.launch {
-            // Catch-up: pull once on open (a response may have been saved
-            // while the chat was closed — no event is replayed).
-            val caughtUp = try {
-                repository.pollServerResponse(sid)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                false
-            }
-            if (caughtUp) {
-                _streamingContent.value = ""
-                _isStreaming.value = false
-                _messages.value = repository.resumeSession(sid)
-            }
-            resubscribe()
             var tick = 0
             while (true) {
                 kotlinx.coroutines.delay(5_000)
-                // Every ~20s while the session is open (and NOT mid-stream,
-                // where onUsage already gives the exact number): pull the
-                // server-side live context fill. Catches compression
-                // rotations / other-surface turns that happened while away.
                 tick++
+                // ~20s: pull the server-side live context fill (catches
+                // compression rotations / other-surface turns while away).
                 if (tick % 4 == 0 && !_isStreaming.value) {
                     val live = try {
                         repository.fetchContextUsage(sid)
@@ -812,21 +765,19 @@ class ChatViewModel @Inject constructor(
                     if (live > 0) _contextUsed.value = live
                     if (_contextTotal.value == 0L) refreshContextTotal()
                 }
-                if (!subActive) {
-                    // Subscription down — pull fallback + try to resubscribe.
-                    val changed = try {
-                        repository.pollServerResponse(sid)
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        false
-                    }
-                    if (changed) {
-                        _streamingContent.value = ""
-                        _isStreaming.value = false
-                        _messages.value = repository.resumeSession(sid)
-                    }
-                    resubscribe()
+                // Skip the transcript poll while a durable run owns this
+                // session — its placeholder would fight the live text.
+                if (repository.runController.isBusy(sid)) continue
+                val changed = try {
+                    repository.pollServerResponse(sid)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    false
+                }
+                if (changed) {
+                    _streamingContent.value = ""
+                    _messages.value = repository.resumeSession(sid)
                 }
             }
         }
@@ -835,9 +786,6 @@ class ChatViewModel @Inject constructor(
     fun stopResponsePolling() {
         pollJob?.cancel()
         pollJob = null
-        try { eventSource?.cancel() } catch (_: Exception) { }
-        eventSource = null
-        subActive = false
     }
 
     /** Last safety net for the push SSE + poll loop: the composable's
@@ -845,8 +793,10 @@ class ChatViewModel @Inject constructor(
      * composition-dispose (config edge cases) would otherwise leak an
      * open socket that the 5s resubscription loop keeps resurrecting. */
     override fun onCleared() {
-        streamingJob?.cancel()
         stopResponsePolling()
+        // NOTE: the live turn is NOT cancelled here — RunController owns it
+        // in an app-level scope; the run keeps executing server-side and the
+        // next visit to this session re-attaches to its events.
         super.onCleared()
     }
 
@@ -932,7 +882,8 @@ class ChatViewModel @Inject constructor(
             attachment: PendingAttachment?,
             context: android.content.Context,
             onAttachComplete: () -> Unit,
-            replyTo: Message? = null
+            replyTo: Message? = null,
+            steer: Boolean = false
         ) {
             val sid = _sessionId.value ?: return
             if (sendInFlight) return
@@ -976,7 +927,7 @@ class ChatViewModel @Inject constructor(
                         }
                     }
                     if (text.isNotBlank() || attachUrl != null) {
-                        sendMessage(text, attachUrl, attachType, replyTo = replyTo, attachmentPath = attachPath)
+                        sendMessage(text, attachUrl, attachType, replyTo = replyTo, attachmentPath = attachPath, steer = steer)
                     }
                 } finally {
                     sendInFlight = false
@@ -1145,10 +1096,20 @@ class ChatViewModel @Inject constructor(
          *  session's Room flow picks it up when opened). */
         fun forwardTo(targetSessionId: String, message: Message) {
             viewModelScope.launch {
-                val source = repository.getSessionTitle(message.sessionId)
-                val label = "Forwarded from" + (source?.takeIf { it.isNotBlank() }?.let { " \"$it\"" } ?: " another chat")
-                repository.forwardMessage(
-                    targetSessionId, message.content, label, message.attachmentUrl)
+            val source = repository.getSessionTitle(message.sessionId)
+            val label = "Forwarded from" + (source?.takeIf { it.isNotBlank() }?.let { " \"$it\"" } ?: " another chat")
+            // Same durable engine as a typed message (the legacy synchronous
+            // forwardMessage path is gone — one turn path, one recovery story).
+            // The label rides INSIDE the query (not replyTo — that would
+            // render a fake quote chip): the agent sees it as import context.
+            repository.runController.startTurn(
+                sessionId = targetSessionId,
+                query = label + "\n\n" + message.content,
+                model = repository.savedModelForSession(targetSessionId).orEmpty(),
+                provider = repository.savedModelSlugForSession(targetSessionId).takeIf { it.isNotBlank() },
+                attachmentUrl = message.attachmentUrl ?: "",
+                attachType = message.attachmentType ?: "",
+            )
             }
         }
 
@@ -1256,6 +1217,10 @@ fun ChatScreen(
     val selectedModelProvider by vm.selectedModelProvider.collectAsState()
     val contextUsed by vm.contextUsed.collectAsState()
     val contextTotal by vm.contextTotal.collectAsState()
+    val pendingApproval by vm.pendingApproval.collectAsState()
+    // Send-while-running mode: false = queue (default, Telegram FIFO),
+    // true = steer the live run.
+    var steerMode by remember { mutableStateOf(false) }
     // User-tunable chat text size (Preferences slider; default 15sp).
     val chatFontSp by vm.chatFontSp.collectAsState()
 
@@ -1982,6 +1947,44 @@ fun ChatScreen(
             }
         }
 
+        // ── Steer toggle (Telegram mid-run message parity): while a run is
+        //    live, the next send either QUEUES (FIFO, one reply each) or
+        //    STEERS (injects into the running turn). Default = queue.
+        if (isStreaming) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Send while running:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                listOf("Queue" to false, "Steer" to true).forEach { (label, mode) ->
+                    FilterChip(
+                        selected = steerMode == mode,
+                        onClick = { steerMode = mode },
+                        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = HermesPrimary.copy(alpha = 0.18f)),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+            }
+        }
+
+        // ── Approval card (durable runs): a tool call is waiting for the
+        //    user's decision. Telegram renders inline buttons for exactly
+        //    this; the card rides above the composer so it can't be missed.
+        pendingApproval?.let { approval ->
+            ApprovalCard(
+                approval = approval,
+                onResolve = { choice -> vm.resolveApproval(choice) },
+            )
+        }
+
         InputBar(
             inputText = inputText,
             onInputChange = { text ->
@@ -1999,7 +2002,7 @@ fun ChatScreen(
                 vm.sendWithAttachment(inputText.trim(), pendingAttachment, context, onAttachComplete = {
                     pendingAttachment = null
                     inputText = ""
-                }, replyTo = pendingReply)
+                }, replyTo = pendingReply, steer = steerMode)
                 DraftStore.clear(sessionIdState ?: "")
                 pendingReply = null
             },
@@ -2144,6 +2147,13 @@ fun ChatScreen(
                         menuTarget = null
                     }
                 } else null,
+                onFork = {
+                    menuTarget = null
+                    vm.forkSession { newId ->
+                        if (newId != null) vm.initSession(newId)
+                        else scope.launch { snackbarHostState.showSnackbar("Fork failed — check the connection") }
+                    }
+                },
                 onDismiss = { menuTarget = null }
             )
         }
@@ -3245,6 +3255,78 @@ fun TypingIndicator() {
 
 /** Telegram-style: compact grouped lines for a completed turn's tool calls.
  * Parses the persisted [{n,e,l,s}] JSON; renders nothing when malformed. */
+// ── Approval card (durable runs) ─────────────────────────────────────
+// A tool call is waiting for the user's decision. Telegram renders inline
+// buttons for exactly this; the card shows the COMMAND VERBATIM (the user
+// must see what they're approving) + the server's own choice set.
+@Composable
+fun ApprovalCard(
+    approval: ChatViewModel.ApprovalUi,
+    onResolve: (String) -> Unit,
+) {
+    val label = mapOf(
+        "once" to "Allow once", "session" to "Allow session",
+        "always" to "Always allow", "deny" to "Deny")
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+        border = BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFFE5A100).copy(alpha = 0.55f)),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("\u26a0\ufe0f", fontSize = 14.sp)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    "Needs your approval",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (approval.description.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    approval.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                )
+            }
+            if (approval.command.isNotBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    approval.command,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    maxLines = 4,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(8.dp),
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                approval.choices.forEach { choice ->
+                    val deny = choice == "deny"
+                    Button(
+                        onClick = { onResolve(choice) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (deny) MaterialTheme.colorScheme.error
+                                             else HermesPrimary),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    ) {
+                        Text(label[choice] ?: choice, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun ToolActivityGroup(jsonLines: String) {
     var expanded by remember(jsonLines) { mutableStateOf(false) }

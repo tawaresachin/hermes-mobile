@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,6 +22,7 @@ class HermesRepository @Inject constructor(
     private val apiService: HermesApiService,
     private val sessionDao: SessionDao,
     private val messageDao: MessageDao,
+    private val runControllerRef: com.hermes.mobile.data.runs.RunController,
     @ApplicationContext
     private val context: Context
 ) {
@@ -88,52 +90,17 @@ class HermesRepository @Inject constructor(
         messageDao.updateReaction(messageId, reaction)
     }
 
-    /** Telegram-style forward: send the text as a user message in the
-     *  target session (saves it + hands it to the AI in one go).
-     *  sourceLabel = "Forwarded from <session title>" — rides the wire so
-     *  the agent knows the message is imported, not typed in this chat. */
-    suspend fun forwardMessage(sessionId: String, content: String, sourceLabel: String = "", attachmentUrl: String? = null) {
-        val wire = buildString {
-            if (sourceLabel.isNotBlank()) append(sourceLabel).append("\n\n")
-            append(content)
-        }
-        sendMessage(sessionId = sessionId, query = wire, onChunk = {},
-            attachmentUrl = attachmentUrl ?: "")
-    }
-
-    /** Strip session-upload URLs from displayed text. The attachment bubble
-     * (image preview / file row) replaces the URL — Telegram never shows raw
-     * media links. Applied at FINALIZE time (full text available) because
-     * streamed chunks split the URL across events, defeating per-chunk
-     * stripping on the server. */
-    private fun stripUploadUrls(sessionId: String, text: String): String {
-        if (text.isBlank()) return text
-        val ext = "(?:\\.png|\\.jpe?g|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.webm|\\.mov|\\.mkv" +
-            "|\\.mp3|\\.wav|\\.ogg|\\.m4a|\\.opus|\\.flac|\\.pdf|\\.zip|\\.docx?" +
-            "|\\.xlsx?|\\.pptx?|\\.txt|\\.md|\\.csv|\\.json|\\.log|\\.bin)"
-        val sid = java.util.regex.Pattern.quote(sessionId)
-        val re = Regex("(?:/uploads/" + sid + "/|/api/audio/download/" + sid + "/)[^\\s)\\]]*?" + ext)
-        // CRITICAL: whitespace runs inside a LINE may be collapsed, but
-        // newlines are markdown structure. The old blanket \s+ -> " "
-        // flattened every message into one line, which destroyed tables,
-        // lists and paragraphs at persist time (parser fixes never even
-        // got a chance to run on the stored text).
-        return text.replace(re, "")
-            .replace(Regex("[ \\t]{2,}"), " ")
-            .replace(Regex("\n{3,}"), "\n\n")
-            .trim()
-    }
-
-    /** Finalize a streamed turn: strip upload URLs before persisting. */
-    private suspend fun finalizeMessage(msgId: Long, sessionId: String, content: String) {
-        messageDao.updateMessage(msgId, stripUploadUrls(sessionId, content), false)
-    }
+    /** Strip session-upload URLs from displayed text — delegates to the
+     * shared TurnText implementation (one rule, both turn paths). */
+    private fun stripUploadUrls(sessionId: String, text: String): String =
+        com.hermes.mobile.data.runs.TurnText.stripUploadUrls(sessionId, text)
 
     /** Insert the user's message locally (SENDING tick) WITHOUT starting a
      * stream. Used by the Telegram-style queue: when the agent is busy the
      * message shows immediately and its turn starts after the current
      * response completes. Returns the row id (passed back via
-     * [sendMessage]'s userMsgId so the turn advances THIS row's ticks). */
+     * RunController.startTurn's userMsgId so the turn advances THIS row's
+     * ticks). */
     suspend fun insertLocalUserMessage(
         sessionId: String,
         content: String,
@@ -155,310 +122,6 @@ class HermesRepository @Inject constructor(
         return id
     }
 
-    suspend fun sendMessage(
-        sessionId: String,
-        query: String,
-        onChunk: (String) -> Unit,
-        onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
-        onToolResult: (String, String) -> Unit = { _, _ -> },
-        onModelReverted: (String) -> Unit = {},
-        onAttachment: (String, String) -> Unit = { _, _ -> },
-        onTurnEnd: () -> Unit = {},
-        attempt: Int = 1,
-        attachmentUrl: String = "",
-        attachType: String = "",
-        attachmentPath: String = "",
-        replyTo: String? = null,
-        // Pre-inserted row (queued messages) — reuse it for the tick chain
-        // instead of creating a duplicate user message.
-        userMsgId: Long? = null,
-        model: String? = null,
-        provider: String? = null,
-        onUsage: (Long, Long) -> Unit = { _, _ -> },
-    ): String {
-        // Real per-turn usage captured from the SSE usage frame.
-        var usagePrompt = 0L
-        var usageCompletion = 0L
-        // Telegram-style tool chrome lines (deduped by toolCallId), persisted
-        // onto the assistant row so history keeps showing them after reopen.
-        val toolActivity = java.util.concurrent.ConcurrentHashMap<String, org.json.JSONObject>()
-        // Save user message ONLY on first attempt (retries must not duplicate it)
-        var userMsgIdFinal: Long? = userMsgId
-        if (attempt == 1 && userMsgId == null) {
-            userMsgIdFinal = insertLocalUserMessage(
-                sessionId, query, attachmentUrl, attachType, replyTo
-            )
-        } else if (attempt > 1 && userMsgId == null) {
-            // Retry: the user row already exists — reuse it so the tick
-            // chain (SENT → READ) still advances on the retried attempt.
-            userMsgIdFinal = messageDao.getMessagesOnce(sessionId)
-                .lastOrNull { it.role == MessageRole.USER }?.id
-        }
-
-        // Create placeholder for assistant response
-        val assistantMsg = Message(
-            sessionId = sessionId,
-            role = MessageRole.ASSISTANT,
-            content = "",
-            isStreaming = true
-        )
-        val msgId = messageDao.insertMessage(assistantMsg)
-
-        val fullResponse = StringBuilder()
-        // Foreground watcher: keeps the process alive while generating and
-        // notifies when the answer lands while the app is backgrounded.
-        // Start on EVERY attempt (idempotent), stop in the finally below.
-        // The query is passed so the notification shows the message stack
-        // (Telegram-style: user bubble + Hermes reply under the logo).
-        com.hermes.mobile.notifications.ResponseWatcherService.start(context, sessionId, query)
-        try {
-            try {
-                apiService.streamChat(
-                query = query,
-                sessionId = sessionId,
-                model = model,
-                provider = provider,
-                onOpen = {
-                    // Server accepted + opened the stream → SENT.
-                    if (userMsgIdFinal != null) {
-                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                            try {
-                                messageDao.updateMessageStatus(userMsgIdFinal!!, MessageStatus.SENT)
-                            } catch (e: kotlinx.coroutines.CancellationException) {
-                                throw e
-                            } catch (_: Exception) { }
-                        }
-                    }
-                },
-                onChunk = { chunk ->
-                    fullResponse.append(chunk)
-                    // First content → the agent is answering → READ.
-                    if (fullResponse.length == chunk.length && userMsgIdFinal != null) {
-                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                            try {
-                                messageDao.updateMessageStatus(userMsgIdFinal!!, MessageStatus.READ)
-                            } catch (e: kotlinx.coroutines.CancellationException) {
-                                throw e
-                            } catch (_: Exception) { }
-                        }
-                    }
-                    onChunk(chunk)
-                },
-                onToolCall = onToolCall,
-                onToolResult = onToolResult,
-                onModelReverted = onModelReverted,
-                onAttachment = { url, type ->
-                    // In-stream attachment (Telegram: media+caption arrive
-                    // together) — apply the image/file to THIS bubble now.
-                    // NOTE: store the URL AS-IS (relative /uploads/... path).
-                    // stripUploadUrls strips upload paths from TEXT content —
-                    // applying it to the URL itself would blank it out and
-                    // the bubble would never render (zero /uploads GETs).
-                    if (url.isNotBlank() && msgId != null) {
-                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                            try {
-                                messageDao.updateMessageWithAttachment(
-                                    msgId, fullResponse.toString(), true, url, type,
-                                    url.substringAfterLast('/').takeIf { it.isNotBlank() }
-                                )
-                            } catch (e: kotlinx.coroutines.CancellationException) {
-                                throw e
-                            } catch (_: Exception) { }
-                        }
-                    }
-                    onAttachment(url, type)
-                },
-                onUsage = { pt, ct ->
-                    usagePrompt = pt
-                    usageCompletion = ct
-                    onUsage(pt, ct)
-                },
-                onTurnEnd = {
-                    // Follow-up turn boundary: persist the accumulated text
-                    // into the CURRENT placeholder, open a fresh placeholder
-                    // for the next turn, reset the builder (so [DONE] writes
-                    // only THIS turn), and tell the VM to clear its live
-                    // preview (the finalized bubble now renders from Room).
-                    val text = fullResponse.toString()
-                    fullResponse.setLength(0)
-                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                        try {
-                            messageDao.updateLastStreamingMessage(sessionId, text)
-                            messageDao.insertMessage(
-                                Message(
-                                    sessionId = sessionId,
-                                    role = MessageRole.ASSISTANT,
-                                    content = "",
-                                    isStreaming = true
-                                )
-                            )
-                            onTurnEnd()
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (_: Exception) { }
-                    }
-                },
-                attachmentUrl = attachmentUrl,
-                attachType = attachType,
-                attachmentPath = attachmentPath,
-                replyTo = replyTo,
-                onToolProgress = { id, emoji, tool, label, status ->
-                    val key = id.ifBlank { "$tool|$label|$status" }
-                    val line = toolActivity.getOrPut(key) { org.json.JSONObject() }
-                    line.put("n", tool).put("e", emoji).put("l", label)
-                    // running -> completed only overwrites; failed sticks out
-                    val cur = line.optString("s", "running")
-                    if (!(cur == "completed" && status == "running")) line.put("s", status)
-                    if (status == "running") onToolCall(id, tool, label)
-                    else onToolResult(id, status)
-                },
-            )
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            // Interrupted (Stop button / interrupt mode): the server saved
-            // the partial via its CancelledError path + push channel, but
-            // THIS placeholder row is still isStreaming=1 in Room. Finalize
-            // it with whatever text arrived (or drop it if nothing did) so
-            // no blank bubble survives. Then rethrow — cancellation must
-            // never write a ghost error message.
-            val partial = fullResponse.toString()
-            try {
-                if (partial.isBlank()) {
-                    messageDao.deleteMessage(msgId)
-                } else {
-                    finalizeMessage(msgId, sessionId, partial)
-                }
-            } catch (e2: kotlinx.coroutines.CancellationException) {
-                throw e2
-            } catch (_: Exception) { }
-            throw e
-        } catch (e: Exception) {
-            val errorMsg = e.message ?: ""
-            // Transparent retry on 401 — don't save error, don't show in UI
-            if (errorMsg.contains("401") && attempt < 2) {
-                // Delete the placeholder message we just created
-                messageDao.deleteMessage(msgId)
-                // Retry silently — user message already saved, so don't re-insert.
-                // Named params: a 401 retry must NOT drop the attachment
-                // or reply quote (positional call lost them).
-                return sendMessage(
-                    sessionId = sessionId,
-                    query = query,
-                    onChunk = onChunk,
-                    onToolCall = onToolCall,
-                    onToolResult = onToolResult,
-                    attempt = attempt + 1,
-                    attachmentUrl = attachmentUrl,
-                    attachType = attachType,
-                    attachmentPath = attachmentPath,
-                    replyTo = replyTo,
-                    onUsage = onUsage,
-                    model = model,
-                    provider = provider,
-                )
-            }
-            // Transient network failure BEFORE any content arrived (drop,
-            // idle timeout, connection reset): retry with backoff instead
-            // of writing an error bubble. No retry once content started —
-            // the resume-repair polls the server for the completed answer.
-            val noContentYet = fullResponse.isEmpty()
-            val transient = noContentYet && (
-                e is java.io.IOException ||
-                    errorMsg.contains("timeout", ignoreCase = true) ||
-                    errorMsg.contains("idle", ignoreCase = true) ||
-                    errorMsg.contains("Connection failed", ignoreCase = true)
-                )
-            if (transient && attempt < 3) {
-                messageDao.deleteMessage(msgId)
-                kotlinx.coroutines.delay(1_000L * attempt) // 1s, 2s backoff
-                return sendMessage(
-                    sessionId = sessionId,
-                    query = query,
-                    onChunk = onChunk,
-                    onToolCall = onToolCall,
-                    onToolResult = onToolResult,
-                    attempt = attempt + 1,
-                    attachmentUrl = attachmentUrl,
-                    attachType = attachType,
-                    attachmentPath = attachmentPath,
-                    replyTo = replyTo,
-                    onUsage = onUsage,
-                    model = model,
-                    provider = provider,
-                )
-            }
-            fullResponse.append(
-                "⚠️ " + when {
-                    e is java.net.UnknownHostException -> "Can't reach the server. Check the URL in Settings or scan a fresh QR."
-                    e is java.net.SocketTimeoutException -> "The server took too long to respond. Try again."
-                    e.message?.contains("401") == true -> "API key rejected. Update it in Settings → Account."
-                    else -> "Connection failed. Tap to retry after checking Settings."
-                })
-            // Tick → FAILED: the send did not complete after retries.
-            if (userMsgIdFinal != null) {
-                try {
-                    messageDao.updateMessageStatus(userMsgIdFinal!!, MessageStatus.FAILED)
-                } catch (e2: kotlinx.coroutines.CancellationException) {
-                    throw e2
-                } catch (_: Exception) { }
-            }
-        }
-
-        // Finalize message (strip upload URLs — the attachment bubble
-        // replaces them, Telegram never shows raw media links)
-        finalizeMessage(msgId, sessionId, fullResponse.toString())
-        if (toolActivity.isNotEmpty()) {
-            try {
-                val arr = org.json.JSONArray()
-                toolActivity.values.forEach { arr.put(it) }
-                messageDao.updateMessageToolActivity(msgId, arr.toString())
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) { }
-        }
-        sessionDao.incrementMessageCount(sessionId)
-
-        // Real token usage on the assistant row → Settings → Usage sums truth.
-        if (usagePrompt > 0) {
-            try { messageDao.updateMessageContextTokens(msgId, usagePrompt) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (_: Exception) { }
-        }
-        if (usagePrompt + usageCompletion > 0) {
-            try {
-                messageDao.updateMessageTokens(msgId, usagePrompt + usageCompletion)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) { }
-        }
-
-        // Tick → READ once the response COMPLETED. The first-text-chunk
-        // hook misses tool-only / reasoning-only / resume-repair responses
-        // (no text chunk ever fires), leaving those stuck on the single
-        // tick. Any completed turn with real content = read. (The FAILED
-        // path already marked FAILED above and starts with the error
-        // marker — never override it.)
-        if (userMsgIdFinal != null && !fullResponse.startsWith("⚠️ Connection error")) {
-            try {
-                messageDao.updateMessageStatus(userMsgIdFinal!!, MessageStatus.READ)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) { }
-        }
-
-            // Success — ping the user if the app is backgrounded.
-            if (!fullResponse.startsWith("⚠️ Connection error")) {
-                com.hermes.mobile.notifications.ResponseWatcherService.notifyReady(
-                    context, sessionId, fullResponse.toString(), query
-                )
-            }
-        } finally {
-            // Always drop the watcher: success, failure, retry (the retried
-            // attempt restarts it) and cancellation.
-            com.hermes.mobile.notifications.ResponseWatcherService.stop(context)
-        }
-
-        return fullResponse.toString()
-    }
 
     suspend fun resumeSession(sessionId: String): List<Message> {
         return messageDao.getMessagesOnce(sessionId)
@@ -596,19 +259,48 @@ class HermesRepository @Inject constructor(
         }
     }
 
-    /** Subscribe to the session's push channel (primary response delivery). */
-    fun subscribeSessionEvents(
-        sessionId: String,
-        onResponseReady: (String, Long, String, String) -> Unit,
-        onFailure: (Throwable?) -> Unit
-    ): okhttp3.sse.EventSource? {
-        return apiService.subscribeSessionEvents(sessionId, onResponseReady, onFailure)
+    // ─── Durable runs (the /v1/runs engine the chat screen uses) ───
+
+    val runController: com.hermes.mobile.data.runs.RunController
+        get() = runControllerRef
+
+    // ─── Session fork (branch this chat from here) ───
+
+    /** Server-side fork: copies the transcript into a NEW session id, then
+     * mirrors it locally (rows + model pin + continuity map). Returns the
+     * new local session id, or null when the server rejected the fork. */
+    suspend fun forkSession(sourceSessionId: String): String? {
+        val serverId = apiService.serverIdFor(sourceSessionId)?.takeIf { it.isNotBlank() }
+            ?: sourceSessionId
+        val newLocalId = UUID.randomUUID().toString()
+        val title = sessionDao.getSessionById(sourceSessionId)?.title
+        val newServerId = apiService.forkSession(serverId, newLocalId,
+            title = "${title ?: "chat"} fork") ?: return null
+        val source = sessionDao.getSessionById(sourceSessionId) ?: return null
+        sessionDao.upsertSession(source.copy(id = newLocalId, title = title?.plus(" (fork)"),
+            createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis()))
+        // Copy local rows so the fork opens instantly with full history
+        // (the server transcript is the source of truth going forward).
+        messageDao.getMessagesOnce(sourceSessionId).forEach {
+            messageDao.insertMessage(it.copy(id = 0, sessionId = newLocalId))
+        }
+        apiService.saveServerId(newLocalId, newServerId)
+        apiService.savedModelForSession(sourceSessionId)?.let {
+            apiService.saveModelForSession(newLocalId, it, apiService.savedModelSlugForSession(sourceSessionId))
+        }
+        return newLocalId
     }
 
-    /** INTERRUPT the running agent (Telegram interrupt mode — Stop button). */
-    suspend fun cancelChat(sessionId: String): Boolean {
-        return apiService.cancelChat(sessionId)
-    }
+    // ─── Cron jobs + skills (Settings screens, server truth) ───
+
+    suspend fun listJobs(): JSONArray? = apiService.listJobs()
+    suspend fun jobAction(jobId: String, action: String): Boolean = apiService.jobAction(jobId, action)
+    suspend fun listSkills(): JSONArray? = apiService.listSkills()
+
+    /** Auto-approve: when ON, a pending tool approval is answered
+     * 'session' the moment it arrives (user opted in from Settings). */
+    fun isAutoApprove(): Boolean = apiService.isAutoApprove()
+    fun saveAutoApprove(on: Boolean) = apiService.saveAutoApprove(on)
 
     /**
      * Repair a lost last response. If the session's newest local row is a

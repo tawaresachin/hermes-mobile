@@ -168,6 +168,10 @@ class ResponseWatcherService : Service() {
         // "is typing…" notification in place. Two ids left the typing
         // notification visible on top of the reply (user bug report).
         private const val NOTIF_ID_ONGOING = 1001
+        // Approval prompts are a SEPARATE row: they must survive the typing
+        // notification being replaced and outlive the reply (the decision is
+        // still pending after the run finishes or fails).
+        private const val NOTIF_ID_APPROVAL = 1002
 
         /** Set the moment a ready notification replaces the ongoing one —
          * the ticker stops re-posting "is typing…" over the reply. */
@@ -260,6 +264,41 @@ class ResponseWatcherService : Service() {
         /** Drop the foreground service (success, failure, retry, cancel). */
         fun stop(context: Context) {
             context.stopService(Intent(context, ResponseWatcherService::class.java))
+        }
+
+        /** A tool call is waiting for the user's Approve/Deny decision.
+         * The phone's core job (Codex/Devin pattern): wake the user with the
+         * exact command; tapping opens the session where the approval card
+         * lives. Separate id — never replaces the ongoing "typing" row. */
+        fun notifyApproval(context: Context, sessionId: String, command: String, description: String) {
+            if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+            ensureChannel(context)
+            val pi = PendingIntent.getActivity(
+                context, 2,
+                Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    putExtra(EXTRA_SESSION_ID, sessionId)
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val avatar: Bitmap? = try {
+                BitmapFactory.decodeResource(context.resources, R.drawable.hermes_logo_circle)
+            } catch (_: Exception) { null }
+            val notif = NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.hermes_logo_circle)
+                .setLargeIcon(avatar)
+                .setColor(0xFFE5A100.toInt())
+                .setContentTitle("Hermes needs your approval")
+                .setContentText(command.take(120).ifBlank { description.take(120) })
+                .setStyle(NotificationCompat.BigTextStyle()
+                    .bigText(listOf(command, description).filter { it.isNotBlank() }.joinToString("\n")))
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setContentIntent(pi)
+                .build()
+            try {
+                NotificationManagerCompat.from(context).notify(NOTIF_ID_APPROVAL, notif)
+            } catch (_: SecurityException) { }
         }
     }
 }

@@ -157,6 +157,12 @@ class SessionsViewModel @Inject constructor(
         }
     }
 
+    /** Live durable runs (RunController): instant 'working' + 'needs input'
+     * for sessions this device is running — no poll lag, no server round-trip.
+     * Complements the server-status map (which also covers other surfaces). */
+    val liveTurns: StateFlow<Map<String, com.hermes.mobile.data.runs.RunController.LiveTurn>> =
+        repository.runController.turns
+
     /** Poll the server's session status/source map (used on open + every
      * 10s while the tab is alive — cheap, one small GET). */
     fun refreshServerStatus() {
@@ -332,6 +338,7 @@ fun SessionsScreen(
             } else {
                 val pinnedIds by viewModel.pinnedSessions.collectAsState()
                 val serverStatus by viewModel.serverStatus.collectAsState()
+                val liveTurns by viewModel.liveTurns.collectAsState()
                 // Draft map: read once per composition (drafts are tiny).
                 val drafts = remember(sessions) {
                     com.hermes.mobile.data.local.DraftStore.init(context)
@@ -341,6 +348,7 @@ fun SessionsScreen(
                     sessions = sessions,
                     pinnedIds = pinnedIds,
                     serverStatus = serverStatus,
+                    liveTurns = liveTurns,
                     onSessionSelected = onSessionSelected,
                     onDeleteSession = viewModel::deleteSession,
                     onTogglePin = viewModel::togglePin,
@@ -463,6 +471,7 @@ private fun SessionsList(
     sessions: List<Session>,
     pinnedIds: Set<String>,
     serverStatus: Map<String, Pair<String, String>>,
+    liveTurns: Map<String, com.hermes.mobile.data.runs.RunController.LiveTurn> = emptyMap(),
     onSessionSelected: (String) -> Unit,
     onDeleteSession: (Session) -> Unit,
     onTogglePin: (String) -> Unit,
@@ -504,8 +513,10 @@ private fun SessionsList(
                         isPinned = session.id in pinnedIds,
                         onTogglePin = { onTogglePin(session.id) },
                         draftText = drafts[session.id] ?: "",
-                        status = serverStatus[session.id]?.first,
-                        source = serverStatus[session.id]?.second
+                        status = if (liveTurns.containsKey(session.id)) "working"
+                                 else serverStatus[session.id]?.first,
+                        source = serverStatus[session.id]?.second,
+                        needsInput = liveTurns[session.id]?.pendingApproval != null
                     )
                     // Telegram-style thin divider between rows
                     if (index < sessions.lastIndex) {
@@ -575,8 +586,8 @@ private fun SwipeDeleteBackground() {
 /** Tiny live-status badge on a session row (Cursor-style inbox): a colored
  * dot/icon for working/done/error + a mini-chip for the source. */
 @Composable
-private fun StatusBadge(status: String?, source: String?) {
-    if (status.isNullOrBlank() && source.isNullOrBlank()) return
+private fun StatusBadge(status: String?, source: String?, needsInput: Boolean = false) {
+    if (status.isNullOrBlank() && source.isNullOrBlank() && !needsInput) return
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.padding(start = 6.dp)
@@ -601,6 +612,21 @@ private fun StatusBadge(status: String?, source: String?) {
                 modifier = Modifier.size(14.dp)
             )
             else -> {}
+        }
+        if (needsInput) {
+            Spacer(modifier = Modifier.width(4.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFFFDF0D5))
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    text = "needs input",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF9A6A00)
+                )
+            }
         }
         if (source == "voice" || source == "swarm") {
             Spacer(modifier = Modifier.width(4.dp))
@@ -630,7 +656,8 @@ private fun SessionCard(
     onTogglePin: (() -> Unit)? = null,
     draftText: String = "",
     status: String? = null,
-    source: String? = null
+    source: String? = null,
+    needsInput: Boolean = false
 ) {
     val dateText = remember(session.updatedAt) {
         formatTimestamp(session.updatedAt)
@@ -695,7 +722,7 @@ private fun SessionCard(
                             modifier = Modifier.weight(1f, fill = false)
                         )
                         // ── Live status badge (server truth) ──
-                        StatusBadge(status = status, source = source)
+                        StatusBadge(status = status, source = source, needsInput = needsInput)
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))

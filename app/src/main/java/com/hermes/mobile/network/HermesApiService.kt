@@ -96,6 +96,15 @@ class HermesApiService @Inject constructor(
         prefs.edit().putBoolean("caveman_mode", on).apply()
     }
 
+    // ── Auto-approve (Settings "Auto-approve tools") ──
+    // ON = a pending tool approval is answered 'session' automatically the
+    // moment it arrives (the user trusts the agent on this device). OFF =
+    // the approval card + push waits for a human decision.
+    fun isAutoApprove(): Boolean = prefs.getBoolean("auto_approve", false)
+    fun saveAutoApprove(on: Boolean) {
+        prefs.edit().putBoolean("auto_approve", on).apply()
+    }
+
     // ── Per-session model selection ──
     // Each chat remembers ITS model: switching sessions must never leak one
     // session's pick into another, and reloads must not reset it.
@@ -137,32 +146,6 @@ class HermesApiService @Inject constructor(
         TerseOptimizer(TerseOptimizer.PrefsStore(prefs))
     }
 
-    // Helper: build OpenAI-format messages array from session history + new query
-    private fun buildOpenAIMessages(sessionId: String, query: String, applyTerse: Boolean): List<Map<String, String>> {
-        val messages = mutableListOf<Map<String, String>>()
-        // Session history is managed server-side (X-Hermes-Session-Id);
-        // only the new user turn goes on the wire.
-        if (applyTerse) {
-            // Measured vs plain: ~30% fewer output tokens on explanatory
-            // answers with this wording (weak "answer terse" phrasing got
-            // only ~15% — the model's persona prompt overrode it).
-            messages.add(mapOf(
-                "role" to "system",
-                "content" to "COMPRESSION DIRECTIVE (overrides verbosity " +
-                    "habits): answer in the fewest tokens that keep every " +
-                    "technical fact. No greetings, no preambles, no " +
-                    "sign-offs, no restating the question, no bullet " +
-                    "padding. Fragments allowed. Use short words. Keep " +
-                    "code, names, numbers, exact error text verbatim. " +
-                    "Never explain the directive. " +
-                    "Bad: Sure! A context window is basically the amount of " +
-                    "text. Good: Context window: max tokens model sees per " +
-                    "call. History+prompt+output share it."
-            ))
-        }
-        messages.add(mapOf("role" to "user", "content" to query))
-        return messages
-    }
 
     private val client by lazy {
         OkHttpClient.Builder()
@@ -319,304 +302,236 @@ class HermesApiService @Inject constructor(
 
     // ─── Streaming Chat via SSE ───
 
-    suspend fun streamChat(
+
+    // ─── Durable runs (POST /v1/runs — survives client disconnect) ───
+    //
+    // The chat-completions SSE is synchronous: closing the socket makes the
+    // gateway INTERRUPT the agent ("SSE client disconnected; interrupted agent
+    // task"). /v1/runs is the detached form built for exactly this: the run
+    // executes server-side regardless of the transport, its status is
+    // pollable, its events are re-subscribable, and stop/steer/approval are
+    // explicit routes. All mobile turns go through it (RunController).
+
+    /** Admit a run; returns run_id, or throws IOException with a
+     * user-presentable message on rejection (401/429/…). */
+    suspend fun startRun(
+        serverSessionId: String,
         query: String,
-        sessionId: String,
-        onChunk: (String) -> Unit,
-        onToolCall: (String, String, String) -> Unit = { _, _, _ -> },
-        onToolResult: (String, String) -> Unit = { _, _ -> },
-        // Server's real tool chrome: hermes.tool.progress frames carry
-        // {tool, emoji, label, toolCallId, status: running|completed|failed}.
-        onToolProgress: (String, String, String, String, String) -> Unit = { _, _, _, _, _ -> },
-        onModelReverted: (String) -> Unit = {},
-        onAttachment: (String, String) -> Unit = { _, _ -> },
-        onTurnEnd: () -> Unit = {},
-        onOpen: () -> Unit = {},
-        onUsage: (Long, Long) -> Unit = { _, _ -> },
-        attachmentUrl: String = "",
-        attachType: String = "",
-        attachmentPath: String = "",
-        replyTo: String? = null,
-        model: String? = null,
-        provider: String? = null,
-    ): Unit = withContext(Dispatchers.IO) {
+        model: String,
+        provider: String?,
+        instructions: String?,
+    ): String = withContext(Dispatchers.IO) {
         val cfg = config ?: getConfig()
         val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: "http://localhost:8080"
-        val resolvedKey = cfg?.apiKey?.takeIf { it.isNotBlank() } ?: ""
-        // Build OpenAI-compatible chat completion request.
-        // REPLY CONTEXT: the quote chip is UI-only — the server has no
-        // reply-to field, so the quoted text rides INSIDE the user message
-        // (and therefore into persisted history): the agent sees exactly
-        // what the user is replying to.
-        val wireQuery: String = if (!replyTo.isNullOrBlank()) {
-            val quoted = replyTo.trim().replace("\n", " ").take(400)
-            "Re: \"" + quoted + "\"\n\n" + query
-        } else query
-        // ATTACHMENT CONTEXT (Telegram parity): the wire carries ONLY this
-        // user turn — history lives server-side — so without this note the
-        // agent never learns a file was attached. When the first model fails
-        // and the user switches + says "summarize the attachment", there was
-        // nothing to pick up. The plugin-stored absolute path lets the agent
-        // read the file with its own tools (same host).
-        val mediaNote = when {
-            attachmentUrl.isBlank() -> ""
-            attachmentPath.isNotBlank() && attachType == "file" ->
-                "[The user sent a document: '$attachmentPath'. It is saved at: $attachmentPath. " +
-                    "Its text is not inlined here (binary formats such as PDF/DOCX). To read it, " +
-                    "extract the document's text yourself — for example with the terminal tool or " +
-                    "the ocr-and-documents skill — before answering, instead of asking the user to " +
-                    "paste the contents.]"
-            attachmentPath.isNotBlank() ->
-                "[The user sent a $attachType: '$attachmentPath'. It is saved at: $attachmentPath — " +
-                    "read or analyze that file directly if the request involves it.]"
-            else ->
-                "[The user sent a $attachType attachment at: $attachmentUrl (downloadable with the " +
-                    "session API key). If you cannot access it, ask them to resend.]"
-        }
-        val finalQuery = if (mediaNote.isEmpty()) wireQuery
-            else if (query.isBlank()) mediaNote else "$wireQuery\n\n$mediaNote"
-        val safeModel = if (!model.isNullOrBlank()) model else fetchDefaultModelId()
-        // Token Optimizer: apply the terse directive only where it pays —
-        // learned per model from real usage (probe turns without it).
-        val applyTerse = terseOptimizer.shouldApply(safeModel, isCaveman())
-        val messages = buildOpenAIMessages(sessionId, finalQuery, applyTerse)
         val payload = JSONObject().apply {
-            put("model", safeModel)
-            put("messages", JSONArray(messages))
-            put("stream", true)
-            // Provider rides only for NON-alias models: /v1/models aliases are
-            // route-pinned server-side and reject an explicit provider (400).
-            if (!provider.isNullOrBlank() && safeModel !in aliasIds) {
-                put("provider", provider)
-            }
+            put("input", query)
+            put("session_id", serverSessionId)
+            if (model.isNotBlank()) put("model", model)
+            // Provider rides only for NON-alias models (route-pinned aliases
+            // reject an explicit provider with 400 — same contract as chat).
+            if (!provider.isNullOrBlank() && model !in aliasIds) put("provider", provider)
+            if (!instructions.isNullOrBlank()) put("instructions", instructions)
         }
-
-        val reqBuilder = Request.Builder()
-            .url("$baseUrl/v1/chat/completions")
+        val request = Request.Builder()
+            .url("$baseUrl/v1/runs")
             .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                val msg = try {
+                    JSONObject(body).optJSONObject("error")?.optString("message", "")
+                        ?.ifBlank { null } ?: body.take(120)
+                } catch (_: Exception) { body.take(120) }
+                throw IOException("${response.code}: $msg")
+            }
+            JSONObject(body).optString("run_id", "").also {
+                if (it.isBlank()) throw IOException("Server accepted the run but returned no run_id")
+            }
+        }
+    }
+
+    /** Live event stream for one run. Frames carry the event name in the
+     * JSON body ("event" key) — decoded via RunEventCodec. onClosed fires on
+     * terminal event / transport loss; the caller decides whether to poll. */
+    fun subscribeRunEvents(
+        runId: String,
+        onEvent: (com.hermes.mobile.data.runs.RunEventCodec.RunEvent) -> Unit,
+        onTransportLost: () -> Unit,
+    ): EventSource? {
+        val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() } ?: return null
+        val request = Request.Builder()
+            .url("$baseUrl/v1/runs/$runId/events")
             .header("Accept", "text/event-stream")
-        // Declare OUR session id from the very first turn (local UUID is a
-        // valid server id — verified live); switch to the server's id once
-        // one is known (e.g. after compression rotation).
-        reqBuilder.header(
-            "X-Hermes-Session-Id",
-            serverIdFor(sessionId)?.takeIf { it.isNotBlank() } ?: sessionId
-        )
-        if (resolvedKey.isNotBlank()) {
-            reqBuilder.header("Authorization", "Bearer $resolvedKey")
-        }
-        val request = reqBuilder.build()
-        suspendCancellableCoroutine { continuation ->
-
-            val factory = EventSources.createFactory(client)
-            val completed = java.util.concurrent.atomic.AtomicBoolean(false)
-            // Idle watchdog: a silently dead connection (no events) would
-            // otherwise hold the typing indicator until the 300s OkHttp
-            // read timeout. Track last-event time; kill on silence.
-            var lastEventMs = System.currentTimeMillis()
-            val source = factory.newEventSource(request, object : EventSourceListener() {
-                override fun onOpen(eventSource: EventSource, response: Response) {
-                    lastEventMs = System.currentTimeMillis()
-                    // Persist the (possibly rotated by compression) server id
-                    // so the NEXT message continues the same transcript.
-                    response.header("X-Hermes-Session-Id")?.takeIf { it.isNotBlank() }?.let {
-                        saveServerId(sessionId, it)
-                    }
-                    onOpen()
-                }
-                override fun onEvent(
-                    eventSource: EventSource,
-                    id: String?,
-                    type: String?,
-                    data: String
-                ) {
-                    if (completed.get()) return
-                    lastEventMs = System.currentTimeMillis()
-
-                    if (data == "[DONE]") {
-                        if (completed.compareAndSet(false, true)) {
-                            continuation.resume(Unit)
-                        }
-                        return
-                    }
-                    // Tool chrome rides the SSE `event:` line (server frames
-                    // carry NO "type" field in the body). Match it here —
-                    // otherwise the frame falls through to the plain-text
-                    // fallback and raw JSON leaks into the bubble.
-                    if (type == "hermes.tool.progress") {
-                        try {
-                            val o = JSONObject(data)
-                            onToolProgress(
-                                o.optString("toolCallId", ""),
-                                o.optString("emoji", "⚙️"),
-                                o.optString("tool", ""),
-                                o.optString("label", ""),
-                                o.optString("status", "running")
-                            )
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (_: Exception) { }
-                        return
-                    }
-                    try {
-                        val json = JSONObject(data)
-                        // Final usage frame (may arrive with or without choices):
-                        // persist real token counts instead of showing 0.
-                        json.optJSONObject("usage")?.let { u ->
-                            val pt = u.optLong("prompt_tokens", 0L)
-                            val ct = u.optLong("completion_tokens", 0L)
-                            if (pt + ct > 0) {
-                                // Token Optimizer feedback: this turn's real
-                                // output size trains the per-model verdict.
-                                terseOptimizer.observe(safeModel, ct, applyTerse)
-                                onUsage(pt, ct)
-                            }
-                        }
-                        // OpenAI SSE format: {"choices":[{"delta":{"content":".."},"message":{...}}]}
-                        // Server sends this. Must handle before custom type check.
-                        val choices = json.optJSONArray("choices")
-                        if (choices != null && choices.length() > 0) {
-                            val first = choices.optJSONObject(0)
-                            if (first != null) {
-                                val delta = first.optJSONObject("delta")
-                                val deltaContent = delta?.optString("content", "") ?: ""
-                                if (deltaContent.isNotEmpty()) {
-                                    onChunk(deltaContent)
-                                    return
-                                }
-                                val message = first.optJSONObject("message")
-                                val msgContent = message?.optString("content", "") ?: ""
-                                if (msgContent.isNotEmpty()) {
-                                    onChunk(msgContent)
-                                    return
-                                }
-                                val finish = first.optString("finish_reason", "")
-                                // Server error chunk: surface it, do not stay silent.
-                                if (finish.isNotEmpty()) {
-                                    val errObj = json.optJSONObject("error")
-                                        ?: first.optJSONObject("error")
-                                    val errMsg = errObj?.optString("message", "") ?: ""
-                                    if (errMsg.isNotEmpty()) {
-                                        onChunk("Error: $errMsg")
-                                    }
-                                    return
-                                }
-                            }
-                        }
-                        val eventType = json.optString("type", "")
-                        if (eventType.isEmpty() && choices == null) {
-                            // Plain text fallback
-                            if (data.isNotEmpty()) onChunk(data)
-                            return
-                        }
-                        when (eventType) {
-                            "text" -> {
-                                val content = json.optString("content", "")
-                                if (content.isNotEmpty()) onChunk(content)
-                            }
-                            "hermes.tool.progress" -> {
-                                onToolProgress(
-                                    json.optString("toolCallId", ""),
-                                    json.optString("emoji", "⚙️"),
-                                    json.optString("tool", ""),
-                                    json.optString("label", ""),
-                                    json.optString("status", "running")
-                                )
-                            }
-                            "tool_call" -> {
-                                val tcId = json.optString("id", "")
-                                val name = json.optString("name", "")
-                                val args = json.optString("arguments", "")
-                                if (tcId.isNotEmpty()) onToolCall(tcId, name, args)
-                            }
-                            "tool_result" -> {
-                                val tcId = json.optString("id", "")
-                                val output = json.optString("output", "")
-                                val error = json.optString("error", "")
-                                onToolResult(tcId, output.ifEmpty { error })
-                            }
-                            // Server auto-reverted this session's model to
-                            // the default after a hard provider failure.
-                            "model_reverted" -> {
-                                onModelReverted(json.optString("content", ""))
-                            }
-                            // Telegram: media + caption arrive together. The
-                            // server emits this in-stream (before [DONE])
-                            // when the reply includes a session upload -
-                            // apply the image/file to the bubble NOW.
-                            "attachment" -> {
-                                onAttachment(
-                                    json.optString("url", ""),
-                                    json.optString("attach_type", "")
-                                )
-                            }
-                            // Follow-up turn boundary: previous bubble is
-                            // complete, a fresh one starts for the next turn.
-                            "turn_end" -> {
-                                onTurnEnd()
-                            }
-                            "error" -> {
-                                val msg = json.optString("content", "Unknown error")
-                                onChunk("⚠️ $msg")
-                            }
-                        }
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        // Fallback: treat as plain text
-                        onChunk(data)
-                    }
-                }
-
-                override fun onFailure(
-                    eventSource: EventSource,
-                    t: Throwable?,
-                    response: Response?
-                ) {
-                    if (completed.compareAndSet(false, true)) {
-                        // 401 = the saved API key is wrong/revoked. There is no
-                        // refresh flow (API-key auth), so surface a clear error.
-                        if (response?.code == 401) {
-                            continuation.resumeWithException(
-                                IOException("401 - API key rejected. Re-scan the QR code or update the key in Settings."))
-                            return
-                        }
-                        val ex = t ?: IOException("Connection failed: ${response?.code ?: 0}")
-                        continuation.resumeWithException(ex)
-                    }
-                }
-
-                override fun onClosed(eventSource: EventSource) {
-                    if (completed.compareAndSet(false, true)) {
-                        continuation.resume(Unit)
-                    }
-                }
-            })
-
-            // Idle watchdog: fires when no event arrived for the idle
-            // window (dead connection, hung provider). Cancels the source
-            // and surfaces a retryable failure.
-            val watchdog = CoroutineScope(Dispatchers.IO).launch {
-                while (!completed.get()) {
-                    delay(WATCHDOG_POLL_MS)
-                    if (!completed.get() &&
-                        System.currentTimeMillis() - lastEventMs > STREAM_IDLE_TIMEOUT_MS
-                    ) {
-                        if (completed.compareAndSet(false, true)) {
-                            source.cancel()
-                            continuation.resumeWithException(
-                                IOException("Stream idle - no data for ${STREAM_IDLE_TIMEOUT_MS / 1000}s")
-                            )
-                        }
-                        return@launch
-                    }
-                }
+            .build()
+        val factory = EventSources.createFactory(client)
+        return factory.newEventSource(request, object : EventSourceListener() {
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                val ev = com.hermes.mobile.data.runs.RunEventCodec.decode(data)
+                if (ev != null) onEvent(ev)
             }
-            continuation.invokeOnCancellation {
-                source.cancel()
-                watchdog.cancel()
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                onTransportLost()
             }
+            override fun onClosed(eventSource: EventSource) {
+                onTransportLost()
+            }
+        })
+    }
+
+    /** Resolve the LIVE session tip for a server id: compression rotations
+     * end a session and fork a child; /messages resolves through the lineage
+     * and echoes the tip in its envelope. The run API never returns a
+     * rotated id (unlike chat-completions' X-Hermes-Session-Id header), so
+     * the app re-reads it after every settled turn to stay on the tip. */
+    suspend fun resolveSessionTip(serverSessionId: String): String? = withContext(Dispatchers.IO) {
+        val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext null
+        try {
+            val request = Request.Builder()
+                .url("$baseUrl/api/sessions/$serverSessionId/messages?limit=1").get().build()
+            client.newCall(request).execute().use { r ->
+                if (!r.isSuccessful) return@use null
+                JSONObject(r.body?.string() ?: return@use null).optString("session_id", "").ifBlank { null }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+    }
+
+    /** Pollable run status (survives transport loss; output on completion). */
+    suspend fun fetchRunStatus(runId: String): JSONObject? = withContext(Dispatchers.IO) {
+        val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() } ?: return@withContext null
+        try {
+            val request = Request.Builder().url("$baseUrl/v1/runs/$runId").get().build()
+            client.newCall(request).execute().use { r ->
+                if (!r.isSuccessful) return@use null
+                JSONObject(r.body?.string() ?: return@use null)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+    }
+
+    private suspend fun runAction(path: String, payload: JSONObject?): Boolean =
+        withContext(Dispatchers.IO) {
+            val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
+                ?: return@withContext false
+            try {
+                val builder = Request.Builder().url("$baseUrl$path")
+                val body = payload?.toString()?.toRequestBody(jsonMediaType)
+                    ?: ByteArray(0).toRequestBody(jsonMediaType)
+                builder.post(body).build().let { req ->
+                    client.newCall(req).execute().use { r -> r.isSuccessful }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { false }
         }
+
+    /** Real stop (replaces the closing-the-socket side effect). */
+    suspend fun stopRun(runId: String): Boolean =
+        runAction("/v1/runs/$runId/stop", JSONObject())
+
+    /** Inject guidance into a RUNNING run (Telegram mid-run steer parity). */
+    suspend fun steerRun(runId: String, text: String): Boolean =
+        runAction("/v1/runs/$runId/steer", JSONObject().put("input", text))
+
+    /** Resolve a pending approval: once | session | always | deny. */
+    suspend fun resolveApproval(runId: String, choice: String, requestId: String): Boolean {
+        val payload = JSONObject().put("choice", choice)
+        if (requestId.isNotBlank()) payload.put("request_id", requestId)
+        return runAction("/v1/runs/$runId/approval", payload)
+    }
+
+    // ── Active-run bookkeeping (prefs; survives process death) ──
+    // sessionId → runId for every run the server may still be finishing.
+    // On app start RunController re-attaches from this map: poll status,
+    // finalize the bubble, notify. This is what makes turns durable even if
+    // the whole app was killed.
+
+    fun activeRunId(sessionId: String): String? =
+        prefs.getString("active_run:$sessionId", null)?.takeIf { it.isNotBlank() }
+
+    fun saveActiveRun(sessionId: String, runId: String) {
+        prefs.edit().putString("active_run:$sessionId", runId).apply()
+    }
+
+    fun clearActiveRun(sessionId: String) {
+        prefs.edit().remove("active_run:$sessionId").apply()
+    }
+
+    fun sessionsWithActiveRuns(): List<String> =
+        prefs.all.keys.filter { it.startsWith("active_run:") }
+            .map { it.removePrefix("active_run:") }
+
+    /** Last observed SESSION-total usage per session — the per-turn token
+     * delta is (new total - last total); runs report session totals, not
+     * per-turn usage like the old chat-completions frame. */
+    fun lastUsageTotals(sessionId: String): Pair<Long, Long> =
+        prefs.getLong("usage_in:$sessionId", 0L) to prefs.getLong("usage_out:$sessionId", 0L)
+
+    fun saveUsageTotals(sessionId: String, inputTotal: Long, outputTotal: Long) {
+        prefs.edit()
+            .putLong("usage_in:$sessionId", inputTotal)
+            .putLong("usage_out:$sessionId", outputTotal)
+            .apply()
+    }
+
+    /** Token Optimizer surface for the run path (same learner the legacy
+     * stream uses — one verdict per model, no second state machine). */
+    fun terseDecision(modelId: String): Boolean =
+        terseOptimizer.shouldApply(modelId, isCaveman())
+
+    fun terseObserve(modelId: String, completionTokens: Long, directiveApplied: Boolean) =
+        terseOptimizer.observe(modelId, completionTokens, directiveApplied)
+
+    // ─── Session fork (branch this chat from here) ───
+
+    /** POST /api/sessions/{serverId}/fork — the server copies the transcript
+     * into a NEW session id we choose (client-side UUID keeps the local id
+     * scheme intact). Returns the new server id. */
+    suspend fun forkSession(serverSessionId: String, newId: String, title: String): String? =
+        withContext(Dispatchers.IO) {
+            val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
+                ?: return@withContext null
+            try {
+                val payload = JSONObject().put("id", newId).put("title", title)
+                val request = Request.Builder()
+                    .url("$baseUrl/api/sessions/$serverSessionId/fork")
+                    .post(payload.toString().toRequestBody(jsonMediaType))
+                    .build()
+                client.newCall(request).execute().use { r ->
+                    if (!r.isSuccessful) return@use null
+                    JSONObject(r.body?.string() ?: return@use null)
+                        .optJSONObject("session")?.optString("id", "")?.ifBlank { null }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+        }
+
+    // ─── Cron jobs + skills (server truth for the Settings screens) ───
+
+    suspend fun listJobs(): JSONArray? = withContext(Dispatchers.IO) {
+        val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext null
+        try {
+            val request = Request.Builder().url("$baseUrl/api/jobs?include_disabled=true").get().build()
+            client.newCall(request).execute().use { r ->
+                if (!r.isSuccessful) return@use null
+                JSONObject(r.body?.string() ?: return@use null).optJSONArray("jobs")
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+    }
+
+    suspend fun jobAction(jobId: String, action: String): Boolean =
+        runAction("/api/jobs/$jobId/$action", JSONObject())
+
+    suspend fun listSkills(): JSONArray? = withContext(Dispatchers.IO) {
+        val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext null
+        try {
+            val request = Request.Builder().url("$baseUrl/v1/skills").get().build()
+            client.newCall(request).execute().use { r ->
+                if (!r.isSuccessful) return@use null
+                val body = r.body?.string() ?: return@use null
+                val o = JSONObject(body)
+                o.optJSONArray("skills") ?: o.optJSONArray("data") ?: o.optJSONArray("items")
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
     }
 
     // ─── List Models ───
@@ -813,15 +728,6 @@ class HermesApiService @Inject constructor(
         }
     }
 
-    /** INTERRUPT the running agent (Telegram interrupt mode): the app's Stop
-     * button calls this while streaming, then cancels the local SSE job.
-     *
-     * The api_server has no cancel route (the old /v1/chat/completions/cancel
-     * is 404 — verified), but it reaps the agent as soon as the SSE connection
-     * closes (api_server.py: `_reap_disconnected_agent_processes`, source
-     * "api_server_sse_disconnect"). So closing our own stream IS the interrupt;
-     * there is nothing remote left to do. Always succeeds. */
-    suspend fun cancelChat(sessionId: String): Boolean = true
 
     // ─── Session status/source badges (server truth) ───
 
@@ -913,47 +819,6 @@ class HermesApiService @Inject constructor(
 
     // ─── Per-session push channel (response_ready) ───
 
-    /** Subscribe to the session's SSE event channel. The server PUSHES a
-     * 'response_ready' event the moment a response is saved - the chat
-     * patches instantly instead of polling. Returns the source (cancel it
-     * to stop); keepalive comments are ignored by the SSE parser. */
-    fun subscribeSessionEvents(
-        sessionId: String,
-        onResponseReady: (String, Long, String, String) -> Unit,
-        onFailure: (Throwable?) -> Unit
-    ): okhttp3.sse.EventSource? {
-        val baseUrl = config?.baseUrl ?: return null
-        val request = Request.Builder()
-            .url("$baseUrl/api/sessions/$sessionId/events")
-            .header("Accept", "text/event-stream")
-            .build()
-        val factory = EventSources.createFactory(client)
-        return factory.newEventSource(request, object : EventSourceListener() {
-            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                try {
-                    val json = JSONObject(data)
-                    if (json.optString("type") == "response_ready") {
-                        val content = json.optString("content", "")
-                        if (content.isNotBlank()) {
-                            onResponseReady(
-                                content,
-                                json.optLong("ts", 0L),
-                                json.optString("attachment_url", ""),
-                                json.optString("attachment_type", "")
-                            )
-                        }
-                    }
-                } catch (_: Exception) { }
-            }
-            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                onFailure(t)
-            }
-            override fun onClosed(eventSource: EventSource) {
-                // Treat close as down - the fallback poll + resubscribe kick in.
-                onFailure(null)
-            }
-        })
-    }
 
     // ─── Switch Model (via dedicated endpoint) ───
 

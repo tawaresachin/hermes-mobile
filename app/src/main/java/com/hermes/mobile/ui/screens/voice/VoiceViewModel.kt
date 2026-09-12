@@ -121,17 +121,33 @@ class VoiceViewModel @Inject constructor(
                 val provider = _availableModels.value
                     .firstOrNull { it.id == model }
                     ?.providerSlug?.takeIf { it.isNotBlank() }
-                val reply = repository.sendMessage(
+                // Durable run path: the turn survives screen changes and the
+                // voice loop just awaits its final text (streaming partials
+                // ride the live-turn flow). No synchronous SSE to hold open.
+                val startedAt = System.currentTimeMillis()
+                repository.runController.startTurn(
                     sessionId = sid,
                     query = text,
-                    onChunk = onChunk,
-                    model = model,
+                    model = model.orEmpty(),
                     provider = provider,
+                    onAdmitError = { onError(it) },
                 )
-                if (reply.startsWith("\u26a0\ufe0f")) {
-                    onError("Assistant did not answer. Check the model/connection and try again.")
-                } else {
-                    onComplete(reply)
+                // Partial captions while the run streams (voice loop shows
+                // live text): forward the growing snapshot as deltas.
+                val seen = java.util.concurrent.atomic.AtomicInteger(0)
+                val chunkJob = launch {
+                    repository.runController.streamingTextFlow(sid).collect { full ->
+                        if (full.length > seen.get()) {
+                            onChunk(full.substring(seen.getAndSet(full.length)))
+                        }
+                    }
+                }
+                val reply = repository.runController.awaitTurn(sid, startedAt)
+                chunkJob.cancel()
+                when {
+                    reply == null -> onError("Assistant did not answer. Check the model/connection and try again.")
+                    reply.startsWith("\u26a0\ufe0f") -> onError("Assistant did not answer. Check the model/connection and try again.")
+                    else -> onComplete(reply)
                 }
             } catch (ce: CancellationException) {
                 throw ce

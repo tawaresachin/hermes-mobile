@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -48,6 +49,7 @@ fun MessageActionSheet(
     onReply: () -> Unit,
     onDelete: () -> Unit,
     onForward: (() -> Unit)? = null,
+    onFork: (() -> Unit)? = null,
     onRegenerate: (() -> Unit)? = null,
     onEdit: (() -> Unit)? = null,
     onSelect: (() -> Unit)? = null,
@@ -86,6 +88,9 @@ fun MessageActionSheet(
             }
             if (!isUser && onRegenerate != null) {
                 SheetActionRow(Icons.Filled.Refresh, "Regenerate") { onRegenerate() }
+            }
+            if (onFork != null) {
+                SheetActionRow(Icons.AutoMirrored.Filled.CallSplit, "Fork chat from here") { onFork() }
             }
             SheetActionRow(Icons.Filled.Delete, "Delete", tint = MaterialTheme.colorScheme.error) { onDelete() }
         }

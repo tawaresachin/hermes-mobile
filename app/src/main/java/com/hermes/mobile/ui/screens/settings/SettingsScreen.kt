@@ -96,6 +96,11 @@ data class SettingsUiState(
     val messagesCount: Int = 0,
     val tokensUsed: Long = 0,
     val caveman: Boolean = false,
+    val autoApprove: Boolean = false,
+    // Cron jobs + skills (server truth, loaded on demand)
+    val jobs: List<org.json.JSONObject> = emptyList(),
+    val skills: List<Pair<String, String>> = emptyList(),  // name -> description
+    val serverListsLoading: Boolean = false,
     // True when the numbers came from the server ledger, false = local fallback.
     val usageIsServer: Boolean = true,
     // Auth fields
@@ -201,7 +206,7 @@ class SettingsViewModel @Inject constructor(
         }
         // Load usage stats
         loadUsageStats()
-        _uiState.update { it.copy(caveman = repository.isCaveman()) }
+        _uiState.update { it.copy(caveman = repository.isCaveman(), autoApprove = repository.isAutoApprove()) }
         // Direct-API posture (v0.0.1+): "signed in" == a saved base URL + API
         // key. The old bridge JWT session is gone; do not resurrect it.
         viewModelScope.launch {
@@ -263,6 +268,45 @@ class SettingsViewModel @Inject constructor(
     fun toggleCaveman(on: Boolean) {
         _uiState.update { it.copy(caveman = on) }
         repository.saveCaveman(on)
+    }
+
+    fun toggleAutoApprove(on: Boolean) {
+        _uiState.update { it.copy(autoApprove = on) }
+        repository.saveAutoApprove(on)
+    }
+
+    /** Pull cron jobs + skills from the server (Settings → Server section).
+     * One-shot on expand; failures leave the lists empty (never crash). */
+    fun loadServerLists() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(serverListsLoading = true) }
+            val jobs = try { repository.listJobs() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+            val skills = try { repository.listSkills() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+            _uiState.update {
+                it.copy(
+                    jobs = jobs?.let { arr -> (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i) } } ?: it.jobs,
+                    skills = skills?.let { arr ->
+                        (0 until arr.length()).mapNotNull { i ->
+                            arr.optJSONObject(i)?.let { o ->
+                                o.optString("name", "") to o.optString("description", "")
+                            }
+                        }.filter { it.first.isNotBlank() }
+                    } ?: it.skills,
+                    serverListsLoading = false,
+                )
+            }
+        }
+    }
+
+    fun runJobNow(jobId: String) {
+        viewModelScope.launch { repository.jobAction(jobId, "run"); loadServerLists() }
+    }
+
+    fun toggleJobPaused(jobId: String, paused: Boolean) {
+        viewModelScope.launch {
+            repository.jobAction(jobId, if (paused) "resume" else "pause")
+            loadServerLists()
+        }
     }
 
     val chatFontSp: kotlinx.coroutines.flow.StateFlow<Float> = repository.chatFontSp
@@ -711,6 +755,15 @@ fun SettingsScreen(
                     onCheckedChange = { viewModel.toggleCaveman(it) }
                 )
                 SettingsToggle(
+                    icon = Icons.Filled.FactCheck,
+                    title = "Auto-approve tools",
+                    subtitle = if (uiState.autoApprove)
+                        "Dangerous commands run without asking (this session)"
+                    else "Ask before running dangerous commands (card + notification)",
+                    checked = uiState.autoApprove,
+                    onCheckedChange = { viewModel.toggleAutoApprove(it) }
+                )
+                SettingsToggle(
                     icon = Icons.Filled.PowerSettingsNew,
                     title = "Keep Computer Awake",
                     subtitle = if (uiState.keepAwake) {
@@ -733,7 +786,14 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ─── 7. USAGE ───
+            // ─── 7. SERVER (cron jobs + skills, live from the gateway) ───
+            SettingsSection("Server") {
+                ServerListsPanel(viewModel = viewModel, uiState = uiState)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ─── 8. USAGE ───
             SettingsSection("Usage") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1173,6 +1233,102 @@ fun SettingsSection(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 content = content
             )
+        }
+    }
+}
+
+// ── Server panel: cron jobs + skills, live from the gateway ──
+// Collapsed by default (one tap to load — keeps Settings instant). Jobs get
+// Run-now + Pause/Resume; skills are a read-only list (the /skills slash
+// text dump, upgraded to a browsable screen).
+@Composable
+fun ServerListsPanel(viewModel: SettingsViewModel, uiState: SettingsUiState) {
+    var expanded by remember { mutableStateOf(false) }
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .clickable {
+                    expanded = !expanded
+                    if (expanded && uiState.jobs.isEmpty() && uiState.skills.isEmpty()) {
+                        viewModel.loadServerLists()
+                    }
+                }
+                .padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Filled.Schedule, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Scheduled jobs & skills",
+                    style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface)
+                Text(if (expanded) "From the gateway" else "Tap to load from the gateway",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
+            if (uiState.serverListsLoading) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null)
+            }
+        }
+        if (expanded) {
+            if (uiState.jobs.isEmpty()) {
+                Text("No jobs reported by the server.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 6.dp))
+            }
+            uiState.jobs.forEach { job ->
+                val id = job.optString("id")
+                val name = job.optString("name").ifBlank { id }
+                val enabled = job.optBoolean("enabled", true)
+                val state = job.optString("state")
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(name, style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface)
+                        Text(job.optString("schedule_display") +
+                                (if (!enabled || state == "paused") " · paused" else "") +
+                                (job.optString("next_run_at").take(10).let {
+                                    if (it.isNotBlank() && enabled) " · next $it" else "" }),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    TextButton(onClick = { viewModel.runJobNow(id) }) { Text("Run") }
+                    TextButton(onClick = { viewModel.toggleJobPaused(id, !enabled) }) {
+                        Text(if (enabled) "Pause" else "Resume")
+                    }
+                }
+                HorizontalDivider(thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text("Skills (${uiState.skills.size})",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            uiState.skills.forEach { (n, d) ->
+                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Icon(Icons.Filled.AutoAwesome, contentDescription = null,
+                        tint = HermesPrimary.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(n, style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+                        if (d.isNotBlank()) Text(d, style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
         }
     }
 }
