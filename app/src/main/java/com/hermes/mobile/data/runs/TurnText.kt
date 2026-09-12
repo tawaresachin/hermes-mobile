@@ -64,6 +64,29 @@ object TurnText {
             "Bad: Sure! A context window is basically the amount of text. Good: Context window: " +
             "max tokens model sees per call. History+prompt+output share it."
 
+    /** File-delivery directive. The gateway's api_server platform hint tells
+     * the agent MEDIA: tags are never intercepted and to write plain paths —
+     * true for generic API clients, FALSE for this app: the chat bubble
+     * parses every `MEDIA:/abs/path` line (ResponseMedia) and renders a
+     * downloadable file card fetched through the plugin's /api/mobile/file
+     * route. Without this override the agent states bare paths as text —
+     * the exact bug this directive kills. Appended AFTER the base prompt,
+     * so it wins the conflict. */
+    const val MEDIA_DIRECTIVE =
+        "FILE DELIVERY (overrides the platform note about MEDIA: tags not being " +
+            "intercepted): this chat surface IS an attachment-capable client. When " +
+            "you create or reference a file the user should receive, write it on " +
+            "its own line as MEDIA:/absolute/path/to/file (any type: apk, pdf, " +
+            "images, documents). The app renders each tag as a downloadable file " +
+            "card and it is never shown as text. Never paste a bare filesystem " +
+            "path as the delivery; never claim you cannot send files."
+
+    /** Per-run ephemeral system prompt = terse decision + media directive.
+     * Byte-stable per (model, toggle) state — built at the single send
+     * funnel so every path (chat, voice, retry, queue drain) matches. */
+    fun buildInstructions(applyTerse: Boolean): String =
+        if (applyTerse) TERSE_DIRECTIVE + "\n\n" + MEDIA_DIRECTIVE else MEDIA_DIRECTIVE
+
     /** Strip session-upload URLs from displayed text. The attachment bubble
      * (image preview / file row) replaces the URL — Telegram never shows raw
      * media links. Applied at FINALIZE time (full text available) because

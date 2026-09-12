@@ -191,7 +191,7 @@ class RunController @Inject constructor(
 
             val runId = try {
                 api.startRun(serverId, wire, safeModel, provider,
-                    if (applyTerse) TurnText.TERSE_DIRECTIVE else null)
+                    TurnText.buildInstructions(applyTerse))
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) {
                 // Admission failed — no server work exists. Clean the ghost.

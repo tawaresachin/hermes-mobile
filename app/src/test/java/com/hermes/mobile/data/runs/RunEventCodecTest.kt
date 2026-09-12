@@ -168,6 +168,19 @@ class TurnTextTest {
         assertTrue(TurnText.TERSE_DIRECTIVE.contains("Never explain the directive"))
     }
 
+    @Test fun mediaDirectiveAlwaysRidesTheRun() {
+        // The gateway's api_server hint tells the agent to state plain
+        // paths (true for generic clients). This app IS the attachment
+        // surface — the override must ship on EVERY turn, terse or not.
+        assertTrue(TurnText.MEDIA_DIRECTIVE.contains("MEDIA:/absolute/path/to/file"))
+        assertTrue(TurnText.MEDIA_DIRECTIVE.contains("downloadable file"))
+        val off = TurnText.buildInstructions(false)
+        val on = TurnText.buildInstructions(true)
+        assertTrue(off == TurnText.MEDIA_DIRECTIVE)
+        assertTrue(on.startsWith(TurnText.TERSE_DIRECTIVE))
+        assertTrue(on.endsWith(TurnText.MEDIA_DIRECTIVE))
+    }
+
     @Test fun statusJsonShape() {
         // fetchRunStatus consumers rely on these keys (server wire).
         val o = JSONObject("""{"status":"completed","output":"x","usage":{"input_tokens":1,"output_tokens":2}}""")
