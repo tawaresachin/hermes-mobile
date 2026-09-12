@@ -33,7 +33,9 @@ object RunEventCodec {
         data class Failed(val error: String) : RunEvent
         data class Cancelled(val partial: String) : RunEvent
         /** Non-terminal status transitions the UI mirrors (stopping/steered). */
-        data class Status(val name: String) : RunEvent
+        /** Status/control event. note != null for run.status (agent
+         * lifecycle: rate-limit wait, retry countdown, provider warning). */
+        data class Status(val name: String, val note: String? = null) : RunEvent
     }
 
     /** Decode one SSE data payload. Returns null for frames we ignore
@@ -65,6 +67,8 @@ object RunEventCodec {
             }
             "run.failed" -> RunEvent.Failed(o.optString("error", "Run failed"))
             "run.cancelled" -> RunEvent.Cancelled(o.optString("output", ""))
+            "run.status" -> RunEvent.Status(o.optString("event"),
+                note = o.optString("note").ifBlank { null })
             "run.stopping", "run.steered", "approval.responded" -> RunEvent.Status(o.optString("event"))
             else -> null
         }

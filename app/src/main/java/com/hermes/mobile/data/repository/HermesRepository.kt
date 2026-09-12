@@ -240,8 +240,24 @@ class HermesRepository @Inject constructor(
     /** Poll the server for a response the local stream may have missed
      * (dead SSE connection, detached/backgrounded run). Used as the
      * catch-up + fallback channel; the push subscription is primary. */
+    /** Last server message_count per session (catch-up poll cheap check).
+     * The full transcript is a 0.5-5 MB download; polling it every 5s on a
+     * Tailscale link throttled the gateway and the UI ("goes in loop").
+     * Poll /api/sessions/{id} (~1 KB) instead; refetch only on change. */
+    private val lastSeenMsgCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     suspend fun pollServerResponse(sessionId: String): Boolean {
         try {
+            val count = apiService.fetchSessionMessageCount(sessionId)
+            if (count != null) {
+                val prev = lastSeenMsgCount[sessionId]
+                if (prev != null && count == prev) return false
+                // First sight of a session: adopt the count WITHOUT fetching
+                // the transcript (local rows already came via resumeSession)
+                // unless a response is actually pending.
+                lastSeenMsgCount[sessionId] = count
+                if (prev == null) return false
+            }
             val serverMsgs = apiService.fetchSessionMessages(sessionId) ?: return false
             val tail = serverMsgs.lastOrNull() ?: return false
             if (tail.optString("role") != "assistant") return false
@@ -259,11 +275,15 @@ class HermesRepository @Inject constructor(
         }
     }
 
+    /** Forget the cheap-check baseline (session deleted/forked). */
+    fun forgetPollBaseline(sessionId: String) { lastSeenMsgCount.remove(sessionId) }
+
     /** Server-truth slash command list (same source as the Telegram menu). */
     suspend fun fetchServerCommands() = apiService.fetchServerCommands()
 
     /** Hermes update state on the host (plugin /api/mobile/update/check). */
     suspend fun updateCheck(fresh: Boolean = false) = apiService.updateCheck(fresh)
+    suspend fun updateVersion() = apiService.updateVersion()
     suspend fun updateApply() = apiService.updateApply()
 
     /** Expand a skill slash command via the server (Telegram-parity

@@ -649,6 +649,7 @@ class ChatViewModel @Inject constructor(
                     } ?: emptyList()
                     _pendingApproval.value = turn?.pendingApproval
                         ?.let { ApprovalUi(it.command, it.description, it.choices) }
+                    _turnStatusNote.value = turn?.statusNote
                     // Turn settled (busy → idle for THIS session): drain the
                     // FIFO queue — the next queued message gets its turn now.
                     if (turn == null && lastBusySid == sid) {
@@ -704,6 +705,11 @@ class ChatViewModel @Inject constructor(
 
     private val _pendingApproval = MutableStateFlow<ApprovalUi?>(null)
     val pendingApproval: StateFlow<ApprovalUi?> = _pendingApproval.asStateFlow()
+
+    /** Agent lifecycle note from the live run (rate-limit wait, retry
+     * countdown) — the header subtitle shows it instead of bare "thinking". */
+    private val _turnStatusNote = MutableStateFlow<String?>(null)
+    val turnStatusNote: StateFlow<String?> = _turnStatusNote.asStateFlow()
 
     fun resolveApproval(choice: String) {
         val sid = _sessionId.value ?: return
@@ -847,15 +853,13 @@ class ChatViewModel @Inject constructor(
         super.onCleared()
     }
 
-    // ── Clear session ──
-    fun clearSession() {
-        val sid = _sessionId.value ?: return
-        viewModelScope.launch {
-            repository.clearSession(sid)
-            _messages.value = emptyList()
-            _streamingContent.value = ""
-            _isStreaming.value = false
-        }
+    /** Top-bar "+": start a fresh session and switch to it — same as the
+     * Home "New chat" card. (Was: cleared the CURRENT session's local
+     * messages, which looked like a no-op in Sessions and destroyed chat
+     * history on a mis-tap.) A live durable run on the old session keeps
+     * running there; returning via Sessions re-attaches to it. */
+    fun newChat() {
+        viewModelScope.launch { createNewSession() }
     }
 
     // ── Model Management ──
@@ -1266,6 +1270,7 @@ fun ChatScreen(
     val contextUsed by vm.contextUsed.collectAsState()
     val contextTotal by vm.contextTotal.collectAsState()
     val pendingApproval by vm.pendingApproval.collectAsState()
+    val turnStatusNote by vm.turnStatusNote.collectAsState()
     // Telegram-parity send-while-running: always QUEUE (no mode chips).
     // Steer stays available to power users as the /steer slash command.
     // User-tunable chat text size (Preferences slider; default 15sp).
@@ -1498,9 +1503,12 @@ fun ChatScreen(
                         Text(
                             // Telegram-style: while the agent is thinking
                             // (streaming, no token yet) the subtitle becomes
-                            // an animated "thinking…" instead of the model.
+                            // an animated "thinking…" instead of the model —
+                            // or the live provider note (rate-limit wait,
+                            // retry countdown) so a long backoff never reads
+                            // as a dead chat.
                             text = if (isStreaming && streamingContent.isBlank())
-                                ThinkingSubtitle()
+                                turnStatusNote?.takeIf { it.isNotBlank() } ?: ThinkingSubtitle()
                             else
                                 selectedModelName,
                             style = MaterialTheme.typography.bodySmall,
@@ -1526,8 +1534,8 @@ fun ChatScreen(
                         tint = if (showSearch) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                // New chat
-                IconButton(onClick = { vm.clearSession() }) {
+                // New chat — creates + opens a fresh session
+                IconButton(onClick = { vm.newChat() }) {
                     Icon(
                         imageVector = Icons.Filled.Add,
                         contentDescription = "New chat",

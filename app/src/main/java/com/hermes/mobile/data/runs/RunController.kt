@@ -88,6 +88,9 @@ class RunController @Inject constructor(
         val toolLines: List<ToolTrailReducer.Line> = emptyList(),
         val pendingApproval: ApprovalRequest? = null,
         val stopping: Boolean = false,
+        /** Latest agent lifecycle note (rate-limit wait / retry countdown)
+         * surfaced so a long provider backoff never reads as a dead chat. */
+        val statusNote: String? = null,
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -291,6 +294,7 @@ class RunController @Inject constructor(
             is RunEventCodec.RunEvent.Status -> {
                 if (ev.name == "run.stopping") updateTurn(sessionId) { it.copy(stopping = true) }
                 if (ev.name == "approval.responded") updateTurn(sessionId) { it.copy(pendingApproval = null) }
+                if (ev.note != null) updateTurn(sessionId) { it.copy(statusNote = ev.note) }
             }
         }
     }
@@ -317,6 +321,9 @@ class RunController @Inject constructor(
                     continue
                 }
                 misses = 0
+                status.optString("note").takeIf { it.isNotBlank() }?.let { n ->
+                    updateTurn(sessionId) { if (it.statusNote != n) it.copy(statusNote = n) else it }
+                }
                 when (status.optString("status")) {
                     "completed" -> {
                         val u = status.optJSONObject("usage")

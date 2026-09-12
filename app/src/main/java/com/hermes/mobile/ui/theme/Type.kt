@@ -35,21 +35,21 @@ val HermesTypography = Typography(
     titleLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 18.sp,
-        lineHeight = 24.sp
+        fontSize = 17.sp,
+        lineHeight = 22.sp
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
+        fontSize = 15.sp,
+        lineHeight = 20.sp,
         letterSpacing = 0.15.sp
     ),
     bodyLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
+        fontSize = 15.sp,
+        lineHeight = 21.sp,
         letterSpacing = 0.5.sp
     ),
     bodyMedium = TextStyle(
@@ -58,8 +58,10 @@ val HermesTypography = Typography(
         // Telegram parity (verified in DrKLO/Telegram source): message text
         // = SharedConfig.fontSize 16dp + lineSpacing dp(2). This style IS
         // the bubble body + input field, so the chat rides one token.
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
+        // 15sp = the Preferences slider default; one notch under Telegram's
+        // 16 to match Settings/Home/Sessions rows (user call).
+        fontSize = 15.sp,
+        lineHeight = 20.sp,
         letterSpacing = 0.15.sp
     ),
     bodySmall = TextStyle(

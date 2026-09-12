@@ -536,6 +536,21 @@ class HermesApiService @Inject constructor(
 
     // ─── Hermes update (plugin: /api/mobile/update/*) ───────────
     /** GET /api/mobile/update/check — report-only; wraps `hermes update --check`. */
+    /** GET /api/mobile/update/version — instant installed version + sha
+     * (no fetch, no CLI): seeds the About row before any check runs. */
+    suspend fun updateVersion(): JSONObject? = withContext(Dispatchers.IO) {
+        val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext null
+        try {
+            val request = Request.Builder().url("$baseUrl/api/mobile/update/version").get().build()
+            client.newCall(request).execute().use { r ->
+                if (!r.isSuccessful) return@use null
+                JSONObject(r.body?.string() ?: return@use null).takeIf { it.optBoolean("ok", false) }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { null }
+    }
+
     suspend fun updateCheck(fresh: Boolean = false): JSONObject? = withContext(Dispatchers.IO) {
         val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
             ?: return@withContext null
@@ -1013,6 +1028,24 @@ class HermesApiService @Inject constructor(
      * Returns list of {role, content, timestamp} or null on failure.
      * Used to repair a last response lost to an interrupted stream.
      */
+    /** GET /api/sessions/{id} — tiny meta row (message_count etc). Cheap
+     * change-detector for the catch-up poll: only fetch the full transcript
+     * when the server count actually moves. */
+    suspend fun fetchSessionMessageCount(sessionId: String): Int? = withContext(Dispatchers.IO) {
+        val baseUrl = config?.baseUrl ?: return@withContext null
+        try {
+            val request = Request.Builder()
+                .url("$baseUrl/api/sessions/$sessionId").get().build()
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                JSONObject(resp.body?.string() ?: return@withContext null)
+                    .optJSONObject("session")?.optInt("message_count", -1)
+                    ?.takeIf { it >= 0 }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { null }
+    }
+
     suspend fun fetchSessionMessages(sessionId: String): List<JSONObject>? {
         val baseUrl = config?.baseUrl ?: return null
         return withContext(Dispatchers.IO) {

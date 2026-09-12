@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -94,6 +95,7 @@ data class UpdatePanelState(
     val branch: String = "",
     val applying: Boolean = false,
     val error: String? = null,
+    val installedVersion: String = "",
 )
 
 data class SettingsUiState(
@@ -293,6 +295,19 @@ class SettingsViewModel @Inject constructor(
     private val _updateState = MutableStateFlow(UpdatePanelState())
     val updateState: StateFlow<UpdatePanelState> = _updateState.asStateFlow()
 
+    /** Seed the About row instantly (no fetch): version + sha only. */
+    fun loadInstalledVersion() {
+        viewModelScope.launch {
+            val o = try { repository.updateVersion() }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            if (o != null) _updateState.update {
+                it.copy(installedVersion = o.optString("version", it.installedVersion),
+                    currentSha = o.optString("sha", it.currentSha))
+            }
+        }
+    }
+
     fun loadUpdateInfo(fresh: Boolean = false) {
         viewModelScope.launch {
             _updateState.update { it.copy(loading = true, error = null) }
@@ -315,6 +330,7 @@ class SettingsViewModel @Inject constructor(
                         currentSha = o.optString("current_sha", ""),
                         latestSha = o.optString("latest_sha", ""),
                         branch = o.optString("branch", ""),
+                        installedVersion = o.optString("installed_version", ""),
                     )
                 }
             }
@@ -352,6 +368,7 @@ class SettingsViewModel @Inject constructor(
                             currentSha = o.optString("current_sha", ""),
                             latestSha = o.optString("latest_sha", ""),
                             branch = o.optString("branch", ""),
+                            installedVersion = o.optString("installed_version", ""),
                         )
                     }
                     return@launch
@@ -877,9 +894,6 @@ fun SettingsScreen(
 
             // ─── 7. SERVER (update + cron jobs + skills, live from gateway) ───
             SettingsSection("Server") {
-                HermesUpdatePanel(viewModel = viewModel)
-                HorizontalDivider(thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 ServerListsPanel(viewModel = viewModel, uiState = uiState)
             }
 
@@ -998,6 +1012,8 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
+                Spacer(modifier = Modifier.height(8.dp))
+                HermesAgentAboutRow(viewModel = viewModel)
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Plain text buttons (no box)
@@ -1333,60 +1349,77 @@ fun SettingsSection(
 // Collapsed by default (one tap to load — keeps Settings instant). Jobs get
 // Run-now + Pause/Resume; skills are a read-only list (the /skills slash
 // text dump, upgraded to a browsable screen).
-/** One row: tap loads `hermes update --check` truth from the server; an
- * available update gets an Update button that runs the OFFICIAL pipeline
- * (`hermes update` + gateway restart) detached on the host. The row shows
- * applying progress and re-checks automatically when the server is back. */
+/** About-section row for the server itself (replaces the old Server card):
+ * "Hermes Agent · v0.21.1 · b2aa855" + a round check arrow. The arrow runs
+ * `hermes update --check` server-side; when an update is found it toggles
+ * into an Update button that triggers the OFFICIAL pipeline (`hermes update`
+ * + gateway restart, detached on the host) and re-checks itself when the
+ * server is back. Tap the row at any time to re-check. */
 @Composable
-fun HermesUpdatePanel(viewModel: SettingsViewModel) {
+fun HermesAgentAboutRow(viewModel: SettingsViewModel) {
     val state by viewModel.updateState.collectAsState()
-    LaunchedEffect(Unit) { if (!state.supported && !state.loading) viewModel.loadUpdateInfo() }
+    LaunchedEffect(Unit) {
+        if (state.installedVersion.isEmpty() && state.currentSha.isEmpty())
+            viewModel.loadInstalledVersion()
+    }
+    val versionLabel = listOfNotNull(
+        state.installedVersion.takeIf { it.isNotBlank() }?.let { "v$it" },
+        state.currentSha.takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
     Row(
         modifier = Modifier.fillMaxWidth()
             .clickable(enabled = !state.loading && !state.applying) {
                 viewModel.loadUpdateInfo(fresh = true)
-            }
-            .padding(vertical = 10.dp),
+            },
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(Icons.Filled.SystemUpdate, contentDescription = null,
-            tint = if (state.supported && !state.upToDate) HermesPrimary
-                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            modifier = Modifier.size(22.dp))
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text("Hermes Agent update",
-                style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface)
+        Text(
+            text = "Hermes Agent",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+            Text(
+                text = when {
+                    state.loading -> "checking…"
+                    state.applying -> "updating…"
+                    versionLabel.isNotBlank() -> versionLabel
+                    else -> "—"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = when {
+                    state.supported && !state.upToDate && !state.loading && !state.applying ->
+                        HermesPrimary
+                    else -> MaterialTheme.colorScheme.onSurface
+                },
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
             val sub = when {
-                state.loading -> "Checking server…"
-                state.applying -> "Updating — the gateway restarts itself when done"
-                state.error != null -> state.error!!
-                !state.supported -> "Tap to check the server"
-                state.upToDate -> buildString {
-                    append("Up to date")
-                    if (state.currentSha.isNotBlank()) append(" · ${state.currentSha}")
-                    if (state.branch.isNotBlank()) append(" · ${state.branch}")
-                }
-                else -> buildString {
-                    append("Update available")
-                    if (state.behind != null) append(" · ${state.behind} commits behind")
-                    if (state.currentSha.isNotBlank()) append(" · ${state.currentSha} → ${state.latestSha}")
-                }
+                state.behind != null && state.behind!! > 0 && !state.applying ->
+                    "${state.behind} commits behind · → ${state.latestSha}"
+                state.error != null && !state.loading -> state.error
+                else -> null
             }
-            Text(sub, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (sub != null) Text(
+                sub, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
         }
+        Spacer(modifier = Modifier.width(8.dp))
         when {
             state.loading || state.applying -> CircularProgressIndicator(
                 modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-            state.supported && !state.upToDate -> Button(
+            state.supported && !state.upToDate -> FilledTonalButton(
                 onClick = { viewModel.applyUpdate() },
-                colors = ButtonDefaults.buttonColors(containerColor = HermesPrimary)
-            ) { Text("Update") }
-            state.supported -> IconButton(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            ) { Text("Update", fontSize = 13.sp) }
+            else -> IconButton(
                 onClick = { viewModel.loadUpdateInfo(fresh = true) }) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Re-check")
+                Icon(Icons.Filled.Refresh, contentDescription = "Check for update",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp))
             }
         }
     }
