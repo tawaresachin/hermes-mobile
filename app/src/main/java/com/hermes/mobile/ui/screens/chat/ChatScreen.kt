@@ -26,8 +26,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Mood
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material3.*
 import androidx.compose.material3.FloatingActionButtonDefaults
@@ -3781,6 +3783,7 @@ fun InputBar(
 ) {
     // ── Slash command state ──
     var commandsSheetOpen by remember { mutableStateOf(false) }
+    var commandSearch by remember { mutableStateOf("") }
     val showSlashCommands = inputText.startsWith("/") && inputText.length <= 30
 
     val onCommandSelected: (String) -> Unit = { cmd ->
@@ -3834,11 +3837,14 @@ fun InputBar(
             ) {
                     val hasContent = inputText.isNotBlank() || pendingAttachment != null
 
-                    // ── 0. Bot menu pill (Telegram shows it leftmost while
-                    // the composer is empty; typing replaces it with emoji) ──
+                    // ── 0. Bot command pill (opens the full command sheet;
+                    // typing replaces it with the emoji button) ──
                     if (!hasContent && serverCommands.isNotEmpty()) {
                         Surface(
-                            onClick = { commandsSheetOpen = true },
+                            onClick = {
+                                commandsSheetOpen = true
+                                commandSearch = ""
+                            },
                             shape = RoundedCornerShape(16.dp),
                             color = HermesPrimary,
                             enabled = enabled
@@ -3847,18 +3853,12 @@ fun InputBar(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
                             ) {
+                                // Icon-only pill — label removed by user request.
                                 Icon(
                                     imageVector = Icons.Outlined.Menu,
                                     contentDescription = "Commands",
                                     tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    "Menu",
-                                    color = Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
@@ -3963,12 +3963,20 @@ fun InputBar(
                     }
             }
 
-            // Bot commands sheet (Telegram "Menu" bottom sheet)
+            // Bot commands sheet (icon-only pill opens it; search field filters)
             if (commandsSheetOpen) {
                 ModalBottomSheet(
                     onDismissRequest = { commandsSheetOpen = false },
                     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
                 ) {
+                    val query = commandSearch.trim().lowercase()
+                    val matched = remember(serverCommands, query) {
+                        if (query.isEmpty()) serverCommands
+                        else serverCommands.filter {
+                            it.name.lowercase().startsWith(query.removePrefix("/")) ||
+                                it.description.lowercase().contains(query)
+                        }
+                    }
                     Column(Modifier.padding(bottom = 16.dp)) {
                         Text(
                             "Commands",
@@ -3976,11 +3984,52 @@ fun InputBar(
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
                         )
-                        LazyColumn {
-                            items(serverCommands) { cmd ->
+                        // Find field — the registry is ~200 strong.
+                        OutlinedTextField(
+                            value = commandSearch,
+                            onValueChange = { commandSearch = it },
+                            placeholder = { Text("Search commands", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Outlined.Search,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            },
+                            trailingIcon = {
+                                if (commandSearch.isNotEmpty()) {
+                                    IconButton(onClick = { commandSearch = "" }) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Close,
+                                            contentDescription = "Clear",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(22.dp),
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp)
+                                .padding(bottom = 8.dp)
+                        )
+                        if (matched.isEmpty()) {
+                            Text(
+                                "No command matches \u201C${commandSearch.trim()}\u201D",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
+                            )
+                        }
+                        LazyColumn(Modifier.heightIn(max = 460.dp)) {
+                            items(matched, key = { it.name }) { cmd ->
                                 Surface(
                                     onClick = {
                                         commandsSheetOpen = false
+                                        commandSearch = ""
                                         onInputChange("/" + cmd.name.lowercase() + " ")
                                     },
                                     color = Color.Transparent,
