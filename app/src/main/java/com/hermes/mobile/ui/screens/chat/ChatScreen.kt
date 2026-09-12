@@ -430,6 +430,13 @@ class ChatViewModel @Inject constructor(
                 if (arg.isBlank()) reply("Usage: /queue <text> — send now; it will run after the current reply.")
                 else sendMessage(arg)
             }
+            "steer" -> {
+                // Telegram-parity default is queue; steer stays reachable as
+                // a command instead of a persistent chip. sendMessage's
+                // steer path falls through to queue when the run settled.
+                if (arg.isBlank()) reply("Usage: /steer <text> — inject into the running reply instead of queueing.")
+                else sendMessage(arg, steer = true)
+            }
             "compress" -> reply("Context: ${meterFmt(_contextUsed.value)} / ${meterFmt(_contextTotal.value)} tokens.\nAuto-compression runs server-side at ~50% — nothing to do manually.")
             "commands" -> reply("Commands act here: " + SLASH_COMMANDS.joinToString(" ") { it.command } +
                 "\nAnything else starting with / goes to the agent as-is.")
@@ -1254,9 +1261,8 @@ fun ChatScreen(
     val contextUsed by vm.contextUsed.collectAsState()
     val contextTotal by vm.contextTotal.collectAsState()
     val pendingApproval by vm.pendingApproval.collectAsState()
-    // Send-while-running mode: false = queue (default, Telegram FIFO),
-    // true = steer the live run.
-    var steerMode by remember { mutableStateOf(false) }
+    // Telegram-parity send-while-running: always QUEUE (no mode chips).
+    // Steer stays available to power users as the /steer slash command.
     // User-tunable chat text size (Preferences slider; default 15sp).
     val chatFontSp by vm.chatFontSp.collectAsState()
 
@@ -1983,34 +1989,6 @@ fun ChatScreen(
             }
         }
 
-        // ── Steer toggle (Telegram mid-run message parity): while a run is
-        //    live, the next send either QUEUES (FIFO, one reply each) or
-        //    STEERS (injects into the running turn). Default = queue.
-        if (isStreaming) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "Send while running:",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                listOf("Queue" to false, "Steer" to true).forEach { (label, mode) ->
-                    FilterChip(
-                        selected = steerMode == mode,
-                        onClick = { steerMode = mode },
-                        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = HermesPrimary.copy(alpha = 0.18f)),
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                }
-            }
-        }
-
         // ── Approval card (durable runs): a tool call is waiting for the
         //    user's decision. Telegram renders inline buttons for exactly
         //    this; the card rides above the composer so it can't be missed.
@@ -2038,7 +2016,7 @@ fun ChatScreen(
                 vm.sendWithAttachment(inputText.trim(), pendingAttachment, context, onAttachComplete = {
                     pendingAttachment = null
                     inputText = ""
-                }, replyTo = pendingReply, steer = steerMode)
+                }, replyTo = pendingReply)
                 DraftStore.clear(sessionIdState ?: "")
                 pendingReply = null
             },
@@ -3679,7 +3657,7 @@ private val SLASH_COMMANDS = listOf(
     SlashCommand("/context", "Token window usage for this chat"),
     SlashCommand("/title", "Rename this session: /title <text>"),
     SlashCommand("/retry", "Resend the last message"),
-    SlashCommand("/retry", "Resend the last message"),
+    SlashCommand("/steer", "Inject into the running reply (else it queues)"),
     SlashCommand("/skills", "Installed Hermes skills (server)"),
     SlashCommand("/tools", "Enabled toolsets (server)"),
     SlashCommand("/usage", "Server token ledger totals"),
