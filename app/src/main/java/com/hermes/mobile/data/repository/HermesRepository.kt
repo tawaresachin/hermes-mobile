@@ -37,8 +37,12 @@ class HermesRepository @Inject constructor(
     }
 
     suspend fun deleteSession(sessionId: String) {
-        // Best-effort server-side delete (won't block local if offline)
-        apiService.deleteSession(sessionId)
+        // Best-effort server-side delete (won't block local if offline).
+        // The server knows the session by its OWN id (api_…) from the
+        // continuity map — deleting by local UUID was a silent 404 no-op
+        // that left the session alive on the gateway.
+        val serverId = apiService.serverIdFor(sessionId)?.takeIf { it.isNotBlank() }
+        if (serverId != null) apiService.deleteSession(serverId)
         // Always delete locally
         messageDao.deleteSessionMessages(sessionId)
         sessionDao.deleteSession(sessionId)
@@ -49,7 +53,7 @@ class HermesRepository @Inject constructor(
      * server PATCH best-effort — the desktop sidebar shares the same flag. */
     suspend fun setSessionArchived(sessionId: String, archived: Boolean) {
         sessionDao.setArchived(sessionId, archived)
-        apiService.serverIdFor(sessionId)?.let { sid ->
+        apiService.serverIdFor(sessionId)?.takeIf { it.isNotBlank() }?.let { sid ->
             try { apiService.setSessionArchived(sid, archived) }
             catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (_: Exception) { /* offline: local flag stands; desktop syncs its own */ }
