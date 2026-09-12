@@ -534,6 +534,53 @@ class HermesApiService @Inject constructor(
         } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
     }
 
+    // ─── Server-driven slash commands (plugin: /api/mobile/commands) ───
+
+    /** The SAME command set Telegram's setMyCommands renders (core registry +
+     * plugin + skill commands). Null when the plugin route is absent (older
+     * install) — the app then falls back to its hardcoded list. */
+    suspend fun fetchServerCommands(): List<ServerCommand>? = withContext(Dispatchers.IO) {
+        val obj = getJson("/api/mobile/commands") ?: return@withContext null
+        if (!obj.optBoolean("ok", false)) return@withContext null
+        val arr = obj.optJSONArray("commands") ?: return@withContext emptyList()
+        buildList {
+            for (i in 0 until arr.length()) {
+                val c = arr.optJSONObject(i) ?: continue
+                val name = c.optString("name", "")
+                if (name.isBlank()) continue
+                add(ServerCommand(
+                    name = name,
+                    description = c.optString("description", ""),
+                    category = c.optString("category", ""),
+                    argsHint = c.optString("args_hint", ""),
+                    source = c.optString("source", "core")
+                ))
+            }
+        }
+    }
+
+    /** Expand a skill slash command into the invocation message the gateway
+     * injects for Telegram. Returns null for core/unknown commands (the app
+     * runs those with its local handlers) — the caller then sends the raw
+     * text to the agent as before. */
+    suspend fun resolveSkillCommand(command: String, args: String): String? =
+        withContext(Dispatchers.IO) {
+            val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
+                ?: return@withContext null
+            try {
+                val payload = JSONObject().put("command", command).put("args", args)
+                val request = Request.Builder()
+                    .url("$baseUrl/api/mobile/command/resolve")
+                    .post(payload.toString().toRequestBody(jsonMediaType)).build()
+                client.newCall(request).execute().use { r ->
+                    if (!r.isSuccessful) return@use null
+                    val o = JSONObject(r.body?.string() ?: return@use null)
+                    if (!o.optBoolean("ok", false)) null
+                    else o.optString("expanded", "").takeIf { it.isNotBlank() }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+        }
+
     // ─── List Models ───
 
     suspend fun listModels(sessionId: String = ""): ModelListResponse? {
@@ -1143,3 +1190,14 @@ class HermesApiService @Inject constructor(
         }
     }
 }
+
+/** A slash command as the gateway reports it: core/plugin/skill tier,
+ * the description the Telegram menu shows, and an arg hint so the app
+ * can tell "runs now" from "needs <arg>". */
+data class ServerCommand(
+    val name: String,
+    val description: String,
+    val category: String,
+    val argsHint: String,
+    val source: String
+)

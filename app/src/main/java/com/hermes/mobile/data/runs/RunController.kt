@@ -160,12 +160,16 @@ class RunController @Inject constructor(
         replyTo: String? = null,
         userMsgId: Long? = null,
         onAdmitError: (String) -> Unit = {},
+        // Skill invocations: `query` is the server-expanded prompt (huge);
+        // `displayText` is what the user actually typed ("/archify foo") and
+        // what the bubble shows. Null displayText = show the query verbatim.
+        displayText: String? = null,
     ) {
         scope.launch {
             // 1. Local rows first — instant feedback, survives everything.
             var uid = userMsgId
             if (uid == null) {
-                uid = insertUserRow(sessionId, query, attachmentUrl, attachType, replyTo)
+                uid = insertUserRow(sessionId, displayText ?: query, attachmentUrl, attachType, replyTo)
             } else {
                 try { messageDao.updateMessageStatus(uid, MessageStatus.SENT) }
                 catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { }

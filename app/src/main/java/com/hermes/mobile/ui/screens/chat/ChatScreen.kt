@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.runtime.*
+import com.hermes.mobile.network.ServerCommand
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -216,8 +217,24 @@ class ChatViewModel @Inject constructor(
             }
         }
     }
+    /** Server-truth slash palette (plugin /api/mobile/commands — same
+     * registry Telegram's menu renders). Empty until first load / on old
+     * plugins without the route -> the hardcoded list keeps working. */
+    private val _serverCommands = MutableStateFlow<List<ServerCommand>>(emptyList())
+    val serverCommands: StateFlow<List<ServerCommand>> = _serverCommands.asStateFlow()
+
+    fun refreshServerCommands() {
+        viewModelScope.launch {
+            val cmds = try { repository.fetchServerCommands() }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            if (cmds != null) _serverCommands.value = cmds
+        }
+    }
+
     init {
         checkConnection()
+        refreshServerCommands()
         // Poll connection every 5s when not connected
         viewModelScope.launch {
             try {
@@ -482,7 +499,21 @@ class ChatViewModel @Inject constructor(
                     " · plugin " + (repository.getJson("/api/audio/health")
                         ?.optString("plugin_version") ?: "?"))
             }
-            else -> sendMessage(raw, bypassSlash = true)  // unknown "/…" — the agent decides
+            else -> {
+                // Skill commands ride the server: /archify foo expands to
+                // the same invocation prompt the Telegram adapter injects,
+                // then runs as a normal durable turn. Core commands the app
+                // doesn't implement locally (and anything unknown) still go
+                // to the agent as-is — the model decides.
+                val expanded = repository.resolveSkillCommand("/" + cmd, arg)
+                if (expanded != null) {
+                    // Show the friendly "/cmd args" as the bubble text; the
+                    // expanded prompt is what the agent receives.
+                    sendMessage(expanded, bypassSlash = true, displayText = raw)
+                } else {
+                    sendMessage(raw, bypassSlash = true)
+                }
+            }
         }
     }
 
@@ -491,7 +522,7 @@ class ChatViewModel @Inject constructor(
     val showModelPickerState: StateFlow<Boolean> = showModelPickerGlobal.asStateFlow()
     fun consumeModelPickerRequest() { showModelPickerGlobal.value = false }
 
-    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, replyTo: Message? = null, bypassSlash: Boolean = false, attachmentPath: String = "", steer: Boolean = false) {
+    fun sendMessage(query: String, attachmentUrl: String? = null, attachType: String? = null, replyTo: Message? = null, bypassSlash: Boolean = false, attachmentPath: String = "", steer: Boolean = false, displayText: String? = null) {
         val sid = _sessionId.value ?: return
         // ── Slash commands ──
         // The gateway's slash handlers are messaging-platform-only (adapter
@@ -521,10 +552,10 @@ class ChatViewModel @Inject constructor(
         // moment the current response completes (FIFO). Nothing is
         // cancelled, nothing is dropped, responses never interleave.
         if (_isStreaming.value) {
-            viewModelScope.launch { enqueueMessage(sid, query, attachmentUrl, attachType, replyTo, attachmentPath) }
+            viewModelScope.launch { enqueueMessage(sid, query, attachmentUrl, attachType, replyTo, attachmentPath, displayText) }
             return
         }
-        startTurn(sid, query, attachmentUrl, attachType, replyTo, null, model, provider, attachmentPath)
+        startTurn(sid, query, attachmentUrl, attachType, replyTo, null, model, provider, attachmentPath, displayText = displayText)
     }
 
     private data class QueuedMessage(
@@ -533,7 +564,8 @@ class ChatViewModel @Inject constructor(
         val attachType: String?,
         val replyTo: Message?,
         val userMsgId: Long?,
-        val attachmentPath: String = ""
+        val attachmentPath: String = "",
+        val displayText: String? = null
     )
 
     private val pendingQueue = ArrayDeque<QueuedMessage>()
@@ -623,13 +655,13 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun enqueueMessage(
         sid: String, query: String, attachmentUrl: String?, attachType: String?,
-        replyTo: Message?, attachmentPath: String
+        replyTo: Message?, attachmentPath: String, displayText: String? = null
     ) {
         try {
             val uid = repository.insertLocalUserMessage(
-                sid, query, attachmentUrl ?: "", attachType ?: "", replyTo?.content)
+                sid, displayText ?: query, attachmentUrl ?: "", attachType ?: "", replyTo?.content)
             pendingQueue.addLast(
-                QueuedMessage(query, attachmentUrl, attachType, replyTo, uid, attachmentPath))
+                QueuedMessage(query, attachmentUrl, attachType, replyTo, uid, attachmentPath, displayText))
             _queuedIds.value = _queuedIds.value + uid
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -640,7 +672,8 @@ class ChatViewModel @Inject constructor(
         val next = pendingQueue.removeFirstOrNull() ?: return
         if (next.userMsgId != null) _queuedIds.value = _queuedIds.value - next.userMsgId
         startTurn(sid, next.query, next.attachmentUrl, next.attachType, next.replyTo,
-            next.userMsgId, _currentModel.value, providerFor(_currentModel.value), next.attachmentPath)
+            next.userMsgId, _currentModel.value, providerFor(_currentModel.value),
+            next.attachmentPath, next.displayText)
     }
 
     private fun refreshContextMeter() {
@@ -694,6 +727,7 @@ class ChatViewModel @Inject constructor(
         model: String? = null,
         provider: String? = null,
         attachmentPath: String = "",
+        displayText: String? = null,
     ) {
         _errorMessage.value = null
         repository.runController.startTurn(
@@ -706,6 +740,7 @@ class ChatViewModel @Inject constructor(
             attachmentPath = attachmentPath,
             replyTo = replyTo?.content,
             userMsgId = userMsgId,
+            displayText = displayText,
             onAdmitError = { msg ->
                 _errorMessage.value = when {
                     msg.contains("401") -> "API key rejected. Update it in Settings → Account."
@@ -1204,6 +1239,7 @@ fun ChatScreen(
     val messages by vm.messages.collectAsState()
     val streamingContent by vm.streamingContent.collectAsState()
     val isStreaming by vm.isStreaming.collectAsState()
+    val serverCommands by vm.serverCommands.collectAsState()
     val queuedIds by vm.queuedIds.collectAsState()
     val connectionStatus by vm.connectionStatus.collectAsState()
     val toolCalls by vm.toolCalls.collectAsState()
@@ -2038,7 +2074,8 @@ fun ChatScreen(
             isStreaming = isStreaming,
             showEmojiPicker = showEmojiPicker,
             onToggleEmojiPicker = { vm.toggleEmojiPicker() },
-            enabled = sessionIdState != null
+            enabled = sessionIdState != null,
+            serverCommands = serverCommands
         )
 
         // ── Model Picker Bottom Sheet ──
@@ -3658,7 +3695,8 @@ private val SLASH_COMMANDS = listOf(
 fun SlashCommandList(
     query: String,
     onCommandSelected: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    serverCommands: List<ServerCommand> = emptyList()
 ) {
     // Only show when text starts with "/"
     if (!query.startsWith("/") || query.length > 30) {
@@ -3667,11 +3705,21 @@ fun SlashCommandList(
     }
 
     val filter = query.substring(1).lowercase()
-    val matched = SLASH_COMMANDS.filter {
+    // Server truth first (Telegram's own menu source); local list fills gaps
+    // and provides handlers for commands the app executes itself.
+    val localMatches = SLASH_COMMANDS.filter {
         it.command.removePrefix("/").contains(filter)
     }
+    val serverMatches = serverCommands.filter {
+        it.name.removePrefix("/").lowercase().contains(filter)
+    }
+    val seen = localMatches.map { it.command.lowercase() }.toSet()
+    val matched: List<SlashCommand> = localMatches + serverMatches
+        .filter { "/${it.name.lowercase()}" !in seen }
+        .map { SlashCommand("/" + it.name.lowercase(), it.description) }
 
-    if (matched.isEmpty()) {
+    val capped = matched.take(30)
+    if (capped.isEmpty()) {
         onDismiss()
         return
     }
@@ -3688,7 +3736,7 @@ fun SlashCommandList(
         LazyColumn(
             modifier = Modifier.padding(vertical = 4.dp)
         ) {
-            itemsIndexed(matched) { _, cmd ->
+            itemsIndexed(capped) { _, cmd ->
                 Surface(
                     onClick = {
                         onCommandSelected(cmd.command + " ")
@@ -3746,7 +3794,8 @@ fun InputBar(
     isStreaming: Boolean,
     showEmojiPicker: Boolean,
     onToggleEmojiPicker: () -> Unit,
-    enabled: Boolean
+    enabled: Boolean,
+    serverCommands: List<ServerCommand> = emptyList()
 ) {
     // ── Slash command state ──
     val showSlashCommands = inputText.startsWith("/") && inputText.length <= 30
@@ -3767,7 +3816,8 @@ fun InputBar(
                 SlashCommandList(
                     query = inputText,
                     onCommandSelected = onCommandSelected,
-                    onDismiss = {}
+                    onDismiss = {},
+                    serverCommands = serverCommands
                 )
             }
 

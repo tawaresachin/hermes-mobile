@@ -259,6 +259,14 @@ class HermesRepository @Inject constructor(
         }
     }
 
+    /** Server-truth slash command list (same source as the Telegram menu). */
+    suspend fun fetchServerCommands() = apiService.fetchServerCommands()
+
+    /** Expand a skill slash command via the server (Telegram-parity
+     * injection); null = not a skill command. */
+    suspend fun resolveSkillCommand(command: String, args: String): String? =
+        apiService.resolveSkillCommand(command, args)
+
     // ─── Durable runs (the /v1/runs engine the chat screen uses) ───
 
     val runController: com.hermes.mobile.data.runs.RunController
