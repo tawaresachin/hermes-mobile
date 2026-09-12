@@ -303,6 +303,9 @@ fun SessionsScreen(
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        // Outer NavHost already consumed status/navigation insets —
+        // re-applying them here doubles the bands (blank gap top/bottom).
+        contentWindowInsets = WindowInsets(0.dp),
         snackbarHost = {
             SnackbarHost(hostState = snackbarHostState) { data ->
                 Snackbar(
@@ -389,6 +392,7 @@ private fun SessionsTopBar(
     if (isSearchActive) {
         // ── Active search bar ──
         SearchBar(
+            windowInsets = WindowInsets(0.dp),
             query = searchQuery,
             onQueryChange = onSearchQueryChanged,
             onSearch = { /* results are real-time via StateFlow */ },
@@ -437,6 +441,7 @@ private fun SessionsTopBar(
     } else {
         // ── Default top app bar ──
         CenterAlignedTopAppBar(
+            windowInsets = WindowInsets(0.dp),
             title = {
                 Text(
                     text = "Sessions",

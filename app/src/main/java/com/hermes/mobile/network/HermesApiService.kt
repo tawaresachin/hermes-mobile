@@ -534,6 +534,37 @@ class HermesApiService @Inject constructor(
         } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
     }
 
+    // ─── Hermes update (plugin: /api/mobile/update/*) ───────────
+    /** GET /api/mobile/update/check — report-only; wraps `hermes update --check`. */
+    suspend fun updateCheck(fresh: Boolean = false): JSONObject? = withContext(Dispatchers.IO) {
+        val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext null
+        try {
+            val url = "$baseUrl/api/mobile/update/check" + if (fresh) "?fresh=1" else ""
+            val request = Request.Builder().url(url).get().build()
+            client.newCall(request).execute().use { r ->
+                if (!r.isSuccessful) return@use null
+                JSONObject(r.body?.string() ?: return@use null)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+    }
+
+    /** POST /api/mobile/update/apply — detached `hermes update` + gateway
+     * restart on the server. Returns accepted, not completion: the caller
+     * re-checks health + update/check to confirm the swap. */
+    suspend fun updateApply(): JSONObject? = withContext(Dispatchers.IO) {
+        val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext null
+        try {
+            val request = Request.Builder()
+                .url("$baseUrl/api/mobile/update/apply").post("{}".toRequestBody(jsonMediaType))
+                .build()
+            client.newCall(request).execute().use { r ->
+                JSONObject(r.body?.string() ?: return@use null)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+    }
+
     // ─── Server-driven slash commands (plugin: /api/mobile/commands) ───
 
     /** The SAME command set Telegram's setMyCommands renders (core registry +

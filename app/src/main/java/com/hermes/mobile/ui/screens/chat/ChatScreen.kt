@@ -26,6 +26,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Mood
+import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material3.*
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.runtime.*
@@ -3758,6 +3761,7 @@ fun SlashCommandList(
 // Input bar
 // ═══════════════════════════════════════════════════════════════
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InputBar(
     inputText: String,
@@ -3776,6 +3780,7 @@ fun InputBar(
     serverCommands: List<ServerCommand> = emptyList()
 ) {
     // ── Slash command state ──
+    var commandsSheetOpen by remember { mutableStateOf(false) }
     val showSlashCommands = inputText.startsWith("/") && inputText.length <= 30
 
     val onCommandSelected: (String) -> Unit = { cmd ->
@@ -3813,38 +3818,75 @@ fun InputBar(
                 EmojiPickerGrid(onEmojiSelected = onEmoji)
             }
 
+            // Telegram composer: ONE unified rounded pill holds
+            // [Menu][emoji][field][attach][mic/send] — no separate
+            // inner field pill, no emoji glyph, flat outline icons.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 4.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(
+                        if (LocalDarkTheme.current) InputBarDark else InputBarLight
+                    )
+                    .padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                    // ── 1. Emoji button (leftmost, like Telegram) ──
+                    val hasContent = inputText.isNotBlank() || pendingAttachment != null
+
+                    // ── 0. Bot menu pill (Telegram shows it leftmost while
+                    // the composer is empty; typing replaces it with emoji) ──
+                    if (!hasContent && serverCommands.isNotEmpty()) {
+                        Surface(
+                            onClick = { commandsSheetOpen = true },
+                            shape = RoundedCornerShape(16.dp),
+                            color = HermesPrimary,
+                            enabled = enabled
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Menu,
+                                    contentDescription = "Commands",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    "Menu",
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(2.dp))
+                    }
+
+                    // ── 1. Emoji button (flat outline smiley, Telegram tint) ──
                     IconButton(
                         onClick = onToggleEmojiPicker,
                         modifier = Modifier.size(40.dp),
                         enabled = enabled
                     ) {
-                        Text(
-                            text = if (showEmojiPicker) "⌨️" else "😀",
-                            fontSize = 20.sp
+                        Icon(
+                            imageVector = if (showEmojiPicker) Icons.Outlined.Keyboard
+                                          else Icons.Outlined.Mood,
+                            contentDescription = "Emoji",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
 
-                    // ── 2. Text field (no keyboard send — only explicit send button) ──
-                    // Telegram look: flat rounded field, NO outline. The
-                    // container bg is the field itself (white on light,
-                    // dark navy on dark), inside the bar.
+                    // ── 2. Text field (transparent inside the unified pill) ──
                     TextField(
                         value = inputText,
                         onValueChange = onInputChange,
                         modifier = Modifier
                             .weight(1f)
-                            .heightIn(min = 36.dp, max = 120.dp)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(
-                                if (LocalDarkTheme.current) InputBarDark else InputBarLight
-                            ),
+                            .heightIn(min = 36.dp, max = 120.dp),
                         placeholder = {
                             Text(
                                 text = "Message",
@@ -3884,7 +3926,6 @@ fun InputBar(
 
                     // ── 4. Mic / Send (alternate in the same slot — like Telegram) ──
                     // Empty input → mic; text/attachment present → send replaces it.
-                    val hasContent = inputText.isNotBlank() || pendingAttachment != null
                     if (hasContent) {
                         FilledIconButton(
                             onClick = onSend,
@@ -3920,6 +3961,55 @@ fun InputBar(
                             )
                         }
                     }
+            }
+
+            // Bot commands sheet (Telegram "Menu" bottom sheet)
+            if (commandsSheetOpen) {
+                ModalBottomSheet(
+                    onDismissRequest = { commandsSheetOpen = false },
+                    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+                ) {
+                    Column(Modifier.padding(bottom = 16.dp)) {
+                        Text(
+                            "Commands",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+                        )
+                        LazyColumn {
+                            items(serverCommands) { cmd ->
+                                Surface(
+                                    onClick = {
+                                        commandsSheetOpen = false
+                                        onInputChange("/" + cmd.name.lowercase() + " ")
+                                    },
+                                    color = Color.Transparent,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "/" + cmd.name.lowercase(),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = HermesPrimary,
+                                            modifier = Modifier.width(140.dp)
+                                        )
+                                        Text(
+                                            cmd.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -42,6 +42,7 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -81,6 +82,19 @@ fun isTrustedServerHost(rawUrl: String): Boolean {
     // the DNS-rebinding residual is acceptable for this device).
     return true
 }
+
+/** Server-side Hermes update state (Settings → Server → Update card). */
+data class UpdatePanelState(
+    val loading: Boolean = false,
+    val supported: Boolean = false,
+    val upToDate: Boolean = false,
+    val behind: Int? = null,
+    val currentSha: String = "",
+    val latestSha: String = "",
+    val branch: String = "",
+    val applying: Boolean = false,
+    val error: String? = null,
+)
 
 data class SettingsUiState(
     val baseUrl: String = "http://localhost:8080",
@@ -273,6 +287,81 @@ class SettingsViewModel @Inject constructor(
     fun toggleAutoApprove(on: Boolean) {
         _uiState.update { it.copy(autoApprove = on) }
         repository.saveAutoApprove(on)
+    }
+
+    // ── Hermes update (server-side, plugin /api/mobile/update/*) ──
+    private val _updateState = MutableStateFlow(UpdatePanelState())
+    val updateState: StateFlow<UpdatePanelState> = _updateState.asStateFlow()
+
+    fun loadUpdateInfo(fresh: Boolean = false) {
+        viewModelScope.launch {
+            _updateState.update { it.copy(loading = true, error = null) }
+            val o = try { repository.updateCheck(fresh) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            if (o == null || !o.optBoolean("ok", false)) {
+                _updateState.update {
+                    it.copy(loading = false,
+                        error = o?.optString("error")?.ifBlank { null }
+                            ?: "Server does not expose update status (plugin too old?)")
+                }
+            } else {
+                _updateState.update {
+                    it.copy(
+                        loading = false,
+                        supported = true,
+                        upToDate = o.optBoolean("up_to_date", false),
+                        behind = if (o.isNull("behind")) null else o.optInt("behind"),
+                        currentSha = o.optString("current_sha", ""),
+                        latestSha = o.optString("latest_sha", ""),
+                        branch = o.optString("branch", ""),
+                    )
+                }
+            }
+        }
+    }
+
+    /** Fire the detached update + gateway restart, then watch for the swap:
+     * health goes down, comes back, and update/check reports up to date. */
+    fun applyUpdate() {
+        viewModelScope.launch {
+            _updateState.update { it.copy(applying = true, error = null) }
+            val res = try { repository.updateApply() }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            if (res == null || !res.optBoolean("ok", false)) {
+                _updateState.update {
+                    it.copy(applying = false,
+                        error = res?.optString("error")?.ifBlank { null } ?: "Could not start the update")
+                }
+                return@launch
+            }
+            // Server will drop (gateway restarts itself): wait out the down
+            // window, then poll back up with a fresh check.
+            delay(25_000)
+            repeat(40) {
+                val o = try { repository.updateCheck(fresh = true) }
+                    catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                    catch (_: Exception) { null }
+                if (o != null && o.optBoolean("ok", false)) {
+                    _updateState.update {
+                        it.copy(
+                            applying = false, supported = true,
+                            upToDate = o.optBoolean("up_to_date", false),
+                            behind = if (o.isNull("behind")) null else o.optInt("behind"),
+                            currentSha = o.optString("current_sha", ""),
+                            latestSha = o.optString("latest_sha", ""),
+                            branch = o.optString("branch", ""),
+                        )
+                    }
+                    return@launch
+                }
+                delay(8_000)
+            }
+            _updateState.update {
+                it.copy(applying = false, error = "Server still offline after ~5 min — check it manually")
+            }
+        }
     }
 
     /** Pull cron jobs + skills from the server (Settings → Server section).
@@ -786,8 +875,11 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ─── 7. SERVER (cron jobs + skills, live from the gateway) ───
+            // ─── 7. SERVER (update + cron jobs + skills, live from gateway) ───
             SettingsSection("Server") {
+                HermesUpdatePanel(viewModel = viewModel)
+                HorizontalDivider(thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 ServerListsPanel(viewModel = viewModel, uiState = uiState)
             }
 
@@ -1241,6 +1333,65 @@ fun SettingsSection(
 // Collapsed by default (one tap to load — keeps Settings instant). Jobs get
 // Run-now + Pause/Resume; skills are a read-only list (the /skills slash
 // text dump, upgraded to a browsable screen).
+/** One row: tap loads `hermes update --check` truth from the server; an
+ * available update gets an Update button that runs the OFFICIAL pipeline
+ * (`hermes update` + gateway restart) detached on the host. The row shows
+ * applying progress and re-checks automatically when the server is back. */
+@Composable
+fun HermesUpdatePanel(viewModel: SettingsViewModel) {
+    val state by viewModel.updateState.collectAsState()
+    LaunchedEffect(Unit) { if (!state.supported && !state.loading) viewModel.loadUpdateInfo() }
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clickable(enabled = !state.loading && !state.applying) {
+                viewModel.loadUpdateInfo(fresh = true)
+            }
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Filled.SystemUpdate, contentDescription = null,
+            tint = if (state.supported && !state.upToDate) HermesPrimary
+                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.size(22.dp))
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Hermes Agent update",
+                style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface)
+            val sub = when {
+                state.loading -> "Checking server…"
+                state.applying -> "Updating — the gateway restarts itself when done"
+                state.error != null -> state.error!!
+                !state.supported -> "Tap to check the server"
+                state.upToDate -> buildString {
+                    append("Up to date")
+                    if (state.currentSha.isNotBlank()) append(" · ${state.currentSha}")
+                    if (state.branch.isNotBlank()) append(" · ${state.branch}")
+                }
+                else -> buildString {
+                    append("Update available")
+                    if (state.behind != null) append(" · ${state.behind} commits behind")
+                    if (state.currentSha.isNotBlank()) append(" · ${state.currentSha} → ${state.latestSha}")
+                }
+            }
+            Text(sub, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        }
+        when {
+            state.loading || state.applying -> CircularProgressIndicator(
+                modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            state.supported && !state.upToDate -> Button(
+                onClick = { viewModel.applyUpdate() },
+                colors = ButtonDefaults.buttonColors(containerColor = HermesPrimary)
+            ) { Text("Update") }
+            state.supported -> IconButton(
+                onClick = { viewModel.loadUpdateInfo(fresh = true) }) {
+                Icon(Icons.Filled.Refresh, contentDescription = "Re-check")
+            }
+        }
+    }
+}
+
 @Composable
 fun ServerListsPanel(viewModel: SettingsViewModel, uiState: SettingsUiState) {
     var expanded by remember { mutableStateOf(false) }

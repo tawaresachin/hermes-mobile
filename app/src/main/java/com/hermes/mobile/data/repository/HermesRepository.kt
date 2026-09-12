@@ -262,6 +262,10 @@ class HermesRepository @Inject constructor(
     /** Server-truth slash command list (same source as the Telegram menu). */
     suspend fun fetchServerCommands() = apiService.fetchServerCommands()
 
+    /** Hermes update state on the host (plugin /api/mobile/update/check). */
+    suspend fun updateCheck(fresh: Boolean = false) = apiService.updateCheck(fresh)
+    suspend fun updateApply() = apiService.updateApply()
+
     /** Expand a skill slash command via the server (Telegram-parity
      * injection); null = not a skill command. */
     suspend fun resolveSkillCommand(command: String, args: String): String? =

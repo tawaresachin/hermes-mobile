@@ -229,6 +229,9 @@ fun VoiceScreen(onExit: () -> Unit) {
             .background(MaterialTheme.colorScheme.background)
     ) {
         TopAppBar(
+            // Outer NavHost padding already reserves the status bar; the
+            // bar's default insets would add it AGAIN (blank band on top).
+            windowInsets = WindowInsets(0.dp),
             title = { Text("Voice", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium) },
             navigationIcon = {
                 IconButton(onClick = onExit) {

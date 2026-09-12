@@ -61,6 +61,7 @@ class RunController @Inject constructor(
 ) {
     companion object {
         private const val POLL_INTERVAL_MS = 3_000L
+        private const val SLOW_POLL_INTERVAL_MS = 10_000L
         // A run whose status endpoint 404s (gateway restarted, TTL swept):
         // stop polling and settle the bubble from the session transcript.
         private const val STATUS_MISS_LIMIT = 4
@@ -236,15 +237,24 @@ class RunController @Inject constructor(
 
     // ── Event consumption (SSE primary, status polling fallback) ────────
 
-    /** Subscribe to the run's live events. Safe to call repeatedly (a reopen
-     * after navigating away re-attaches; the old socket is replaced). */
+    /** Wire the delivery channels for a session's live turn. Idempotent:
+     * a reopen after navigating away must NOT cancel the healthy event
+     * source — the server drops the run's event queue when an SSE handler
+     * exits, so resubscribing would orphan the run (terminal events would
+     * then reach nobody). Polling is armed unconditionally as the
+     * backstop: it is the delivery guarantee (status is durable server-
+     * side state); the event stream is only the smoothness layer. */
     fun attach(sessionId: String) {
         val turn = _turns.value[sessionId] ?: return
-        eventSources.remove(sessionId)?.cancel()
+        startPolling(sessionId)
+        if (eventSources.containsKey(sessionId)) return
         val source = api.subscribeRunEvents(
             runId = turn.runId,
             onEvent = { ev -> handleEvent(sessionId, ev) },
-            onTransportLost = { startPolling(sessionId) },
+            onTransportLost = {
+                eventSources.remove(sessionId)
+                startPolling(sessionId)
+            },
         )
         if (source == null) startPolling(sessionId) else eventSources[sessionId] = source
     }
@@ -292,7 +302,9 @@ class RunController @Inject constructor(
         pollJobs[sessionId] = scope.launch {
             var misses = 0
             while (true) {
-                delay(POLL_INTERVAL_MS)
+                // Event stream healthy -> status is just a watchdog tick;
+                // stream lost / never opened -> the 3s poll IS the delivery.
+                delay(if (eventSources.containsKey(sessionId)) SLOW_POLL_INTERVAL_MS else POLL_INTERVAL_MS)
                 val turn = _turns.value[sessionId] ?: break
                 val status = api.fetchRunStatus(turn.runId)
                 if (status == null) {
