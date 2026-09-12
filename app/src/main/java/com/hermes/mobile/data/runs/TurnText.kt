@@ -81,11 +81,45 @@ object TurnText {
             "card and it is never shown as text. Never paste a bare filesystem " +
             "path as the delivery; never claim you cannot send files."
 
-    /** Per-run ephemeral system prompt = terse decision + media directive.
+    /** Swarm-mode directive (per-session toggle in the chat header). The
+     * Kanban tools are not on the api_server toolset list, but the agent
+     * has `terminal` — the official CLI (`hermes kanban swarm`, verified
+     * E2E on this gateway: root → parallel workers → verifier → synthesizer
+     * all completed) is the real swarm entry point. The gateway dispatcher
+     * (`kanban.dispatch_in_gateway: true`, 60s tick) spawns the worker
+     * agents; the orchestrating run creates the graph, watches it, and
+     * delivers the synthesis. */
+    const val SWARM_DIRECTIVE =
+        "SWARM MODE (ON for this session): answer simple single-step asks " +
+            "(greetings, lookups, small edits) normally — do NOT build a " +
+            "swarm for them. For substantive multi-part work, orchestrate a " +
+            "Kanban Swarm v1 graph via the terminal tool instead of doing it " +
+            "all yourself: " +
+            "1) Split the goal into 2-4 independent specialist tasks. " +
+            "2) Create the graph in ONE command: hermes kanban swarm \"<goal>\" " +
+            "--worker \"<profile>:<task title>\" (repeat per task) --verifier " +
+            "<profile> --synthesizer <profile> --json — profiles come from " +
+            "`hermes kanban assignees` (typically 'swarm' for workers, " +
+            "'default' for verify/synthesize). Keep each worker body " +
+            "self-contained; workers cannot see this chat. " +
+            "3) The gateway dispatcher starts the parallel workers (~60s " +
+            "tick). Poll every ~45s (sleep 45; hermes kanban list --json) " +
+            "until the verifier and synthesizer cards are done. " +
+            "4) Read the final result (hermes kanban show <synthesizer_id> " +
+            "--json, plus blackboard comments on the root) and deliver it to " +
+            "the user as your reply, briefly naming the cards that produced " +
+            "it. Report failed or stalled cards honestly; never invent swarm " +
+            "output. Never claim a swarm you did not create (the root task id " +
+            "from --json is your proof). delegate_task is NOT swarm mode - " +
+            "never substitute it for the kanban cards."
+
+    /** Per-run ephemeral system prompt = terse decision + media directive
+     * (+ swarm directive when this session's Swarm toggle is ON).
      * Byte-stable per (model, toggle) state — built at the single send
      * funnel so every path (chat, voice, retry, queue drain) matches. */
-    fun buildInstructions(applyTerse: Boolean): String =
-        if (applyTerse) TERSE_DIRECTIVE + "\n\n" + MEDIA_DIRECTIVE else MEDIA_DIRECTIVE
+    fun buildInstructions(applyTerse: Boolean, swarm: Boolean = false): String =
+        (if (applyTerse) TERSE_DIRECTIVE + "\n\n" + MEDIA_DIRECTIVE else MEDIA_DIRECTIVE) +
+            (if (swarm) "\n\n" + SWARM_DIRECTIVE else "")
 
     /** Strip session-upload URLs from displayed text. The attachment bubble
      * (image preview / file row) replaces the URL — Telegram never shows raw

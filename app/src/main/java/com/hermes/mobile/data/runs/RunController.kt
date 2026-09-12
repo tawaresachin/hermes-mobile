@@ -195,7 +195,7 @@ class RunController @Inject constructor(
 
             val runId = try {
                 api.startRun(serverId, wire, safeModel, provider,
-                    TurnText.buildInstructions(applyTerse))
+                    TurnText.buildInstructions(applyTerse, api.isSwarmForSession(sessionId)))
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) {
                 // Admission failed — no server work exists. Clean the ghost.

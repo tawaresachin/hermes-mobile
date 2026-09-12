@@ -121,14 +121,26 @@ class HermesApiService @Inject constructor(
             .apply()
     }
 
+    // ── Per-session Swarm mode ──
+    // ON = the run carries SWARM_DIRECTIVE: the agent may split substantive
+    // work into a real Kanban Swarm graph (official CLI + gateway
+    // dispatcher). Sticky per session like the model pick.
+    fun isSwarmForSession(sessionId: String): Boolean =
+        prefs.getBoolean("session_swarm:$sessionId", false)
+
+    fun saveSwarmForSession(sessionId: String, on: Boolean) {
+        prefs.edit().putBoolean("session_swarm:$sessionId", on).apply()
+    }
+
     /** Purge every per-session key this class owns. Called on session
-     * delete — without it, srv_session:/session_model(:_slug): entries for
-     * dead sessions accumulate in prefs forever. */
+     * delete — without it, srv_session:/session_model(:_slug)/session_swarm
+     * entries for dead sessions accumulate in prefs forever. */
     fun forgetSessionKeys(sessionId: String) {
         prefs.edit()
             .remove("srv_session:$sessionId")
             .remove("session_model:$sessionId")
             .remove("session_model_slug:$sessionId")
+            .remove("session_swarm:$sessionId")
             .apply()
     }
 

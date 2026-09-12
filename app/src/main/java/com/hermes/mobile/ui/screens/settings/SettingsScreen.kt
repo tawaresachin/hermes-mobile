@@ -117,6 +117,7 @@ data class SettingsUiState(
     val jobs: List<org.json.JSONObject> = emptyList(),
     val skills: List<Pair<String, String>> = emptyList(),  // name -> description
     val serverListsLoading: Boolean = false,
+    val serverListsLoaded: Boolean = false,
     // True when the numbers came from the server ledger, false = local fallback.
     val usageIsServer: Boolean = true,
     // Auth fields
@@ -388,6 +389,7 @@ class SettingsViewModel @Inject constructor(
             _uiState.update { it.copy(serverListsLoading = true) }
             val jobs = try { repository.listJobs() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
             val skills = try { repository.listSkills() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+            val loadedOk = jobs != null && skills != null
             _uiState.update {
                 it.copy(
                     jobs = jobs?.let { arr -> (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i) } } ?: it.jobs,
@@ -399,6 +401,7 @@ class SettingsViewModel @Inject constructor(
                         }.filter { it.first.isNotBlank() }
                     } ?: it.skills,
                     serverListsLoading = false,
+                    serverListsLoaded = loadedOk || it.serverListsLoaded,
                 )
             }
         }
@@ -1390,16 +1393,10 @@ fun HermesAgentAboutRow(viewModel: SettingsViewModel) {
                     else -> "—"
                 },
                 style = MaterialTheme.typography.bodyMedium,
-                color = when {
-                    state.supported && !state.upToDate && !state.loading && !state.applying ->
-                        HermesPrimary
-                    else -> MaterialTheme.colorScheme.onSurface
-                },
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
             val sub = when {
-                state.behind != null && state.behind!! > 0 && !state.applying ->
-                    "${state.behind} commits behind · → ${state.latestSha}"
                 state.error != null && !state.loading -> state.error
                 else -> null
             }
@@ -1433,7 +1430,7 @@ fun ServerListsPanel(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             modifier = Modifier.fillMaxWidth()
                 .clickable {
                     expanded = !expanded
-                    if (expanded && uiState.jobs.isEmpty() && uiState.skills.isEmpty()) {
+                    if (expanded && !uiState.serverListsLoaded) {
                         viewModel.loadServerLists()
                     }
                 }
@@ -1455,6 +1452,14 @@ fun ServerListsPanel(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             if (uiState.serverListsLoading) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
             } else {
+                if (expanded) {
+                    IconButton(onClick = { viewModel.loadServerLists() },
+                        modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Reload",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
                 Icon(if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = null)
             }

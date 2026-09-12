@@ -545,6 +545,8 @@ class HermesRepository @Inject constructor(
 
     fun saveModelForSession(sessionId: String, modelId: String, providerSlug: String) =
         apiService.saveModelForSession(sessionId, modelId, providerSlug)
+    fun isSwarmForSession(sessionId: String): Boolean = apiService.isSwarmForSession(sessionId)
+    fun saveSwarmForSession(sessionId: String, on: Boolean) = apiService.saveSwarmForSession(sessionId, on)
 
     // ─── Dark Theme ───
 

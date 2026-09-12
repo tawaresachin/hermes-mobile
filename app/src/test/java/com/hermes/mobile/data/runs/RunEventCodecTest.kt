@@ -181,6 +181,22 @@ class TurnTextTest {
         assertTrue(on.endsWith(TurnText.MEDIA_DIRECTIVE))
     }
 
+    @Test fun swarmDirectiveShape() {
+        // Swarm toggle rides ONLY the swarm flag, at the END (media directive
+        // order must not shift), and must name the real CLI entry point.
+        assertTrue(TurnText.SWARM_DIRECTIVE.contains("hermes kanban swarm"))
+        assertTrue(TurnText.SWARM_DIRECTIVE.contains("Never claim a swarm"))
+        val plain = TurnText.buildInstructions(false, swarm = false)
+        val swarm = TurnText.buildInstructions(false, swarm = true)
+        assertTrue(plain == TurnText.MEDIA_DIRECTIVE)
+        assertTrue(swarm.startsWith(TurnText.MEDIA_DIRECTIVE))
+        assertTrue(swarm.endsWith(TurnText.SWARM_DIRECTIVE))
+        // terse + swarm compose in order: terse, media, swarm
+        val both = TurnText.buildInstructions(true, swarm = true)
+        assertTrue(both.startsWith(TurnText.TERSE_DIRECTIVE))
+        assertTrue(both.indexOf(TurnText.MEDIA_DIRECTIVE) < both.indexOf(TurnText.SWARM_DIRECTIVE))
+    }
+
     @Test fun statusJsonShape() {
         // fetchRunStatus consumers rely on these keys (server wire).
         val o = JSONObject("""{"status":"completed","output":"x","usage":{"input_tokens":1,"output_tokens":2}}""")
