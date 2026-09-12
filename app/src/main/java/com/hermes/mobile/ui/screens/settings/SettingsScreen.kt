@@ -1374,7 +1374,7 @@ fun HermesAgentAboutRow(viewModel: SettingsViewModel) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "Hermes Agent",
+            text = "Agent Version",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -1413,14 +1413,12 @@ fun HermesAgentAboutRow(viewModel: SettingsViewModel) {
                 modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
             state.supported && !state.upToDate -> FilledTonalButton(
                 onClick = { viewModel.applyUpdate() },
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                modifier = Modifier.height(26.dp).defaultMinSize(minWidth = 0.dp, minHeight = 0.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
             ) { Text("Update", fontSize = 13.sp) }
-            else -> IconButton(
-                onClick = { viewModel.loadUpdateInfo(fresh = true) }) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Check for update",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp))
-            }
+            else -> Icon(Icons.Filled.Refresh, contentDescription = "Check for update",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp))
         }
     }
 }
