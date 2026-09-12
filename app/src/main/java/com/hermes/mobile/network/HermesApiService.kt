@@ -1015,6 +1015,29 @@ class HermesApiService @Inject constructor(
         }
     }
 
+    // ─── Archive flag (server-side; verified contract: PATCH accepts
+    // {"archived":bool}, returns the session, and an archived row drops
+    // out of GET /api/sessions) ───
+
+    suspend fun setSessionArchived(serverId: String, archived: Boolean): Boolean {
+        val baseUrl = config?.baseUrl ?: return false
+        return withContext(Dispatchers.IO) {
+            try {
+                val body = org.json.JSONObject().put("archived", archived).toString()
+                    .toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url("$baseUrl/api/sessions/$serverId")
+                    .patch(body)
+                    .build()
+                client.newCall(request).execute().use { it.isSuccessful }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
     // ─── Delete Session (server-side) ───
 
     suspend fun deleteSession(sessionId: String): Boolean {

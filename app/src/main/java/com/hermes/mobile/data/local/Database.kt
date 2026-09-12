@@ -20,6 +20,9 @@ interface SessionDao {
     @Query("UPDATE sessions SET title = :title WHERE id = :sessionId")
     suspend fun renameSession(sessionId: String, title: String)
 
+    @Query("UPDATE sessions SET archived = :archived, updatedAt = :ts WHERE id = :sessionId")
+    suspend fun setArchived(sessionId: String, archived: Boolean, ts: Long = System.currentTimeMillis())
+
     @Query("UPDATE sessions SET messageCount = messageCount + 1, updatedAt = :timestamp WHERE id = :sessionId")
     suspend fun incrementMessageCount(sessionId: String, timestamp: Long = System.currentTimeMillis())
 
@@ -109,7 +112,7 @@ interface MessageDao {
 
 @Database(
     entities = [Message::class, Session::class],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -158,6 +161,12 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE messages ADD COLUMN contextTokens INTEGER NOT NULL DEFAULT 0")
             }
         }
+        /** v7 -> v8: Telegram-style session archive flag. */
+        val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+            }
+        }
 
         fun create(context: Context): AppDatabase {
             return Room.databaseBuilder(
@@ -165,7 +174,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 "hermes_mobile.db"
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                 // NO fallbackToDestructiveMigration: a missed migration must
                 // crash LOUDLY at open (caught upstream) rather than silently
                 // wipe every session and message the user ever had.

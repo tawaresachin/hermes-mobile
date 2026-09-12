@@ -26,7 +26,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -86,21 +88,45 @@ class SessionsViewModel @Inject constructor(
     // ── Pinned sessions (Telegram-style, persisted in prefs) ──
     private val _pinned = MutableStateFlow(loadPinnedIds())
 
+    // ── Archived view (Telegram-style): the list shows active sessions;
+    //    the header's archive icon flips into the archived-only view. ──
+    private val _showArchived = MutableStateFlow(false)
+    val showArchived: StateFlow<Boolean> = _showArchived.asStateFlow()
+    private val _archivedCount = MutableStateFlow(0)
+    val archivedCount: StateFlow<Int> = _archivedCount.asStateFlow()
+
+    fun toggleShowArchived() { _showArchived.value = !_showArchived.value }
+
+    /** Archive/unarchive (swipe-right affordance). Snackbar carries Undo.
+     * `silent` = undo re-toggle: no toast, nothing to undo again. */
+    fun setArchived(session: Session, archived: Boolean, silent: Boolean = false) {
+        viewModelScope.launch {
+            repository.setSessionArchived(session.id, archived)
+            if (silent) return@launch
+            _snackbarEvent.emit(
+                SnackbarMessage(
+                    text = "\"${session.title ?: "Untitled"}\" ${if (archived) "archived" else "unarchived"}",
+                    actionLabel = "Undo",
+                    undoKind = UndoKind.ARCHIVE,
+                    archiveTarget = session,
+                    archivedWas = archived,
+                )
+            )
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val filteredSessions: StateFlow<List<Session>> = combine(
         repository.allSessions,
         _searchQuery.debounce(300),
         _refreshTrigger.onStart { emit(Unit) },
-        _pinned
-    ) { sessions, query, _, pinned ->
-        val base = if (query.isBlank()) {
-            sessions.filter { it.isActive }
-        } else {
-            sessions.filter { session ->
-                session.isActive
-                    && (session.title?.contains(query, ignoreCase = true) == true)
-            }
-        }
+        _pinned,
+        _showArchived
+    ) { sessions, query, _, pinned, showArchived ->
+        _archivedCount.value = sessions.count { it.isActive && it.archived }
+        val pool = sessions.filter { it.isActive && it.archived == showArchived }
+        val base = if (query.isBlank()) pool
+        else pool.filter { it.title?.contains(query, ignoreCase = true) == true }
         // Telegram-style: pinned sessions float to the top.
         base.sortedByDescending { it.id in pinned }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -262,8 +288,15 @@ class SessionsViewModel @Inject constructor(
 
 data class SnackbarMessage(
     val text: String,
-    val actionLabel: String? = null
+    val actionLabel: String? = null,
+    /** Which Undo the snackbar belongs to — delete restores the session,
+     * archive flips the flag back. */
+    val undoKind: UndoKind = UndoKind.DELETE,
+    val archiveTarget: Session? = null,
+    val archivedWas: Boolean = false,
 )
+
+enum class UndoKind { DELETE, ARCHIVE }
 
 // ═══════════════════════════════════════════════════════════════
 //  SessionsScreen  composable
@@ -281,6 +314,8 @@ fun SessionsScreen(
     val sessions by viewModel.filteredSessions.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val showArchived by viewModel.showArchived.collectAsState()
+    val archivedCount by viewModel.archivedCount.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -296,7 +331,12 @@ fun SessionsScreen(
                 duration = SnackbarDuration.Short
             )
             if (result == SnackbarResult.ActionPerformed) {
-                viewModel.restoreLastDeleted()
+                when (msg.undoKind) {
+                    UndoKind.ARCHIVE -> msg.archiveTarget?.let {
+                        viewModel.setArchived(it, !msg.archivedWas, silent = true)
+                    }
+                    UndoKind.DELETE -> viewModel.restoreLastDeleted()
+                }
             }
         }
     }
@@ -320,7 +360,10 @@ fun SessionsScreen(
             SessionsTopBar(
                 searchQuery = searchQuery,
                 onSearchQueryChanged = viewModel::onSearchQueryChanged,
-                onBack = onBack
+                onBack = onBack,
+                showArchived = showArchived,
+                archivedCount = archivedCount,
+                onToggleArchived = viewModel::toggleShowArchived
             )
         }
     ) { innerPadding ->
@@ -354,6 +397,7 @@ fun SessionsScreen(
                     liveTurns = liveTurns,
                     onSessionSelected = onSessionSelected,
                     onDeleteSession = viewModel::deleteSession,
+                    onArchiveSession = { s -> viewModel.setArchived(s, !s.archived) },
                     onTogglePin = viewModel::togglePin,
                     onRenameSession = { renameTarget = it },
                     drafts = drafts
@@ -385,7 +429,10 @@ fun SessionsScreen(
 private fun SessionsTopBar(
     searchQuery: String,
     onSearchQueryChanged: (String) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    showArchived: Boolean,
+    archivedCount: Int,
+    onToggleArchived: () -> Unit,
 ) {
     var isSearchActive by remember { mutableStateOf(false) }
 
@@ -445,8 +492,8 @@ private fun SessionsTopBar(
             title = {
                 Text(
                     text = "Sessions",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Medium
                 )
             },
             navigationIcon = {
@@ -455,6 +502,24 @@ private fun SessionsTopBar(
                 }
             },
             actions = {
+                // Archived view toggle (only surfaces when relevant: archived
+                // rows exist or the user is inside the archive).
+                if (archivedCount > 0 || showArchived) {
+                    IconButton(onClick = onToggleArchived) {
+                        Icon(
+                            imageVector = Icons.Default.AllInbox,
+                            contentDescription = if (showArchived) "Show active sessions" else "Show archived",
+                            tint = if (showArchived) HermesPrimary
+                                   else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (archivedCount > 0 && !showArchived) {
+                            Badge(
+                                modifier = Modifier.offset(x = 6.dp, y = (-8).dp),
+                                containerColor = HermesPrimary
+                            ) { Text("$archivedCount", fontSize = 9.sp) }
+                        }
+                    }
+                }
                 IconButton(onClick = { isSearchActive = true }) {
                     Icon(Icons.Default.Search, contentDescription = "Search sessions")
                 }
@@ -479,11 +544,13 @@ private fun SessionsList(
     liveTurns: Map<String, com.hermes.mobile.data.runs.RunController.LiveTurn> = emptyMap(),
     onSessionSelected: (String) -> Unit,
     onDeleteSession: (Session) -> Unit,
+    onArchiveSession: (Session) -> Unit,
     onTogglePin: (String) -> Unit,
     onRenameSession: (Session) -> Unit,
     drafts: Map<String, String>
 ) {
     val listState = rememberLazyListState()
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     LazyColumn(
         state = listState,
@@ -494,20 +561,31 @@ private fun SessionsList(
             items = sessions,
             key = { _, it -> it.id }
         ) { index, session ->
-            SwipeToDismissBox(
-                state = rememberSwipeToDismissBoxState(
-                    confirmValueChange = { value ->
+            val dismissState = rememberSwipeToDismissBoxState(
+                confirmValueChange = { value ->
                         // Allow every transition — returning false for Settled
                         // leaves the row stuck half-swiped (delete icon covering
                         // the trailing timestamp).
-                        if (value == SwipeToDismissBoxValue.EndToStart) {
-                            onDeleteSession(session)
+                        when (value) {
+                            SwipeToDismissBoxValue.EndToStart -> {
+                                com.hermes.mobile.ui.haptics.Haptics.press(haptics)
+                                onDeleteSession(session)
+                            }
+                            SwipeToDismissBoxValue.StartToEnd -> {
+                                com.hermes.mobile.ui.haptics.Haptics.tick(haptics)
+                                onArchiveSession(session)
+                            }
+                            else -> { }
                         }
                         true
                     }
-                ),
-                backgroundContent = { SwipeDeleteBackground() },
-                enableDismissFromStartToEnd = false,
+            )
+            SwipeToDismissBox(
+                state = dismissState,
+                backgroundContent = { SwipeRowBackground(dismissState, session.archived) },
+                // Right-swipe flips the archive flag both ways: archive from
+                // the active view, unarchive from the archived view.
+                enableDismissFromStartToEnd = true,
                 enableDismissFromEndToStart = true
             ) {
                 Column {
@@ -548,33 +626,35 @@ private fun SessionsList(
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
-private fun SwipeDeleteBackground() {
+private fun SwipeRowBackground(state: SwipeToDismissBoxState, isArchived: Boolean) {
+    val toDelete = state.targetValue == SwipeToDismissBoxValue.EndToStart
+    val tint = if (toDelete) ErrorRed.copy(alpha = 0.7f)
+               else HermesPrimary.copy(alpha = 0.7f)
+    val archiveLabel = if (isArchived) "Unarchive" else "Archive"
     Box(
         modifier = Modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(16.dp))
             .background(
                 brush = Brush.horizontalGradient(
-                    colors = listOf(
-                        Color.Transparent,
-                        ErrorRed.copy(alpha = 0.7f)
-                    )
+                    colors = if (toDelete) listOf(Color.Transparent, tint)
+                             else listOf(tint, Color.Transparent)
                 )
             ),
-        contentAlignment = Alignment.CenterEnd
+        contentAlignment = if (toDelete) Alignment.CenterEnd else Alignment.CenterStart
     ) {
         Row(
-            modifier = Modifier.padding(end = 24.dp),
+            modifier = Modifier.padding(horizontal = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "Delete",
+                imageVector = if (toDelete) Icons.Default.Delete else Icons.Default.AllInbox,
+                contentDescription = null,
                 tint = Color.White
             )
             Text(
-                text = "Delete",
+                text = if (toDelete) "Delete" else archiveLabel,
                 color = Color.White,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold

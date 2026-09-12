@@ -77,6 +77,8 @@ import com.hermes.mobile.data.local.DraftStore
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.markdown.TableParse
+import com.hermes.mobile.ui.preview.FilePreviewSheet
+import com.hermes.mobile.ui.preview.previewKindFor
 import com.hermes.mobile.ui.components.AttachSheet
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.components.MessageActionSheet
@@ -115,6 +117,9 @@ class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
+
+    /** For the file-preview sheet (composable-level needs the download fn). */
+    fun repository(): HermesRepository = repository
 
     // ── Session state ──
     private val _sessionId = MutableStateFlow<String?>(null)
@@ -1273,6 +1278,7 @@ fun ChatScreen(
     val connectionStatus by vm.connectionStatus.collectAsState()
     val toolCalls by vm.toolCalls.collectAsState()
     val errorMessage by vm.errorMessage.collectAsState()
+    val chatHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     val sessionIdState by vm.sessionId.collectAsState()
     val showEmojiPicker by vm.showEmojiPicker.collectAsState()
     val currentModel by vm.currentModel.collectAsState()
@@ -1293,6 +1299,18 @@ fun ChatScreen(
     //    destructive actions get an Undo, never instant removal) ──
     val snackbarHostState = remember { SnackbarHostState() }
     val lastDeletedMsg by vm.lastDeletedMessage.collectAsState()
+    // Reply landed / run failed — Telegram-style completion + error buzzes.
+    LaunchedEffect(errorMessage) {
+        if (errorMessage != null)
+            com.hermes.mobile.ui.haptics.Haptics.error(chatHaptics, context)
+    }
+    var lastStreaming by remember { mutableStateOf(false) }
+    LaunchedEffect(isStreaming) {
+        val wasStreaming = lastStreaming
+        lastStreaming = isStreaming
+        if (wasStreaming && !isStreaming)
+            com.hermes.mobile.ui.haptics.Haptics.success(chatHaptics, context)
+    }
     LaunchedEffect(lastDeletedMsg?.id) {
         val msg = lastDeletedMsg ?: return@LaunchedEffect
         val result = snackbarHostState.showSnackbar(
@@ -1341,6 +1359,8 @@ fun ChatScreen(
         selectedIds = emptySet()
     }
     var showAttachSheet by remember { mutableStateOf(false) }
+    // In-chat file preview sheet (md/html/pdf/csv/json/code/xlsx/docx/pptx)
+    var previewTarget by remember { mutableStateOf<Message?>(null) }
     var forwardTarget by remember { mutableStateOf<Message?>(null) }
     // ── Search jump-to + highlight ──
     var highlightId by remember { mutableStateOf<Long?>(null) }
@@ -1509,8 +1529,8 @@ fun ChatScreen(
                     Column {
                         Text(
                             text = "Hermes",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
@@ -1863,10 +1883,21 @@ fun ChatScreen(
                                 fontSizeSp = chatFontSp,
                                 onMenu = { menuTarget = message },
                                 onAttachmentTap = { msg ->
-                                    // Telegram: tap attachment bubble = download
-                                    // + open (image → gallery, file → viewer).
-                                    scope.launch {
-                                        vm.openAttachment(context, msg)
+                                    // Images → fullscreen viewer (Telegram-style).
+                                    // Everything previewable → in-app sheet; the
+                                    // sheet's header keeps Open externally/Share,
+                                    // and unpreviewable types fall back there.
+                                    val t = msg.attachmentType.orEmpty()
+                                    val n = (msg.attachmentName ?: msg.attachmentUrl.orEmpty()).lowercase()
+                                    if (t.startsWith("image/") || Regex("\\.(png|jpg|jpeg|gif|webp|bmp)$").containsMatchIn(n)) {
+                                        // In-app fullscreen viewer (Telegram-style),
+                                        // not the gallery hand-off.
+                                        msg.attachmentUrl?.let { url ->
+                                            imageViewerUrl = url
+                                            showImageViewer = url
+                                        }
+                                    } else {
+                                        previewTarget = msg
                                     }
                                 }
                             )
@@ -2144,6 +2175,19 @@ fun ChatScreen(
                     forwardTarget = null
                 },
                 onDismiss = { forwardTarget = null }
+            )
+        }
+
+        // ── In-chat file preview sheet (md/html/pdf/csv/json/code/office) ──
+        previewTarget?.let { target ->
+            FilePreviewSheet(
+                message = target,
+                repository = vm.repository(),
+                onDismiss = { previewTarget = null },
+                onOpenExternal = {
+                    previewTarget = null
+                    scope.launch { vm.openAttachment(context, target) }
+                },
             )
         }
 
@@ -2714,6 +2758,8 @@ fun MessageBubble(
 ) {
     val isUser = message.role == MessageRole.USER
     val isDark = LocalDarkTheme.current
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val hapticCtx = androidx.compose.ui.platform.LocalContext.current
     val bubbleColor = if (isUser) {
         if (isDark) UserBubbleDark else UserBubbleLight
     } else {
@@ -2773,8 +2819,14 @@ fun MessageBubble(
                 .combinedClickable(
                     enabled = !isStreaming,
                     onClick = { if (selectionMode) onToggleSelect?.invoke() },
-                    onLongClick = if (selectionMode) null else onLongPress,
-                    onDoubleClick = if (selectionMode) null else onReact
+                    onLongClick = if (selectionMode) null else { {
+                        com.hermes.mobile.ui.haptics.Haptics.press(haptics)
+                        onLongPress?.invoke()
+                    } },
+                    onDoubleClick = if (selectionMode) null else { {
+                        com.hermes.mobile.ui.haptics.Haptics.tick(haptics)
+                        onReact?.invoke()
+                    } }
                 )
                 .pointerInput(onReply, onDelete, isStreaming, selectionMode) {
                     if (isStreaming || selectionMode) return@pointerInput
@@ -2787,9 +2839,11 @@ fun MessageBubble(
                         change.consume()
                         acc += dragAmount
                         if (acc < -90f && onReply != null) {
+                            com.hermes.mobile.ui.haptics.Haptics.tick(haptics)
                             onReply()
                             acc = 0f
                         } else if (acc > 90f && onDelete != null) {
+                            com.hermes.mobile.ui.haptics.Haptics.press(haptics)
                             onDelete()
                             acc = 0f
                         }

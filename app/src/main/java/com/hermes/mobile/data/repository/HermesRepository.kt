@@ -45,6 +45,17 @@ class HermesRepository @Inject constructor(
         purgeSessionKeys(sessionId)
     }
 
+    /** Toggle archive on a session: local flag first (instant UI), then the
+     * server PATCH best-effort — the desktop sidebar shares the same flag. */
+    suspend fun setSessionArchived(sessionId: String, archived: Boolean) {
+        sessionDao.setArchived(sessionId, archived)
+        apiService.serverIdFor(sessionId)?.let { sid ->
+            try { apiService.setSessionArchived(sid, archived) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { /* offline: local flag stands; desktop syncs its own */ }
+        }
+    }
+
     /** Remove prefs state owned by a deleted session (continuity map,
      * model pin, draft) so deletes leave zero orphans behind. */
     private fun purgeSessionKeys(sessionId: String) {

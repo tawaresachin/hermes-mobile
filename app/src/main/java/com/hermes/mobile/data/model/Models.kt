@@ -55,7 +55,10 @@ data class Session(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val messageCount: Int = 0,
-    val isActive: Boolean = true
+    val isActive: Boolean = true,
+    // Telegram-style archive: hidden from the main list, reachable via the
+    // Archived filter. Mirrors the server flag (PATCH /api/sessions/{id}).
+    val archived: Boolean = false
 )
 
 // ─── Model Info ───

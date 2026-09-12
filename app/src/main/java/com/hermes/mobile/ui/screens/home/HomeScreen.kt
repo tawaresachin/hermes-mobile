@@ -389,7 +389,7 @@ private fun HomeHeader(
         Text(
             text = "$emoji $greeting",
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onBackground
         )
         Text(
