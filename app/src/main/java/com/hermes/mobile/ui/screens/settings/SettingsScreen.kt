@@ -678,10 +678,10 @@ fun SettingsScreen(
                     placeholder = { Text("http://100.89.25.56:8642") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                )
-                Spacer(modifier = Modifier.height(10.dp))
+ modifier = Modifier.fillMaxWidth(),
+ shape = RoundedCornerShape(12.dp)
+ )
+ Spacer(modifier = Modifier.height(8.dp))
 
                 // Action buttons: QR + Test side by side
                 Row(
@@ -747,11 +747,13 @@ fun SettingsScreen(
                                 Text(
                                     if (isApiKeyVisible) uiState.apiKey
                                     else uiState.apiKey.takeIf { it.startsWith("hermes-") }
-                                        ?.let { "hermes-" + "•".repeat(16) }
-                                        ?: "•".repeat(16),
+                                        ?.let { "hermes-" + "•".repeat(8) }
+                                        ?: "•".repeat(8),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                 )
                             }
                             TextButton(onClick = { isApiKeyVisible = !isApiKeyVisible }) {
@@ -1269,35 +1271,35 @@ private fun ConnectionStatusHeader(
         }
     }
 
-    Column(modifier = Modifier.padding(bottom = 14.dp)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(statusColor)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = if (status == ConnectionStatus.CONNECTED && routeLabel.isNotBlank()) {
-                        "$statusText $routeLabel"
-                    } else statusText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = statusColor
-                )
-            }
-            // Refresh icon next to status
+    Column(modifier = Modifier.padding(bottom = 8.dp)) {
+        // Text + refresh left-aligned with a small gap — no SpaceBetween
+        // stretch (it parked a dead hole mid-card).
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(statusColor)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (status == ConnectionStatus.CONNECTED && routeLabel.isNotBlank()) {
+                    "$statusText $routeLabel"
+                } else statusText,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = statusColor
+            )
+            // Refresh icon immediately after the status text
             if (status != ConnectionStatus.CONNECTING) {
-                IconButton(onClick = onRefresh) {
+                IconButton(
+                    onClick = onRefresh,
+                    modifier = Modifier.size(32.dp),
+                ) {
                     Icon(
                         Icons.Filled.Refresh,
                         contentDescription = "Test connection",
-                        modifier = Modifier.size(24.dp),
+                        modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
