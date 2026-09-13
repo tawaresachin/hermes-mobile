@@ -16,13 +16,9 @@ Pairs in one QR scan. Works with any Hermes Agent install — Windows, macOS, Li
 
 ## See it first
 
-| Home — status & recents | Chat — streaming + files | Voice — press to talk |
-|---|---|---|
-| ![Home](docs/screenshots/01-home.jpg) | ![Chat](docs/screenshots/02-chat.jpg) | ![Voice](docs/screenshots/03-voice.jpg) |
-
-| Sessions — all platforms | Settings — QR pairing | Usage & preferences |
-|---|---|---|
-| ![Sessions](docs/screenshots/04-sessions.jpg) | ![Settings](docs/screenshots/05-settings-connect.jpg) | ![Usage](docs/screenshots/06-settings-usage.jpg) |
+| Home — status & recents | Chat — streaming + files | Voice — press to talk | Sessions — all platforms | Settings — pairing | Usage & prefs |
+|---|---|---|---|---|---|
+| <img src="docs/screenshots/01-home.jpg" width="170"> | <img src="docs/screenshots/02-chat.jpg" width="170"> | <img src="docs/screenshots/03-voice.jpg" width="170"> | <img src="docs/screenshots/04-sessions.jpg" width="170"> | <img src="docs/screenshots/05-settings-connect.jpg" width="170"> | <img src="docs/screenshots/06-settings-usage.jpg" width="170"> |
 
 ## Features
 
