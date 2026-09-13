@@ -307,7 +307,6 @@ enum class UndoKind { DELETE, ARCHIVE }
 fun SessionsScreen(
     paddingValues: PaddingValues,
     onSessionSelected: (String) -> Unit,
-    onBack: () -> Unit,
     onNewChat: () -> Unit,
     viewModel: SessionsViewModel = hiltViewModel()
 ) {
@@ -360,7 +359,6 @@ fun SessionsScreen(
             SessionsTopBar(
                 searchQuery = searchQuery,
                 onSearchQueryChanged = viewModel::onSearchQueryChanged,
-                onBack = onBack,
                 showArchived = showArchived,
                 archivedCount = archivedCount,
                 onToggleArchived = viewModel::toggleShowArchived
@@ -429,7 +427,6 @@ fun SessionsScreen(
 private fun SessionsTopBar(
     searchQuery: String,
     onSearchQueryChanged: (String) -> Unit,
-    onBack: () -> Unit,
     showArchived: Boolean,
     archivedCount: Int,
     onToggleArchived: () -> Unit,
@@ -486,8 +483,10 @@ private fun SessionsTopBar(
             // Empty — search results are shown in the main sessions list below
         }
     } else {
-        // ── Default top app bar ──
-        CenterAlignedTopAppBar(
+        // ── Default top app bar — left-aligned like every other screen.
+        // No back arrow: Sessions is a bottom tab (the arrow's popBackStack
+        // was a no-op when arrived-at via the tab).
+        TopAppBar(
             windowInsets = WindowInsets(0.dp),
             title = {
                 Text(
@@ -495,11 +494,6 @@ private fun SessionsTopBar(
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Medium
                 )
-            },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                }
             },
             actions = {
                 // Archived view toggle (only surfaces when relevant: archived
@@ -524,7 +518,7 @@ private fun SessionsTopBar(
                     Icon(Icons.Default.Search, contentDescription = "Search sessions")
                 }
             },
-            colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+            colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = Color.Transparent
             )
         )

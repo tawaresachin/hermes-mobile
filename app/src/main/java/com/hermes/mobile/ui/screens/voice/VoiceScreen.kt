@@ -55,7 +55,7 @@ private data class VoiceTurn(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VoiceScreen(onExit: () -> Unit) {
+fun VoiceScreen() {
     val vm: VoiceViewModel = hiltViewModel()
     val currentModel by vm.currentModel.collectAsState()
     val availableModels by vm.availableModels.collectAsState()
@@ -232,12 +232,9 @@ fun VoiceScreen(onExit: () -> Unit) {
             // Outer NavHost padding already reserves the status bar; the
             // bar's default insets would add it AGAIN (blank band on top).
             windowInsets = WindowInsets(0.dp),
+            // Voice is a bottom tab — no back arrow (consistent with the
+            // rest of the tab screens); onExit still ends the session.
             title = { Text("Voice", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium) },
-            navigationIcon = {
-                IconButton(onClick = onExit) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                }
-            },
             actions = {
                 if (currentModel.isNotBlank()) {
                     val displayName = availableModels.firstOrNull { it.id == currentModel }?.name

@@ -179,14 +179,7 @@ fun MainNavigation(
             }
             composable(Screen.Voice.route) {
                 if (isLoggedIn) {
-                    VoiceScreen(
-                        onExit = {
-                            navController.navigate(Screen.Home.route) {
-                                popUpTo(navController.graph.findStartDestination().id)
-                                launchSingleTop = true
-                            }
-                        }
-                    )
+                    VoiceScreen()
                 } else {
                     VoiceNav.pendingNewSession = false
                     SignInRequired(
@@ -202,9 +195,6 @@ fun MainNavigation(
                     SessionsScreen(
                         paddingValues = scaffoldPadding,
                         onSessionSelected = { sessionId -> openChat(navController, sessionId) },
-                        onBack = {
-                            navController.popBackStack()
-                        },
                         onNewChat = {
                             openChat(navController, null)
                         }
