@@ -831,8 +831,10 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Text("Chat Text Size",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f))
+                            color = MaterialTheme.colorScheme.onSurface)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        // Value sits right beside the label — weight(1f) pinned
+                        // it to the card's far edge, leaving a dead gap mid-row.
                         Text("${chatFontSp.toInt()} sp",
                             style = MaterialTheme.typography.labelMedium,
                             color = HermesPrimary)
