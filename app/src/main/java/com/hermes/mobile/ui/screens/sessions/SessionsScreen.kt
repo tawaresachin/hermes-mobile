@@ -175,6 +175,7 @@ class SessionsViewModel @Inject constructor(
     fun refresh() {
         viewModelScope.launch {
             _isRefreshing.value = true
+            syncFromServer()
             _refreshTrigger.emit(Unit)
             refreshServerStatus()
             // Brief delay so the spinner is always visible even on fast DB reads
@@ -188,6 +189,20 @@ class SessionsViewModel @Inject constructor(
      * Complements the server-status map (which also covers other surfaces). */
     val liveTurns: StateFlow<Map<String, com.hermes.mobile.data.runs.RunController.LiveTurn>> =
         repository.runController.turns
+
+    /** Pull the full server session list (Hermes Desktop + Telegram + CLI +
+     * other devices) into the local Room DB, then refresh live badges.
+     * One paginated GET — runs on open, on every 10s poll, and on pull-to-
+     * refresh. Transcripts import lazily when a session is first opened. */
+    fun syncFromServer() {
+        viewModelScope.launch {
+            try {
+                repository.syncAllSessionsFromServer()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { }
+        }
+    }
 
     /** Poll the server's session status/source map (used on open + every
      * 10s while the tab is alive — cheap, one small GET). */
@@ -203,9 +218,10 @@ class SessionsViewModel @Inject constructor(
     }
 
     init {
-        // Live badges: poll the server status while the tab exists.
+        // Live badges + full session sync while the tab exists.
         viewModelScope.launch {
             while (true) {
+                syncFromServer()
                 refreshServerStatus()
                 kotlinx.coroutines.delay(10_000)
             }
@@ -707,7 +723,19 @@ private fun StatusBadge(status: String?, source: String?, needsInput: Boolean = 
                 )
             }
         }
-        if (source == "voice" || source == "swarm") {
+        // Provenance chip: where the session actually runs from. app is
+        // omitted (it's the default); voice/swarm are this app's modes;
+        // api_server/telegram/cli/desktop come from the server sync.
+        val chip = when (source) {
+            "voice", "swarm" -> source
+            "api_server" -> "app"
+            "telegram" -> "telegram"
+            "cli" -> "cli"
+            "desktop" -> "desktop"
+            "cron" -> "cron"
+            else -> null
+        }
+        if (chip != null && chip != "app") {
             Spacer(modifier = Modifier.width(4.dp))
             Box(
                 modifier = Modifier
@@ -716,7 +744,7 @@ private fun StatusBadge(status: String?, source: String?, needsInput: Boolean = 
                     .padding(horizontal = 5.dp, vertical = 1.dp)
             ) {
                 Text(
-                    text = source,
+                    text = chip,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer
                 )

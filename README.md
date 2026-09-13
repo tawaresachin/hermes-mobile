@@ -55,8 +55,10 @@ a GPG detached signature (key published in the
 - **Press to talk** (Whisper STT on your server), replies spoken back (TTS)
 
 ### 🗂 Sessions
-- Every session from every platform — Telegram, CLI, desktop, this app — searchable, switchable,
-  deletable; usage stats come from the server, not estimates
+- **Always in sync** — the app auto-pulls every Hermes session (desktop, Telegram, CLI, other
+  phones) on open and every 10s; titles, archive state and deletions mirror the server, with a
+  provenance chip per session. Transcripts download lazily the first time you open a session,
+  and you can reply straight into a desktop/Telegram conversation from your phone
 
 ### ⚙️ You own the server — from the phone
 - **Settings:** connection card (URL/key/test, QR scan **camera or gallery**), chat text size,

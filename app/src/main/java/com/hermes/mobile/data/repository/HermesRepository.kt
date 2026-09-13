@@ -64,6 +64,7 @@ class HermesRepository @Inject constructor(
      * model pin, draft) so deletes leave zero orphans behind. */
     private fun purgeSessionKeys(sessionId: String) {
         apiService.forgetSessionKeys(sessionId)
+        apiService.forgetSyncTitles { it == sessionId }
         com.hermes.mobile.data.local.DraftStore.clear(sessionId)
     }
 
@@ -139,8 +140,121 @@ class HermesRepository @Inject constructor(
 
 
     suspend fun resumeSession(sessionId: String): List<Message> {
-        return messageDao.getMessagesOnce(sessionId)
+        val local = messageDao.getMessagesOnce(sessionId)
+        // Lazy transcript import: a session that came from the server-side
+        // sync (id == server id, no dashes — local ids are UUIDs) opens with
+        // an empty Room table until the real transcript is pulled once.
+        if (local.isEmpty() && !sessionId.contains('-')) {
+            importServerTranscript(sessionId)
+            return messageDao.getMessagesOnce(sessionId)
+        }
+        return local
     }
+
+    /** Download + persist the full server transcript for `sessionId`.
+     * Rows are inserted in chronological order; assistant/user only
+     * (system + tool rows are server plumbing, not conversation). */
+    private suspend fun importServerTranscript(sessionId: String) {
+        try {
+            val msgs = apiService.fetchSessionMessages(sessionId) ?: return
+            for (m in msgs) {
+                val role = when (m.optString("role")) {
+                    "user" -> MessageRole.USER
+                    "assistant" -> MessageRole.ASSISTANT
+                    else -> continue
+                }
+                val content = m.optString("content")
+                if (content.isBlank()) continue
+                // Server timestamps are epoch SECONDS (float) — optLong
+                // would read them as garbage; convert explicitly.
+                val tsSec = m.optDouble("timestamp", 0.0)
+                val ts = if (tsSec > 1_000_000_000.0) (tsSec * 1000).toLong()
+                         else System.currentTimeMillis()
+                messageDao.insertMessage(
+                    Message(
+                        sessionId = sessionId,
+                        role = role,
+                        content = content,
+                        timestamp = ts,
+                        tokens = m.optLong("token_count", 0L),
+                        status = if (role == MessageRole.USER) MessageStatus.READ else null,
+                    )
+                )
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) { }
+    }
+
+    /** Full server → phone sync: every Hermes session (Desktop, Telegram,
+     * CLI, other phones) lands in the local list. Imported rows use the
+     * SERVER id as the local id, so opening + sending route to the right
+     * server transcript with zero mapping (serverIdFor falls through to the
+     * id itself). App-created sessions are recognised through the
+     * srv_session continuity map and skipped — they already exist under
+     * their UUID. Titles update from server truth UNLESS renamed locally
+     * (tracked via sync_title:<id> prefs). Sessions that vanished from a
+     * COMPLETE server list are purged locally (desktop-side delete). */
+    suspend fun syncAllSessionsFromServer(): Int {
+        val (remote, complete) = apiService.fetchServerSessions()
+        if (remote.isEmpty()) return 0
+        var changed = 0
+        val seenServerIds = HashSet<String>()
+        for (s in remote) {
+            if (s.hidden) continue
+            seenServerIds.add(s.id)
+            val mappedLocal = apiService.localIdForServerId(s.id)
+            val localId = mappedLocal ?: s.id
+            val existing = sessionDao.getSessionById(localId)
+            val nowMs = System.currentTimeMillis()
+            val updatedAt = ((s.lastActiveSec * 1000).toLong()).takeIf { it > 60_000_000_000L } ?: nowMs
+            val createdAt = ((s.startedAtSec * 1000).toLong())
+                .takeIf { it > 60_000_000_000L && it < updatedAt } ?: updatedAt
+            val prevSyncedTitle = apiService.syncTitleFor(localId)
+            val newTitle = when {
+                existing == null -> s.title.ifBlank { "Untitled Session" }
+                existing.title == prevSyncedTitle -> s.title.ifBlank { existing.title }
+                else -> existing.title   // user renamed locally — keep it
+            }
+            sessionDao.upsertSession(
+                (existing ?: Session(id = localId)).copy(
+                    id = localId,
+                    title = newTitle,
+                    createdAt = minOf(existing?.createdAt ?: createdAt, createdAt),
+                    updatedAt = updatedAt,
+                    messageCount = maxOf(s.messageCount, 0),
+                    // Server-backed sessions: the archive flag round-trips
+                    // through PATCH, so server truth wins (un-archive works).
+                    // UUID rows that never reached the server: keep local.
+                    archived = if (mappedLocal != null || !localId.contains('-')) s.archived
+                               else (existing?.archived ?: s.archived),
+                )
+            )
+            if (existing == null || existing.title != newTitle) {
+                changed++
+            }
+            // Remember the server title as the baseline for rename detection.
+            if (s.title.isNotBlank()) apiService.saveSyncTitle(localId, s.title)
+            // Pin the server model so reopening an imported session uses it.
+            if (mappedLocal == null && s.model.isNotBlank() &&
+                apiService.savedModelForSession(localId).isNullOrBlank()) {
+                apiService.saveModelForSession(localId, s.model, "")
+            }
+        }
+        if (complete) {
+            // Purge synced rows the server no longer knows (desktop deleted).
+            for (row in sessionDao.getAllSessionsOnce()) {
+                if (row.id.contains('-')) continue          // app-created
+                if (seenServerIds.contains(row.id)) continue // still alive
+                if (apiService.localIdForServerId(row.id) != null) continue
+                deleteSessionLocal(row.id)
+                changed++
+            }
+        }
+        return changed
+    }
+
+    // (sync-title baseline lives in prefs: HermesApiService.syncTitleFor)
 
     /** Backfill attachment fields from the server onto local assistant rows
      * that are MISSING them (rows created before in-stream attachments, or

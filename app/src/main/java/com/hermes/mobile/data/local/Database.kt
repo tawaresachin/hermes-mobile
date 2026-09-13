@@ -33,6 +33,10 @@ interface SessionDao {
 
     @Query("SELECT * FROM sessions WHERE isActive = 1 ORDER BY updatedAt DESC LIMIT 1")
     suspend fun getLastSession(): Session?
+
+    /** One-shot list for the sync purge step (Flow version drives the UI). */
+    @Query("SELECT * FROM sessions")
+    suspend fun getAllSessionsOnce(): List<Session>
 }
 
 @Dao

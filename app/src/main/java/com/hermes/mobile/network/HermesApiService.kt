@@ -91,6 +91,18 @@ class HermesApiService @Inject constructor(
         prefs.edit().putString("srv_session:$localSessionId", serverId).apply()
     }
 
+    /** Reverse lookup: which LOCAL session already owns this SERVER id?
+     * The session sync uses it to skip app-created sessions (they already
+     * exist locally under a UUID, mapped via srv_session:*). */
+    fun localIdForServerId(serverId: String): String? {
+        if (serverId.isBlank()) return null
+        return prefs.all.keys
+            .asSequence()
+            .filter { it.startsWith("srv_session:") }
+            .map { it.removePrefix("srv_session:") }
+            .firstOrNull { serverIdFor(it) == serverId }
+    }
+
     // ── Terse-replies mode (Settings "Terse Replies", pref key kept: caveman_mode) ──
     // ON = terse replies to save output tokens. The gateway extracts a
     // leading system-role message as the turn's ephemeral system prompt,
@@ -909,6 +921,91 @@ class HermesApiService @Inject constructor(
                 throw e
             } catch (_: Exception) { emptyMap() }
         }
+    }
+
+    /** Full server session list (paginated, capped at 5×200). This is the
+     * sync source: every Hermes Desktop / Telegram / CLI / other-device
+     * session, not just the ones this phone created. */
+    data class ServerSession(
+        val id: String,
+        val title: String,
+        val model: String,
+        val source: String,
+        val messageCount: Int,
+        val startedAtSec: Double,
+        val lastActiveSec: Double,
+        val archived: Boolean,
+        val hidden: Boolean,
+    )
+
+    /** Returns (sessions, complete) — complete=false means the list may be
+     * truncated (page cap hit or mid-pagination error), so the caller must
+     * NOT purge local sessions missing from it. */
+    suspend fun fetchServerSessions(): Pair<List<ServerSession>, Boolean> {
+        val baseUrl = config?.baseUrl ?: return emptyList<ServerSession>() to false
+        return withContext(Dispatchers.IO) {
+            val out = ArrayList<ServerSession>()
+            var complete = false
+            try {
+                var offset = 0
+                for (page in 0 until 5) {
+                    val request = Request.Builder()
+                        .url("$baseUrl/api/sessions?limit=200&offset=$offset").get().build()
+                    client.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) return@use
+                        val json = JSONObject(response.body?.string() ?: return@use)
+                        val arr = json.optJSONArray("data") ?: return@use
+                        for (i in 0 until arr.length()) {
+                            val s = arr.optJSONObject(i) ?: continue
+                            val id = s.optString("id", "")
+                            if (id.isBlank()) continue
+                            out.add(
+                                ServerSession(
+                                    id = id,
+                                    title = s.optString("title", "")
+                                        .ifBlank { s.optString("preview", "").take(60) },
+                                    model = s.optString("model", ""),
+                                    source = s.optString("source", ""),
+                                    messageCount = s.optInt("message_count", 0),
+                                    startedAtSec = s.optDouble("started_at", 0.0),
+                                    lastActiveSec = s.optDouble("last_active", 0.0),
+                                    archived = s.optBoolean("archived", false),
+                                    hidden = s.optBoolean("hidden", false),
+                                )
+                            )
+                        }
+                        if (!json.optBoolean("has_more", false) || arr.length() == 0) {
+                            complete = true
+                            offset = -1
+                            return@use
+                        }
+                    }
+                    if (offset < 0) break
+                    offset += 200
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { complete = false }
+            out to complete
+        }
+    }
+
+    /** Last server title sync applied to a session id — lets sync tell
+     * "desktop renamed it" (title still == what we last synced in) from
+     * "user renamed it on this phone" (diverged → keep local title). */
+    fun syncTitleFor(serverId: String): String? =
+        prefs.getString("sync_title:$serverId", null)
+
+    fun saveSyncTitle(serverId: String, title: String) {
+        prefs.edit().putString("sync_title:$serverId", title).apply()
+    }
+
+    fun forgetSyncTitles(predicate: (String) -> Boolean) {
+        val ed = prefs.edit()
+        for (k in prefs.all.keys.filter { it.startsWith("sync_title:") }) {
+            if (predicate(k.removePrefix("sync_title:"))) ed.remove(k)
+        }
+        ed.apply()
     }
 
     // ─── Server usage truth (Settings → Usage) ───
