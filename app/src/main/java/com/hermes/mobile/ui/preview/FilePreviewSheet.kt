@@ -307,15 +307,25 @@ private fun renderPdf(context: Context, bytes: ByteArray): PreviewState {
             android.graphics.pdf.PdfRenderer(pfd).use { renderer ->
                 val count = renderer.pageCount
                 val max = minOf(count, 12)
-                val bitmaps = (0 until max).map { i ->
+                // Scale while rendering: PdfRenderer honors the dst bitmap
+                // dimensions, so we never allocate the full-size page. Plus a
+                // hard pixel budget — a 12-page scanned deck could still blow
+                // the heap; pages past the budget are dropped, not crashed.
+                val budget = 36_000_000L // ~144 MB ARGB across all pages max
+                var spent = 0L
+                val bitmaps = ArrayList<android.graphics.Bitmap>()
+                for (i in 0 until max) {
                     val page = renderer.openPage(i)
-                    val bmp = android.graphics.Bitmap.createBitmap(page.width, page.height,
+                    val scale = minOf(1f, 1400f / page.width)
+                    val w = (page.width * scale).toInt().coerceAtLeast(1)
+                    val h = (page.height * scale).toInt().coerceAtLeast(1)
+                    if (spent + w.toLong() * h > budget) { page.close(); break }
+                    val bmp = android.graphics.Bitmap.createBitmap(w, h,
                         android.graphics.Bitmap.Config.ARGB_8888)
                     page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                     page.close()
-                    if (bmp.width > 1400) android.graphics.Bitmap.createScaledBitmap(
-                        bmp, 1400, (1400.0 * bmp.height / bmp.width).toInt(), true).also { bmp.recycle() }
-                    else bmp
+                    spent += w.toLong() * h
+                    bitmaps += bmp
                 }
                 PreviewState.PdfPages(bitmaps, count)
             }

@@ -1893,7 +1893,12 @@ fun ChatScreen(
                                     // and unpreviewable types fall back there.
                                     val t = msg.attachmentType.orEmpty()
                                     val n = (msg.attachmentName ?: msg.attachmentUrl.orEmpty()).lowercase()
-                                    if (t.startsWith("image/") || Regex("\\.(png|jpg|jpeg|gif|webp|bmp)$").containsMatchIn(n)) {
+                                    // One source of truth for kind dispatch
+                                    // (the sheet's own routing uses the same
+                                    // previewKindFor; the old inline regex
+                                    // could drift from it).
+                                    if (com.hermes.mobile.ui.preview.previewKindFor(n, t)
+                                            == com.hermes.mobile.ui.preview.PreviewKind.Image) {
                                         // In-app fullscreen viewer (Telegram-style),
                                         // not the gallery hand-off.
                                         msg.attachmentUrl?.let { url ->
