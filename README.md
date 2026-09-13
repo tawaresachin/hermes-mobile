@@ -31,6 +31,9 @@ Pairs in one QR scan. Works with any Hermes Agent install — Windows, macOS, Li
 - **Retry any message** from its menu; long turns keep running server-side even if you leave
   the screen — come back and everything is already there
 - **Context meter** above the input: live tokens used / window, straight from server truth
+- **Swarm mode** — a per-session toggle in the chat header: for substantive multi-part work your
+  agent orchestrates a real Kanban Swarm graph (parallel specialist workers → verifier →
+  synthesizer) instead of doing it serially itself; simple asks are still answered normally
 
 ### 📁 Files
 - Send photos/documents to your agent; receive its output as **downloadable file cards**
