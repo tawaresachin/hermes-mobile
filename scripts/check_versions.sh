@@ -32,7 +32,7 @@ PV=$(grep -oE '^version: "[0-9.]+"' "$YAM" | grep -oE '[0-9.]+')
 note "version contract: app=$NAME plugin=$PV (independent lines)"
 
 IFS=. read -r MA MI PA <<< "$NAME"
-EXPECT_CODE=$(( 10#$MA * 10000 + 10#$MI * 100 + 10#$PA ))
+EXPECT_CODE=$(( 10#$MA * 1000000 + 10#$MI * 1000 + 10#$PA ))
 [ "$CODE" = "$EXPECT_CODE" ] && ok "app versionCode $CODE derived from $NAME" \
   || bad "app versionCode $CODE != $EXPECT_CODE (use release.sh to bump)"
 

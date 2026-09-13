@@ -18,8 +18,9 @@ gitx() { ( cd "$1" && shift && perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' git "$
 gpgsign() { perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' gpg --batch --yes --pinentry-mode loopback \
   --passphrase "$(cat "$KDIR/gpg-password")" --local-user "$GPG_KEYID" "$@"; }
 
-KIND="${1:?usage: ship_release.sh <app|plugin> <version>}"; shift
+KIND="${1:?usage: ship_release.sh <app|plugin> <version> [extra notes...]}"; shift
 VER="${1:?version}"; shift
+NOTES_OVERRIDE="$*"
 APP_REPO="$HOME/hermes-mobile-app"; PLG_REPO="$HOME/hermes-mobile-plugin"
 case "$KIND" in
   app)    REPO="$APP_REPO"; SLUG="tawaresachin/hermes-mobile";;
@@ -35,12 +36,30 @@ DIST="$KDIR/dist-$KIND-$TAG"; rm -rf "$DIST"; mkdir -p "$DIST"
 ASSETS=()
 NOTES_FILE="$DIST/NOTES.md"
 
+# Auto changelog: commits since the previous v-tag reachable from this one.
+PREV=$(gitx "$REPO" tag --sort=-v:refname --merged "refs/tags/$TAG" \
+        | grep -E '^v[0-9]' | grep -v "^$TAG$" | head -1 || true)
+if [ -n "$PREV" ]; then
+  CHANGES=$(gitx "$REPO" log "$PREV..$TAG" --no-merges --pretty=format:'- %s' | head -40)
+  PREV_LABEL="$PREV"
+else
+  CHANGES=$(gitx "$REPO" log "$TAG" --no-merges --pretty=format:'- %s' | head -40)
+  PREV_LABEL="(first release — full history)"
+fi
+[ -n "$CHANGES" ] || CHANGES="- (no commits found)"
+[ -n "$NOTES_OVERRIDE" ] || NOTES_OVERRIDE=""
+if [ -n "$NOTES_OVERRIDE" ]; then NOTES_EXTRA=$(printf '%s\n\n' "$NOTES_OVERRIDE"); else NOTES_EXTRA=""; fi
+
 if [ "$KIND" = app ]; then
   APK="$APP_REPO/app/build/outputs/apk/release/Hermes-Mobile-v$VER.apk"
   [ -f "$APK" ] || { echo "!! missing $APK — run assembleRelease first" >&2; exit 4; }
   cp "$APK" "$DIST/"
   ASSETS+=("$DIST/Hermes-Mobile-v$VER.apk")
   cat > "$NOTES_FILE" <<EOF
+${NOTES_EXTRA}## Changes since $PREV_LABEL
+
+$CHANGES
+
 Android client for Hermes Agent. One APK runs on every device (Android 8+); no per-OS variants needed.
 
 **Install:** download \`Hermes-Mobile-v$VER.apk\`, open it, allow "install from unknown sources" once.
@@ -60,6 +79,10 @@ else
   [ ${#W[@]} -ge 2 ] || { echo "!! wheel/sdist missing" >&2; exit 4; }
   ASSETS+=( "${W[@]}" )
   cat > "$NOTES_FILE" <<EOF
+${NOTES_EXTRA}## Changes since $PREV_LABEL
+
+$CHANGES
+
 Server-side companion plugin for Hermes Agent. **Pure Python** — this single \`py3-none-any\` wheel works unchanged on Windows, macOS, Linux and Termux; native deps (pyyaml, qrcode) resolve per-OS from PyPI at install time. No per-OS binaries exist because none are needed.
 
 **Install (any OS):**

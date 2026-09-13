@@ -464,6 +464,9 @@ class HermesRepository @Inject constructor(
         return apiService.getSystemStatus()
     }
 
+    suspend fun checkPluginCompat(): HermesApiService.PluginCompat? =
+        apiService.checkPluginCompat()
+
     suspend fun setKeepAwake(awake: Boolean): String? {
         return apiService.setSystemAwake(awake)
     }

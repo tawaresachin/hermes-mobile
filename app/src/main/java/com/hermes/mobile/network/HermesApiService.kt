@@ -37,6 +37,10 @@ class HermesApiService @Inject constructor(
 ) {
 
     companion object {
+        const val MIN_PLUGIN_PROTOCOL: Int = 1
+        const val PLUGIN_RELEASES_URL: String =
+            "https://github.com/tawaresachin/hermes-mobile-plugin/releases/latest"
+
         private const val PREFS_NAME = "hermes_config"
         // SECURITY: the secure store MUST use a DIFFERENT file name than
         // the plain store. Sharing "hermes_config" made
@@ -783,12 +787,28 @@ class HermesApiService @Inject constructor(
 
     // ─── Keep Computer Awake (platform-generic) ───
 
+    // Protocol gate: app ↔ plugin compatibility is a PROTOCOL handshake,
+    // never a version-number match. Plugin publishes `plugin_protocol` (int)
+    // on /api/system/status; this app requires >= MIN. Both products ship
+    // independent 0.x lines forever; a plugin below MIN shows the update card.
+    data class PluginCompat(
+        val ok: Boolean,
+        val pluginVersion: String,
+        val pluginProtocol: Int,
+        /** true = plugin too old for this app build */
+        val needsUpdate: Boolean,
+    )
+
     data class SystemStatus(
         val os: String,
         val platform: String,
         val python: String,
         val awake: Boolean,
-        val awakeMechanism: String?
+        val awakeMechanism: String?,
+        // Plugin identity for the protocol gate. plugin_protocol is absent on
+        // plugins older than 0.0.7 — 0 means "legacy", NOT "version 0".
+        val pluginVersion: String = "",
+        val pluginProtocol: Int = 0
     )
 
     suspend fun getSystemStatus(): SystemStatus? {
@@ -806,7 +826,9 @@ class HermesApiService @Inject constructor(
                             awake = json.optBoolean("awake", false),
                             awakeMechanism = json.optString("awake_mechanism", "")
                                 .ifBlank { null }
-                                .takeUnless { it == "null" }
+                                .takeUnless { it == "null" },
+                            pluginVersion = json.optString("plugin_version", ""),
+                            pluginProtocol = json.optInt("plugin_protocol", 0)
                         )
                     } else null
                 }
@@ -814,6 +836,20 @@ class HermesApiService @Inject constructor(
                 throw e
             } catch (_: Exception) { null }
         }
+    }
+
+    /** One-shot protocol handshake for the plugin behind `config`.
+     * plugin_protocol missing (plugin < 0.0.7) reads as protocol 0 — treated
+     * as OK because every feature of those builds predates MIN_PLUGIN_PROTOCOL;
+     * a plugin answering BELOW min is a genuine "server too old". */
+    suspend fun checkPluginCompat(): PluginCompat? {
+        val st = getSystemStatus() ?: return null
+        return PluginCompat(
+            ok = st.pluginProtocol == 0 || st.pluginProtocol >= MIN_PLUGIN_PROTOCOL,
+            pluginVersion = st.pluginVersion,
+            pluginProtocol = st.pluginProtocol,
+            needsUpdate = st.pluginProtocol > 0 && st.pluginProtocol < MIN_PLUGIN_PROTOCOL,
+        )
     }
 
     suspend fun setSystemAwake(awake: Boolean): String? {

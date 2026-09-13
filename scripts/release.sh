@@ -69,10 +69,11 @@ release_repo() {  # <repo> <newver> <commit-pathspec> <extra-sync-cmd>
 
 # ── app bump ──────────────────────────────────────────────────────────
 if [ -n "$NEW_APP" ]; then
-  # versionCode must increase monotonically; derive from full semver so a
-  # 0.1.0 release still outranks 0.0.47 (1*10000 > 47).
+  # versionCode must increase monotonically; 1M/1K/1 lanes support
+  # 999 patches per minor without aliasing (old 100/1 formula made
+  # 0.0.100 == 0.1.0 — Android would reject one of them as a downgrade).
   IFS=. read -r MA MI PA <<< "$NEW_APP"
-  CODE=$(( 10#$MA * 10000 + 10#$MI * 100 + 10#$PA ))
+  CODE=$(( 10#$MA * 1000000 + 10#$MI * 1000 + 10#$PA ))
   sed -i "s/versionCode = [0-9][0-9]*/versionCode = $CODE/; s/versionName = \"[0-9.]*\"/versionName = \"$NEW_APP\"/" \
     "$APP_REPO/app/build.gradle.kts"
   gitx "$APP_REPO" add app/build.gradle.kts scripts

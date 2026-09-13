@@ -106,6 +106,10 @@ data class SettingsUiState(
     // Keep Computer Awake (platform-generic: works on any host OS)
     val keepAwake: Boolean = false,
     val awakeMechanism: String? = null,
+    // Server plugin identity (protocol handshake)
+    val pluginVersion: String = "",
+    val pluginProtocol: Int = 0,
+    val pluginNeedsUpdate: Boolean = false,
     // Preferences
     // Usage stats
     val sessionsCount: Int = 0,
@@ -172,8 +176,15 @@ class SettingsViewModel @Inject constructor(
             try {
                 val st = repository.fetchSystemStatus()
                 if (st != null) {
+                    val compat = try { repository.checkPluginCompat() } catch (_: Exception) { null }
                     _uiState.update {
-                        it.copy(keepAwake = st.awake, awakeMechanism = st.awakeMechanism)
+                        it.copy(
+                            keepAwake = st.awake,
+                            awakeMechanism = st.awakeMechanism,
+                            pluginVersion = st.pluginVersion,
+                            pluginProtocol = st.pluginProtocol,
+                            pluginNeedsUpdate = compat?.needsUpdate == true,
+                        )
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -666,6 +677,42 @@ fun SettingsScreen(
 
             // ─── 1. CONNECTION (merged — URL + QR + Test + Refresh) ───
             SettingsSection("Connection") {
+                if (uiState.pluginNeedsUpdate) {
+                    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        colors = androidx.compose.material3.CardDefaults.cardColors(
+                            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.errorContainer
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Warning, null,
+                                tint = androidx.compose.material3.MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "Server plugin needs an update",
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                )
+                                Text(
+                                    "This app requires a newer API protocol than the server's plugin (v${uiState.pluginVersion.ifBlank { "?" }}). Update the plugin, then restart the gateway.",
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            TextButton(onClick = { uriHandler.openUri(com.hermes.mobile.network.HermesApiService.PLUGIN_RELEASES_URL) }) {
+                                Text("Update")
+                            }
+                        }
+                    }
+                }
                 ConnectionStatusHeader(
                     status = uiState.connectionStatus,
                     baseUrl = uiState.baseUrl,
