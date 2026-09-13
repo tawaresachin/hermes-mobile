@@ -14,8 +14,8 @@ android {
         applicationId = "com.hermes.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 235
-        versionName = "2.8.7"
+        versionCode = 245
+        versionName = "0.0.46"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -149,4 +149,10 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+android.applicationVariants.configureEach {
+    outputs.forEach { output ->
+        (output as com.android.build.gradle.internal.api.ApkVariantOutputImpl).outputFileName = "Hermes-Mobile-v${versionName}.apk"
+    }
 }
