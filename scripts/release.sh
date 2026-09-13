@@ -49,8 +49,8 @@ if [ -n "$NEW_PLG" ] && [ "$CUR_PLG" != "$NEW_PLG" ] \
   echo "!! refusing plugin downgrade: $CUR_PLG -> $NEW_PLG" >&2; exit 1
 fi
 
-release_repo() {  # <repo> <newver> <commit-pathspec> <extra-sync-cmd>
-  local repo="$1" ver="$2" pathspec="$3"
+release_repo() {  # <repo> <newver>
+  local repo="$1" ver="$2"
   branch="$(gitx "$repo" branch --show-current)"
   head_now="$(gitx "$repo" rev-parse HEAD)"
   if gitx "$repo" rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
