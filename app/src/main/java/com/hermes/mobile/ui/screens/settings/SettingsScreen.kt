@@ -862,8 +862,8 @@ fun SettingsScreen(
                     icon = Icons.Filled.Compress,
                     title = "Token Optimizer",
                     subtitle = if (uiState.caveman)
-                        "Shorter replies from verbose models"
-                    else "Normal replies. Auto-compression stays on",
+                        "Shorter, denser replies"
+                    else "Normal reply length",
                     checked = uiState.caveman,
                     onCheckedChange = { viewModel.toggleCaveman(it) }
                 )
@@ -871,8 +871,8 @@ fun SettingsScreen(
                     icon = Icons.Filled.FactCheck,
                     title = "Auto-approve tools",
                     subtitle = if (uiState.autoApprove)
-                        "Dangerous commands run without asking (this session)"
-                    else "Ask before running dangerous commands (card + notification)",
+                        "Dangerous commands run unasked"
+                    else "Ask before dangerous commands",
                     checked = uiState.autoApprove,
                     onCheckedChange = { viewModel.toggleAutoApprove(it) }
                 )
@@ -880,10 +880,10 @@ fun SettingsScreen(
                     icon = Icons.Filled.PowerSettingsNew,
                     title = "Keep Computer Awake",
                     subtitle = if (uiState.keepAwake) {
-                        "Holding the computer awake" +
+                        "Host stays awake" +
                             (uiState.awakeMechanism?.let { " ($it)" } ?: "")
                     } else {
-                        "Holds the host device awake while the gateway is busy"
+                        "Prevents sleep while Hermes works"
                     },
                     checked = uiState.keepAwake,
                     onCheckedChange = { viewModel.toggleKeepAwake() }
@@ -1548,7 +1548,9 @@ fun SettingsToggle(
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1.0f else 0.38f))
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 0.6f else 0.38f))
+            Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 0.6f else 0.38f))
         }
         Switch(
             checked = checked,
