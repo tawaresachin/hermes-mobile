@@ -91,6 +91,19 @@ class HermesApiService @Inject constructor(
         prefs.edit().putString("srv_session:$localSessionId", serverId).apply()
     }
 
+    /** True for local rows IMPORTED from the server sync (id == server id).
+     * Dash heuristics can't tell those apart from app UUIDs — gateway ids
+     * like "api-172bef4575627fd2" contain dashes too. Sync marks them; the
+     * delete flow relies on the mark to resolve the gateway id. */
+    fun isSynced(sessionId: String): Boolean =
+        prefs.getBoolean("synced:$sessionId", false)
+
+    fun markSynced(sessionId: String) {
+        if (!isSynced(sessionId)) {
+            prefs.edit().putBoolean("synced:$sessionId", true).apply()
+        }
+    }
+
     /** Reverse lookup: which LOCAL session already owns this SERVER id?
      * The session sync uses it to skip app-created sessions (they already
      * exist locally under a UUID, mapped via srv_session:*). */
@@ -154,6 +167,7 @@ class HermesApiService @Inject constructor(
     fun forgetSessionKeys(sessionId: String) {
         prefs.edit()
             .remove("srv_session:$sessionId")
+            .remove("synced:$sessionId")
             .remove("session_model:$sessionId")
             .remove("session_model_slug:$sessionId")
             .remove("session_swarm:$sessionId")
@@ -1188,7 +1202,10 @@ class HermesApiService @Inject constructor(
                     .delete()
                     .build()
                 val response = client.newCall(request).execute()
-                response.use { it.isSuccessful }
+                // 404 = already gone server-side: same end state, so treat
+                // it as success — otherwise the caller keeps a tombstone
+                // forever and re-tries on every launch.
+                response.use { it.isSuccessful || it.code == 404 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {

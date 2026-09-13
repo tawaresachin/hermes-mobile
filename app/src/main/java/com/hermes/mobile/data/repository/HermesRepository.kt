@@ -46,7 +46,9 @@ class HermesRepository @Inject constructor(
     fun serverIdFor(sessionId: String): String? = serverIdOrSelf(sessionId)
 
     private fun serverIdOrSelf(sessionId: String): String? =
-        (apiService.serverIdFor(sessionId) ?: sessionId.takeUnless { it.contains('-') })
+        (apiService.serverIdFor(sessionId)
+            ?: sessionId.takeIf { apiService.isSynced(it) }
+            ?: sessionId.takeUnless { it.contains('-') })
             ?.takeIf { it.isNotBlank() }
 
     /** Local-only part of a delete (rows + prefs). Safe to repeat. */
@@ -64,10 +66,13 @@ class HermesRepository @Inject constructor(
         serverIdOrSelf(sessionId)?.let { deleteByServerId(it) }
     }
 
+
     /** Delete by the gateway's OWN id — works after the continuity map was
-     * purged (the local rows are gone but the server row still lingers). */
-    suspend fun deleteByServerId(serverId: String) {
-        apiService.deleteSession(serverId)
+     * purged (the local rows are gone but the server row still lingers).
+     * @return true only when the server CONFIRMED the delete (or it's a
+     * 404 — the row is already gone, which is the same end state). */
+    suspend fun deleteByServerId(serverId: String): Boolean {
+        return apiService.deleteSession(serverId)
     }
 
     suspend fun deleteSession(sessionId: String) {
@@ -251,6 +256,9 @@ class HermesRepository @Inject constructor(
             if (s.id in deleteGrace) continue
             val mappedLocal = apiService.localIdForServerId(s.id)
             val localId = mappedLocal ?: s.id
+            // Mark imported rows so the delete/archive flows resolve this id
+            // as a gateway id (ids may contain dashes — no heuristic works).
+            if (mappedLocal == null) apiService.markSynced(localId)
             val existing = sessionDao.getSessionById(localId)
             val nowMs = System.currentTimeMillis()
             val updatedAt = ((s.lastActiveSec * 1000).toLong()).takeIf { it > 60_000_000_000L } ?: nowMs
@@ -272,7 +280,7 @@ class HermesRepository @Inject constructor(
                     // Server-backed sessions: the archive flag round-trips
                     // through PATCH, so server truth wins (un-archive works).
                     // UUID rows that never reached the server: keep local.
-                    archived = if (mappedLocal != null || !localId.contains('-')) s.archived
+                    archived = if (mappedLocal != null || apiService.isSynced(localId)) s.archived
                                else (existing?.archived ?: s.archived),
                 )
             )
@@ -290,7 +298,7 @@ class HermesRepository @Inject constructor(
         if (complete) {
             // Purge synced rows the server no longer knows (desktop deleted).
             for (row in sessionDao.getAllSessionsOnce()) {
-                if (row.id.contains('-')) continue          // app-created
+                if (!apiService.isSynced(row.id)) continue   // app-created
                 if (seenServerIds.contains(row.id)) continue // still alive
                 if (apiService.localIdForServerId(row.id) != null) continue
                 deleteSessionLocal(row.id)

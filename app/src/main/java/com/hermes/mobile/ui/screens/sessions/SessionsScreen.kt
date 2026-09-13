@@ -236,6 +236,16 @@ class SessionsViewModel @Inject constructor(
     private var pendingServerDelete: Job? = null
     private var graceId: String? = null
 
+    /** End a delete-grace window: tombstone clears ONLY if the server
+     * confirmed the delete. If it didn't (offline, transient error), the
+     * tombstone persists (sync keeps hiding the row) and flushPending-
+     * DeleteGrace retries the DELETE on next launch. Clearing on failure
+     * was the ghost bug: next 10s poll re-imported the still-live row. */
+    private suspend fun flushGrace(sid: String) {
+        val ok = try { repository.deleteByServerId(sid) } catch (_: Exception) { false }
+        if (ok) repository.clearDeleteGrace(sid)
+    }
+
     fun deleteSession(session: Session) {
         // A second delete replaces the pending one. The user already
         // committed to the first (no Undo), so FLUSH its server delete now
@@ -244,8 +254,7 @@ class SessionsViewModel @Inject constructor(
         pendingServerDelete?.cancel()
         graceId?.let { gid ->
             viewModelScope.launch {
-                try { repository.deleteByServerId(gid) } catch (_: Exception) { }
-                repository.clearDeleteGrace(gid)
+                flushGrace(gid)
             }
         }
         graceId = null
@@ -269,10 +278,7 @@ class SessionsViewModel @Inject constructor(
                 // session — data-safe either way.
                 pendingServerDelete = viewModelScope.launch {
                     kotlinx.coroutines.delay(6_000)
-                    sid?.let {
-                        try { repository.deleteByServerId(it) } catch (_: Exception) { }
-                        repository.clearDeleteGrace(it)
-                    }
+                    sid?.let { flushGrace(it) }
                     graceId = null
                 }
                 lastDeletedSession = session
@@ -293,8 +299,7 @@ class SessionsViewModel @Inject constructor(
                         graceId = it
                         pendingServerDelete = viewModelScope.launch {
                             kotlinx.coroutines.delay(6_000)
-                            try { repository.deleteByServerId(it) } catch (_: Exception) { }
-                            repository.clearDeleteGrace(it)
+                            flushGrace(it)
                             graceId = null
                         }
                     }
