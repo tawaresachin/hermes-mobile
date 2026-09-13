@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Pre-commit: if this commit touches version-stating files, the whole
+# version contract (both repos + tags) must hold. Prevents the hand-edit
+# drift that motivated it. Bypass knowingly with: git commit --no-verify
+set -uo pipefail
+files=$(git diff --cached --name-only)
+if echo "$files" | grep -qE 'app/build.gradle.kts|plugin.yaml|constants.py'; then
+  "$HOME/hermes-mobile-app/scripts/check_versions.sh" || {
+    echo "!! version contract broken — commit blocked"
+    echo "!! bump correctly with: ~/hermes-mobile-app/scripts/release.sh <x.y.z>"
+    exit 1
+  }
+fi
