@@ -13,6 +13,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -24,6 +25,7 @@ class HermesApp : Application(), ImageLoaderFactory {
 
     @Inject lateinit var authInterceptor: AuthInterceptor
     @Inject lateinit var runController: com.hermes.mobile.data.runs.RunController
+    @Inject lateinit var repository: com.hermes.mobile.data.repository.HermesRepository
 
     override fun onCreate() {
         super.onCreate()
@@ -34,6 +36,7 @@ class HermesApp : Application(), ImageLoaderFactory {
         // persisted run id once, finalize completed ones (notification!),
         // re-attach watchers for still-running ones.
         runController.recover()
+        syncCrashDumps()
         // Foreground tracking for the response-notification (only ping when
         // the user is NOT looking at the app).
         registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
@@ -59,6 +62,32 @@ class HermesApp : Application(), ImageLoaderFactory {
             .okHttpClient(client)
             .crossfade(true)
             .build()
+    }
+
+    /**
+     * Crash dumps are useless sitting on a phone that just died. On every
+     * launch, push any unsent crash_*.txt to the gateway diag endpoint
+     * (renamed .sent afterwards so each trace ships exactly once, even if
+     * the upload lands while offline-then-online).
+     */
+    private fun syncCrashDumps() {
+        kotlinx.coroutines.MainScope().launch {
+            try {
+                val dir = File(filesDir, "crashes")
+                val pending = dir.listFiles { f -> f.name.startsWith("crash_") && !f.name.endsWith(".sent") }
+                    ?.sortedBy { it.lastModified() } ?: return@launch
+                for (f in pending) {
+                    val text = runCatching { f.readText() }.getOrNull() ?: continue
+                    val device = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"
+                    val version = runCatching {
+                        packageManager.getPackageInfo(packageName, 0).versionName
+                    }.getOrNull() ?: "?"
+                    if (repository.uploadDiagLog(device, version, "AUTO-CRASH\n" + text.take(180_000))) {
+                        runCatching { f.renameTo(File(f.parentFile, f.name + ".sent")) }
+                    }
+                }
+            } catch (_: Exception) { /* diagnostics must never crash */ }
+        }
     }
 
     private fun installCrashHandler() {

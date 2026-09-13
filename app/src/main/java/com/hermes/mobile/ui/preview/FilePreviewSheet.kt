@@ -57,6 +57,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.hermes.mobile.DiagLog
 import com.hermes.mobile.data.model.Message
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.screens.chat.MarkdownText
@@ -96,6 +97,7 @@ fun FilePreviewSheet(
     var title by remember(message.id) { mutableStateOf(message.attachmentName ?: "Preview") }
 
     LaunchedEffect(message.id) {
+      try {
         val url = message.attachmentUrl ?: run { onDismiss(); return@LaunchedEffect }
         val name = message.attachmentName ?: url.substringAfterLast('/').ifBlank { "attachment" }
         val mime = message.attachmentType.orEmpty()
@@ -136,6 +138,13 @@ fun FilePreviewSheet(
                 }
             }.getOrElse { PreviewState.Unsupported("Preview failed: ${it.message ?: "parse error"}") }
         }
+      } catch (t: Throwable) {
+        // A preview must NEVER take the app down — worst case we show the
+        // fallback row with Open-externally fallback. (Compose-launched coroutines are
+        // uncaught here = process kill.)
+        DiagLog.e("PREVIEW", "load crashed for ${'$'}{message.attachmentName}: ${'$'}t")
+        state = PreviewState.Unsupported("Preview unavailable: ${'$'}{t.message ?: t.javaClass.simpleName}")
+      }
     }
 
     BackHandler { onDismiss() }
