@@ -377,7 +377,8 @@ fun SessionsScreen(
                 onSearchQueryChanged = viewModel::onSearchQueryChanged,
                 showArchived = showArchived,
                 archivedCount = archivedCount,
-                onToggleArchived = viewModel::toggleShowArchived
+                onToggleArchived = viewModel::toggleShowArchived,
+                onNewChat = onNewChat
             )
         }
     ) { innerPadding ->
@@ -446,6 +447,7 @@ private fun SessionsTopBar(
     showArchived: Boolean,
     archivedCount: Int,
     onToggleArchived: () -> Unit,
+    onNewChat: () -> Unit,
 ) {
     var isSearchActive by remember { mutableStateOf(false) }
 
@@ -532,6 +534,10 @@ private fun SessionsTopBar(
                 }
                 IconButton(onClick = { isSearchActive = true }) {
                     Icon(Icons.Default.Search, contentDescription = "Search sessions")
+                }
+                // New chat — was hidden in the empty state only.
+                IconButton(onClick = onNewChat) {
+                    Icon(Icons.Default.Add, contentDescription = "New chat")
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
@@ -892,17 +898,20 @@ private fun SessionCard(
 
                 // Telegram-style pin toggle (filled = pinned, floats to top)
                 if (onTogglePin != null) {
+                    // Telegram-style pin toggle. Was 18dp @ 60% alpha —
+                    // rendered but read as an unrecognisable smudge; a control
+                    // you can't identify is a control that doesn't exist.
                     IconButton(
                         onClick = onTogglePin,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             imageVector = if (isPinned) Icons.Filled.PushPin
                             else Icons.Outlined.PushPin,
                             contentDescription = if (isPinned) "Unpin" else "Pin",
                             tint = if (isPinned) HermesPrimary
-                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            modifier = Modifier.size(18.dp)
+                                   else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
