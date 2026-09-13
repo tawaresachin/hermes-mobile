@@ -578,6 +578,11 @@ private fun SessionsList(
             key = { _, it -> it.id }
         ) { index, session ->
             val dismissState = rememberSwipeToDismissBoxState(
+                // Material3 defaults to committing at 55% of row width —
+                // more than half the screen, so ordinary swipes snapped back
+                // and the gesture read as "dead". 35% is the medium feel:
+                // a deliberate swipe commits, an accidental brush does not.
+                positionalThreshold = { totalDistance -> totalDistance * 0.35f },
                 confirmValueChange = { value ->
                         // Allow every transition — returning false for Settled
                         // leaves the row stuck half-swiped (delete icon covering
