@@ -104,5 +104,15 @@ for repo in "$APP_REPO" "$PLUGIN_REPO"; do
   chmod +x "$repo/.git/hooks/pre-commit"
 done
 
+# ── ship GitHub Releases (signed APK / wheel+sdist). SKIP_SHIP=1 to defer. ──
+if [ "${SKIP_SHIP:-0}" != "1" ]; then
+  if [ -n "$NEW_APP" ]; then
+    ( cd "$APP_REPO" && ./gradlew :app:assembleRelease -q ) &&       "$SCRIPT_DIR/ship_release.sh" app "$NEW_APP" || echo "   !! app release ship failed (fix + rerun scripts/ship_release.sh app $NEW_APP)"
+  fi
+  if [ -n "$NEW_PLG" ]; then
+    "$SCRIPT_DIR/ship_release.sh" plugin "$NEW_PLG" || echo "   !! plugin ship failed (rerun scripts/ship_release.sh plugin $NEW_PLG)"
+  fi
+fi
+
 "$SCRIPT_DIR/check_versions.sh"
 echo "==> done: app=${NEW_APP:-$CUR_APP} plugin=${NEW_PLG:-$CUR_PLG} (tags pushed)"

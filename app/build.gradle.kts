@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -9,6 +11,27 @@ plugins {
 android {
     namespace = "com.hermes.mobile"
     compileSdk = 34
+
+    // Release signing: read from local.properties (gitignored) or HERMES_* env.
+    // Absent → falls back to debug signing so CI/other machines still build.
+    val ksProps = Properties().apply {
+        val f = rootProject.file("local.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    fun signingProp(name: String) =
+        ksProps.getProperty("hermes.$name") ?: System.getenv("HERMES_${name.uppercase()}")
+    val ksPath = signingProp("keystore")
+
+    signingConfigs {
+        if (ksPath != null) {
+            create("release") {
+                storeFile = rootProject.file(ksPath)
+                storePassword = signingProp("storePassword")
+                keyAlias = "hermes-mobile"
+                keyPassword = signingProp("keyPassword")
+            }
+        }
+    }
 
     defaultConfig {
         applicationId = "com.hermes.mobile"
@@ -28,8 +51,10 @@ android {
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
-            isShrinkResources = true
+            // shrinkResources OFF — same AGP zero-hole padding artifact as debug (see below)
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

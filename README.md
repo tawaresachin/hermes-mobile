@@ -14,6 +14,16 @@ app accounts: your agent, your machine, your key.
 
 Pairs in one QR scan. Works with any Hermes Agent install — Windows, macOS, Linux, Termux.
 
+## Download
+
+[**⬇ Latest APK**](https://github.com/tawaresachin/hermes-mobile/releases/latest) ·
+[all releases](https://github.com/tawaresachin/hermes-mobile/releases)
+
+One signed APK covers every device (Android 8+). Download → tap → allow unknown
+sources once → pair with your server's QR. Every release ships `SHA256SUMS` +
+a GPG detached signature (key published in the
+[plugin repo](https://github.com/tawaresachin/hermes-mobile-plugin/blob/main/docs/hermes-release-public-key.asc)).
+
 ## See it first
 
 | Home — status & recents | Chat — streaming + files | Voice — press to talk | Sessions — all platforms | Settings — pairing | Usage & prefs |
