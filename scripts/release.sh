@@ -83,7 +83,8 @@ fi
 # ── plugin bump ───────────────────────────────────────────────────────
 if [ -n "$NEW_PLG" ]; then
   sed -i "s/^version: \"[0-9.]*\"/version: \"$NEW_PLG\"/" "$PLUGIN_REPO/plugin.yaml"
-  gitx "$PLUGIN_REPO" add plugin.yaml
+  sed -i "0,/^version = \"[0-9.]*\"/s//version = \"$NEW_PLG\"/" "$PLUGIN_REPO/pyproject.toml"
+  gitx "$PLUGIN_REPO" add plugin.yaml pyproject.toml
   gitx "$PLUGIN_REPO" diff --cached --quiet || gitx "$PLUGIN_REPO" commit -q --no-verify -m "release plugin v$NEW_PLG${MSG:+ — $MSG}"
   release_repo "$PLUGIN_REPO" "$NEW_PLG"
 fi

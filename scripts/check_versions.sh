@@ -43,6 +43,10 @@ if [ "$DERIVED" = "$PV" ]; then ok "PLUGIN_VERSION derives from plugin.yaml == $
 elif [ -z "$DERIVED" ]; then bad "could not import PLUGIN_VERSION (python3 + PYTHONPATH=src?)"
 else bad "PLUGIN_VERSION=$DERIVED but plugin.yaml says $PV"; fi
 
+# pyproject packaging metadata must not drift from the manifest
+PYV=$(grep -oE '^version = "[0-9.]+"' "$PLUGIN_REPO/pyproject.toml" | grep -oE '[0-9.]+')
+[ "$PYV" = "$PV" ] && ok "pyproject.toml == $PV" || bad "pyproject.toml is $PYV, plugin.yaml is $PV"
+
 # tag == HEAD per repo, per its own version
 check_tag() { # <repo> <ver> <label>
   local repo="$1" ver="$2" label="$3" base
