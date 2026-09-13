@@ -36,24 +36,54 @@ class HermesRepository @Inject constructor(
         return session
     }
 
-    suspend fun deleteSession(sessionId: String) {
-        // Best-effort server-side delete (won't block local if offline).
-        // The server knows the session by its OWN id (api_…) from the
-        // continuity map — deleting by local UUID was a silent 404 no-op
-        // that left the session alive on the gateway.
-        val serverId = apiService.serverIdFor(sessionId)?.takeIf { it.isNotBlank() }
-        if (serverId != null) apiService.deleteSession(serverId)
-        // Always delete locally
+    /** Local id → the id the gateway knows. Synced sessions are stored
+     * under their SERVER id (no dashes), so they need no mapping; app-
+     * created UUID rows resolve through the srv_session continuity map.
+     * Returns null only for never-synced local UUID sessions, which the
+     * server has never heard of. */
+    /** Public: the id the gateway knows for this local row (null = never on
+     * server). Used by the Sessions VM to key the delete-grace tombstone. */
+    fun serverIdFor(sessionId: String): String? = serverIdOrSelf(sessionId)
+
+    private fun serverIdOrSelf(sessionId: String): String? =
+        (apiService.serverIdFor(sessionId) ?: sessionId.takeUnless { it.contains('-') })
+            ?.takeIf { it.isNotBlank() }
+
+    /** Local-only part of a delete (rows + prefs). Safe to repeat. */
+    suspend fun deleteSessionLocalOnly(sessionId: String) {
         messageDao.deleteSessionMessages(sessionId)
         sessionDao.deleteSession(sessionId)
         purgeSessionKeys(sessionId)
+    }
+
+    /** Server-side delete via the local row's gateway id, idempotent (a
+     * second 404 is harmless). Deferred by the UI until the Undo grace
+     * window expires — undoing a server-deleted synced session would
+     * resurrect a row whose transcript no longer exists. */
+    suspend fun deleteSessionOnServer(sessionId: String) {
+        serverIdOrSelf(sessionId)?.let { deleteByServerId(it) }
+    }
+
+    /** Delete by the gateway's OWN id — works after the continuity map was
+     * purged (the local rows are gone but the server row still lingers). */
+    suspend fun deleteByServerId(serverId: String) {
+        apiService.deleteSession(serverId)
+    }
+
+    suspend fun deleteSession(sessionId: String) {
+        // Delete locally first, then server-side (best-effort, offline-safe).
+        // Must hit the gateway for synced rows too — otherwise the 10s
+        // session sync re-imports the "deleted" session (id == server id,
+        // no continuity map → old code skipped the DELETE entirely).
+        deleteSessionLocalOnly(sessionId)
+        deleteSessionOnServer(sessionId)
     }
 
     /** Toggle archive on a session: local flag first (instant UI), then the
      * server PATCH best-effort — the desktop sidebar shares the same flag. */
     suspend fun setSessionArchived(sessionId: String, archived: Boolean) {
         sessionDao.setArchived(sessionId, archived)
-        apiService.serverIdFor(sessionId)?.takeIf { it.isNotBlank() }?.let { sid ->
+        serverIdOrSelf(sessionId)?.let { sid ->
             try { apiService.setSessionArchived(sid, archived) }
             catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (_: Exception) { /* offline: local flag stands; desktop syncs its own */ }
@@ -140,23 +170,33 @@ class HermesRepository @Inject constructor(
 
 
     suspend fun resumeSession(sessionId: String): List<Message> {
-        val local = messageDao.getMessagesOnce(sessionId)
-        // Lazy transcript import: a session that came from the server-side
-        // sync (id == server id, no dashes — local ids are UUIDs) opens with
-        // an empty Room table until the real transcript is pulled once.
-        if (local.isEmpty() && !sessionId.contains('-')) {
-            importServerTranscript(sessionId)
-            return messageDao.getMessagesOnce(sessionId)
+        // Server is truth on open: every server-backed session refreshes its
+        // FULL transcript from the gateway each time it's opened, so content
+        // added on Desktop/Telegram/CLI (or rows lost to a dead stream)
+        // appears immediately. Skipped while a RunController turn is live —
+        // the run owns the rows until it completes.
+        val sid = serverIdOrSelf(sessionId)
+        if (sid != null && !runController.isBusy(sessionId)) {
+            refreshTranscriptFromServer(sessionId, sid)
         }
-        return local
+        return messageDao.getMessagesOnce(sessionId)
+    }
+
+    /** Replace local rows with the server transcript. Empty/unreachable
+     * server result → keep local (a fresh session's 0-row list must not
+     * wipe a draft conversation the run engine will persist shortly). */
+    private suspend fun refreshTranscriptFromServer(localId: String, serverId: String) {
+        val msgs = apiService.fetchSessionMessages(serverId) ?: return
+        if (msgs.isEmpty()) return
+        messageDao.deleteSessionMessages(localId)
+        importRows(localId, msgs)
     }
 
     /** Download + persist the full server transcript for `sessionId`.
      * Rows are inserted in chronological order; assistant/user only
      * (system + tool rows are server plumbing, not conversation). */
-    private suspend fun importServerTranscript(sessionId: String) {
+    private suspend fun importRows(sessionId: String, msgs: List<org.json.JSONObject>) {
         try {
-            val msgs = apiService.fetchSessionMessages(sessionId) ?: return
             for (m in msgs) {
                 val role = when (m.optString("role")) {
                     "user" -> MessageRole.USER
@@ -196,6 +236,8 @@ class HermesRepository @Inject constructor(
      * (tracked via sync_title:<id> prefs). Sessions that vanished from a
      * COMPLETE server list are purged locally (desktop-side delete). */
     suspend fun syncAllSessionsFromServer(): Int {
+        // First, land any server deletes deferred by a process kill.
+        flushPendingDeleteGrace()
         val (remote, complete) = apiService.fetchServerSessions()
         if (remote.isEmpty()) return 0
         var changed = 0
@@ -203,6 +245,10 @@ class HermesRepository @Inject constructor(
         for (s in remote) {
             if (s.hidden) continue
             seenServerIds.add(s.id)
+            // Tombstone: the phone-side delete hasn't reached the server yet
+            // (Undo grace window). Re-importing it here would flash the
+            // "deleted" row back into the list.
+            if (s.id in deleteGrace) continue
             val mappedLocal = apiService.localIdForServerId(s.id)
             val localId = mappedLocal ?: s.id
             val existing = sessionDao.getSessionById(localId)
@@ -252,6 +298,51 @@ class HermesRepository @Inject constructor(
             }
         }
         return changed
+    }
+
+    /** Server ids in delete-grace: locally gone, server delete pending
+     * (Undo window open, or app died before the deferred DELETE landed).
+     * syncAllSessionsFromServer skips these; persisted so a process kill
+     * can't resurrect a session the user already committed to deleting. */
+    val deleteGrace: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    private val gracePrefs by lazy {
+        context.getSharedPreferences("hermes_sessions", Context.MODE_PRIVATE)
+    }
+
+    private var graceFlushed = false
+
+    /** Once per process: delete server rows whose deferred DELETE never
+     * landed because the app died mid-grace-window. One-shot is critical —
+     * flushing on every poll would destroy sessions still inside a LIVE
+     * Undo window (the 6s job owns those, not this). Tombstones written
+     * AFTER the flush belong to live windows and are left alone. */
+    suspend fun flushPendingDeleteGrace() {
+        if (graceFlushed) return
+        graceFlushed = true
+        val pending = gracePrefs.getStringSet("pending_deletes", emptySet()) ?: emptySet()
+        if (pending.isEmpty()) return
+        deleteGrace.addAll(pending)
+        for (sid in pending) {
+            // Keep the tombstone (row stays hidden, retried next launch)
+            // unless the server confirms the delete — an offline flush
+            // must NOT un-hide a committed delete.
+            if (apiService.deleteSession(sid)) {
+                deleteGrace.remove(sid)
+            }
+        }
+        gracePrefs.edit()
+            .putStringSet("pending_deletes", deleteGrace.toSet()).apply()
+    }
+
+    fun addDeleteGrace(serverId: String) {
+        deleteGrace.add(serverId)
+        gracePrefs.edit().putStringSet("pending_deletes", deleteGrace.toSet()).apply()
+    }
+
+    fun clearDeleteGrace(serverId: String) {
+        deleteGrace.remove(serverId)
+        gracePrefs.edit().putStringSet("pending_deletes", deleteGrace.toSet()).apply()
     }
 
     // (sync-title baseline lives in prefs: HermesApiService.syncTitleFor)
@@ -525,11 +616,7 @@ class HermesRepository @Inject constructor(
     }
 
     /** Local-only delete (no server call). Used as fallback. */
-    suspend fun deleteSessionLocal(sessionId: String) {
-        messageDao.deleteSessionMessages(sessionId)
-        sessionDao.deleteSession(sessionId)
-        purgeSessionKeys(sessionId)
-    }
+    suspend fun deleteSessionLocal(sessionId: String) = deleteSessionLocalOnly(sessionId)
 
     /** Rename a session (local-only metadata change). */
     suspend fun getSessionTitle(sessionId: String): String? =

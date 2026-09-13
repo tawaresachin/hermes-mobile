@@ -1225,7 +1225,10 @@ class HermesApiService @Inject constructor(
         return withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url("$baseUrl/api/sessions/$sessionId/messages")
+                    // Explicit high limit: the server default truncates long
+                    // transcripts (open-on-sync would silently show partial
+                    // history for big sessions). Server clamps to its max.
+                    .url("$baseUrl/api/sessions/$sessionId/messages?limit=10000")
                     .get()
                     .build()
                 val response = client.newCall(request).execute()

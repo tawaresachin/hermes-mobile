@@ -38,6 +38,7 @@ import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -232,12 +233,48 @@ class SessionsViewModel @Inject constructor(
      * Delete a session and emit a snackbar event with an Undo action.
      * The deleted [Session] is kept in memory so it can be restored.
      */
+    private var pendingServerDelete: Job? = null
+    private var graceId: String? = null
+
     fun deleteSession(session: Session) {
+        // A second delete replaces the pending one. The user already
+        // committed to the first (no Undo), so FLUSH its server delete now
+        // instead of cancelling it — cancelling resurrects it on the next
+        // sync poll (exactly the "deleted session came back" bug).
+        pendingServerDelete?.cancel()
+        graceId?.let { gid ->
+            viewModelScope.launch {
+                try { repository.deleteByServerId(gid) } catch (_: Exception) { }
+                repository.clearDeleteGrace(gid)
+            }
+        }
+        graceId = null
         viewModelScope.launch {
             // Snapshot BEFORE delete — Undo restores the conversation.
             lastDeletedMessages = repository.getMessagesOnce(session.id)
+            // Capture the gateway id BEFORE the local delete — purging the
+            // continuity map afterwards would make it unresolvable.
+            val sid = repository.serverIdFor(session.id)
             try {
-                repository.deleteSession(session.id)
+                repository.deleteSessionLocalOnly(session.id)
+                // Tombstone so the 10s sync doesn't re-import during the
+                // grace window (server still has the row). Keyed by the
+                // SERVER id — that's what sync compares against.
+                sid?.let { repository.addDeleteGrace(it); graceId = it }
+                // Defer the server delete until the Undo window is over.
+                // The snackbar is SnackbarDuration.Short (~4s); 6s is safe.
+                // A sync poll before this fires cannot re-import the row
+                // (deleteSessionOnServer removes the mapping afterwards),
+                // and on cancel the next sync simply re-lists a still-live
+                // session — data-safe either way.
+                pendingServerDelete = viewModelScope.launch {
+                    kotlinx.coroutines.delay(6_000)
+                    sid?.let {
+                        try { repository.deleteByServerId(it) } catch (_: Exception) { }
+                        repository.clearDeleteGrace(it)
+                    }
+                    graceId = null
+                }
                 lastDeletedSession = session
                 _snackbarEvent.emit(
                     SnackbarMessage(
@@ -250,7 +287,17 @@ class SessionsViewModel @Inject constructor(
             } catch (e: Exception) {
                 // If delete fails, try a direct local-only delete
                 try {
-                    repository.deleteSessionLocal(session.id)
+                    repository.deleteSessionLocalOnly(session.id)
+                    sid?.let {
+                        repository.addDeleteGrace(it)
+                        graceId = it
+                        pendingServerDelete = viewModelScope.launch {
+                            kotlinx.coroutines.delay(6_000)
+                            try { repository.deleteByServerId(it) } catch (_: Exception) { }
+                            repository.clearDeleteGrace(it)
+                            graceId = null
+                        }
+                    }
                     lastDeletedSession = session
                     _snackbarEvent.emit(
                         SnackbarMessage(
@@ -284,6 +331,12 @@ class SessionsViewModel @Inject constructor(
     fun restoreLastDeleted() {
         val session = lastDeletedSession ?: return
         val messages = lastDeletedMessages
+        // Undo pressed inside the grace window — cancel the server delete
+        // so the session (and its transcript) stays intact.
+        pendingServerDelete?.cancel()
+        pendingServerDelete = null
+        graceId?.let { repository.clearDeleteGrace(it) }
+        graceId = null
         viewModelScope.launch {
             try {
                 repository.restoreSession(session, messages)
