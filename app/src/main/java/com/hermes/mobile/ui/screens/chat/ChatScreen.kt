@@ -3814,14 +3814,20 @@ fun SlashCommandList(
         return
     }
 
+    // Distinct elevated sheet: surfaceContainer tone + solid divider so the
+    // list never reads as command text floating over the chat (background and
+    // surface were near-identical in light theme → "overlapping" look).
+    // Capped at 180dp — more than that crushed the visible history.
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = 220.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 0.dp,
-        shadowElevation = 4.dp,
-        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+            .heightIn(max = 180.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        tonalElevation = 2.dp,
+        shadowElevation = 10.dp,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         LazyColumn(
             modifier = Modifier.padding(vertical = 4.dp)
