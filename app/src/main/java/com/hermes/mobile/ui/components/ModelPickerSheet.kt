@@ -102,8 +102,11 @@ fun ModelPickerSheet(
                         m.id.contains(searchQuery, ignoreCase = true) ||
                         m.name.contains(searchQuery, ignoreCase = true)
                     }
-                    // Group by provider, preserve order
-                    list.groupBy { m -> m.provider.ifBlank { "other" } }
+                    // Group by provider, preserve order. distinctBy id:
+                    // duplicate (provider,id) rows give the LazyColumn the
+                    // same key twice -> IllegalArgumentException on scroll.
+                    list.distinctBy { it.provider + "|" + it.id }
+                        .groupBy { m -> m.provider.ifBlank { "other" } }
                         .toSortedMap()
                 }
                 LazyColumn(

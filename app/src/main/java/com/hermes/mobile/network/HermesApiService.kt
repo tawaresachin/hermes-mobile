@@ -735,6 +735,7 @@ class HermesApiService @Inject constructor(
                     val current = json.optString("model", "")
                     val currentProvider = json.optString("provider", "")
                     val out = mutableListOf<ModelInfo>()
+                    val seenPairs = HashSet<String>()
                     val providers = json.optJSONArray("providers") ?: return@use null
                     for (i in 0 until providers.length()) {
                         val p = providers.optJSONObject(i) ?: continue
@@ -745,6 +746,11 @@ class HermesApiService @Inject constructor(
                         for (j in 0 until arr.length()) {
                             val raw = arr.optString(j, "").trim()
                             if (raw.isEmpty()) continue
+                            // Server-truth lists can repeat an id within one
+                            // provider (FreeLLM "auto" x2 crashed the picker's
+                            // LazyColumn with a duplicate key). Skip repeats.
+                            val pairKey = slug + "|" + raw
+                            if (!seenPairs.add(pairKey)) continue
                             // The request sends provider and model SEPARATELY
                             // (server combines them). Prefixing the id with the
                             // slug here made the server double-prefix colon
