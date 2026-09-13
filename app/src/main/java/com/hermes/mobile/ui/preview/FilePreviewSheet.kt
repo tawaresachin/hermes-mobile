@@ -142,8 +142,8 @@ fun FilePreviewSheet(
         // A preview must NEVER take the app down — worst case we show the
         // fallback row with Open-externally fallback. (Compose-launched coroutines are
         // uncaught here = process kill.)
-        DiagLog.e("PREVIEW", "load crashed for ${'$'}{message.attachmentName}: ${'$'}t")
-        state = PreviewState.Unsupported("Preview unavailable: ${'$'}{t.message ?: t.javaClass.simpleName}")
+        DiagLog.e("PREVIEW", "load crashed for ${message.attachmentName}: $t")
+        state = PreviewState.Unsupported("Preview unavailable: ${t.message ?: t.javaClass.simpleName}")
       }
     }
 
@@ -300,7 +300,7 @@ private fun PdfBody(pages: PreviewState.PdfPages) {
 
 private fun renderPdf(context: Context, bytes: ByteArray): PreviewState {
     // PdfRenderer needs a SEEKABLE fd — write to cache, render, delete.
-    val f = java.io.File(context.cacheDir, "preview_${'$'}{System.nanoTime()}.pdf")
+    val f = java.io.File(context.cacheDir, "preview_${System.nanoTime()}.pdf")
     return try {
         f.writeBytes(bytes)
         android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
@@ -321,7 +321,7 @@ private fun renderPdf(context: Context, bytes: ByteArray): PreviewState {
             }
         }
     } catch (e: Exception) {
-        PreviewState.Unsupported("PDF render failed: ${'$'}{e.message}")
+        PreviewState.Unsupported("PDF render failed: ${e.message}")
     } finally {
         runCatching { f.delete() }
     }

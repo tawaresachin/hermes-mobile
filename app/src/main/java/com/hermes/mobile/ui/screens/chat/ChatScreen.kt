@@ -1882,6 +1882,10 @@ fun ChatScreen(
                                 highlighted = message.id == highlightId,
                                 fontSizeSp = chatFontSp,
                                 onMenu = { menuTarget = message },
+                                onDownloadAttachment = { msg ->
+                                    // Download icon: save to Downloads + open.
+                                    scope.launch { vm.openAttachment(context, msg) }
+                                },
                                 onAttachmentTap = { msg ->
                                     // Images → fullscreen viewer (Telegram-style).
                                     // Everything previewable → in-app sheet; the
@@ -2753,6 +2757,8 @@ fun MessageBubble(
     onToggleSelect: (() -> Unit)? = null,
     // Telegram: tap an attachment bubble to open/save the file
     onAttachmentTap: ((Message) -> Unit)? = null,
+    // Download icon: save to Downloads + open with system viewer
+    onDownloadAttachment: ((Message) -> Unit)? = null,
     // Telegram: tap image to open full-screen viewer
     onImageTap: ((String) -> Unit)? = null
 ) {
@@ -3012,6 +3018,16 @@ fun MessageBubble(
                             FileAttachmentRow(
                                 name = effAttachmentName ?: "File",
                                 modifier = Modifier.padding(bottom = if (bubbleContent.isNotBlank()) 8.dp else 0.dp),
+                                onDownload = if (effAttachmentUrl != null) {
+                                    {
+                                        val target = if (message.attachmentUrl != null) message
+                                        else message.copy(
+                                            attachmentUrl = effAttachmentUrl,
+                                            attachmentType = effAttachmentType,
+                                            attachmentName = effAttachmentName)
+                                        onDownloadAttachment?.invoke(target)
+                                    }
+                                } else null,
                                 onClick = {
                                     // Persisted row: full Message flow (save/open).
                                     // Response-carried MEDIA tag: build a transient
@@ -3251,7 +3267,8 @@ fun FullWidthTableOverlay(
 fun FileAttachmentRow(
     name: String,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit = {}
+    onClick: () -> Unit = {},
+    onDownload: (() -> Unit)? = null
 ) {
     Row(
         modifier = modifier
@@ -3277,11 +3294,16 @@ fun FileAttachmentRow(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
-        // Telegram: download affordance on every file bubble
+        // Telegram: download affordance on every file bubble — actually saves
+        // to Downloads and opens (was decorative-only → "download not working").
         Icon(
             imageVector = Icons.Filled.Download,
             contentDescription = "Download",
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(28.dp)
+                .clip(CircleShape)
+                .clickable(enabled = onDownload != null) { onDownload?.invoke() }
+                .padding(5.dp)
+                .size(18.dp),
             tint = MaterialTheme.colorScheme.primary
         )
     }

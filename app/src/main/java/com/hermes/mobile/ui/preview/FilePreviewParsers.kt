@@ -119,7 +119,10 @@ private fun appendJson(sb: StringBuilder, v: Any, depth: Int) {
 
 private val saxFactory: SAXParserFactory = SAXParserFactory.newInstance().apply {
     isNamespaceAware = false
-    setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+    // XXE hardening — supported by JVM Xerces but NOT by Android's Harmony
+    // parser (SAXNotRecognizedException, which took down the whole class
+    // init and crashed the preview). Best-effort, never fatal.
+    runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
 }
 
 private fun sax(xml: ByteArray, handler: DefaultHandler) =
@@ -176,7 +179,7 @@ fun parseXlsx(bytes: ByteArray): List<Sheet> {
             val list = mutableListOf<String>()
             override fun startElement(u: String, l: String, q: String, a: Attributes) {
                 if (q.substringAfter(':') == "sheet")
-                    list += a.local("name") ?: "Sheet ${'$'}{list.size + 1}"
+                    list += a.local("name") ?: "Sheet ${list.size + 1}"
             }
         }.also { sax(x, it) }.list
     } ?: emptyList()
