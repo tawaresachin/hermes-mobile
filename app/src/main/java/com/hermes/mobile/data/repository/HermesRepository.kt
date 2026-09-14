@@ -730,7 +730,12 @@ class HermesRepository @Inject constructor(
 
     suspend fun checkConnection(config: ServerConfig): ConnectionStatus {
         return try {
-            if (apiService.healthCheck(config)) ConnectionStatus.CONNECTED
+            if (apiService.healthCheck(config)) {
+                // Different (or updated) server -> the cached inventory is
+                // another machine's answer. Force a re-probe on next open.
+                apiService.invalidateModelCache()
+                ConnectionStatus.CONNECTED
+            }
             else ConnectionStatus.ERROR
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -757,7 +762,7 @@ class HermesRepository @Inject constructor(
         apiService.getJson(path)
 
     suspend fun fetchModelOptions(): ModelListResponse? {
-        return apiService.fetchModelOptions()
+        return apiService.fetchModelOptionsCached()
     }
 
     suspend fun switchModel(sessionId: String, modelName: String, global: Boolean = false): Boolean {

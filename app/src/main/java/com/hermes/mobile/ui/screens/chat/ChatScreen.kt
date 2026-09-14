@@ -1457,22 +1457,7 @@ fun ChatScreen(
         vm.initSession(pending)
     }
 
-    // Auto-scroll: ONLY when a new message arrives (size change) and the
-    // user is already near the bottom. The inverted layout keeps the newest
-    // item pinned to the bottom edge — growing streaming text pushes UP
-    // naturally, so no per-chunk scrolling is needed. The old effect keyed
-    // on every streaming chunk and force-scrolled, fighting the user's
-    // finger every ~50ms = the "stuck/bouncing" scroll feel.
-    // Two further bounce guards (video-verified: list yanked back mid-drag):
-    // - isStreaming is NOT a key: the stream-end toggle used to re-fire the
-    //   effect and hard-jump to item 0 while the user was still touching.
-    // - isScrollInProgress: never yank while a gesture/fling is running —
-    //   userScrolledAway alone flutters as the index crosses 0..2 mid-scroll.
-    LaunchedEffect(messages.size, userScrolledAway) {
-        if (messages.isNotEmpty() && !userScrolledAway && !listState.isScrollInProgress) {
-            listState.scrollToItem(0)
-        }
-    }
+
 
     // Load models when session ID is available + restore the draft
     LaunchedEffect(sessionIdState) {
@@ -1606,6 +1591,21 @@ fun ChatScreen(
                         (it.isStreaming && streamingContent.isNotBlank()) ||
                         (!it.isStreaming && it.content.isNotBlank())
                 }
+        }
+
+        // Auto-scroll: fires when the VISIBLE list grows — i.e. a message
+        // (re)appears at the bottom edge. Keying on messages.size missed
+        // streamed replies: the assistant row exists (size stable) while
+        // blank-filtered, then flips visible with no size change, so the
+        // finished reply never scrolled into view. displayMessages.size
+        // changes exactly when that filter flips OR a real new row lands
+        // (poller catch-up included). Guards per the Telegram contract:
+        // never yank while the reader scrolled up (userScrolledAway) or a
+        // gesture/fling is running.
+        LaunchedEffect(displayMessages.size, userScrolledAway) {
+            if (displayMessages.isNotEmpty() && !userScrolledAway && !listState.isScrollInProgress) {
+                listState.scrollToItem(0)
+            }
         }
 
         AnimatedVisibility(visible = showSearch) {

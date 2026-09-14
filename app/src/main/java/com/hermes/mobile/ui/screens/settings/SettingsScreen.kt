@@ -143,7 +143,12 @@ data class SettingsUiState(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val repository: HermesRepository,
+    private val appUpdate: com.hermes.mobile.update.AppUpdateChecker,
 ) : ViewModel() {
+
+    /** App self-update state (GitHub Releases, throttled 2x/day). */
+    val appUpdateState: kotlinx.coroutines.flow.StateFlow<com.hermes.mobile.update.AppUpdateState> =
+        appUpdate.state
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
@@ -301,6 +306,16 @@ class SettingsViewModel @Inject constructor(
     fun toggleAutoApprove(on: Boolean) {
         _uiState.update { it.copy(autoApprove = on) }
         repository.saveAutoApprove(on)
+    }
+
+    /** Throttled app-update check (cached verdict shown while inside
+     * the 12h window). */
+    fun checkAppUpdate() {
+        viewModelScope.launch { appUpdate.check() }
+    }
+
+    fun downloadAppUpdate() {
+        viewModelScope.launch { appUpdate.downloadAndInstall() }
     }
 
     // ── Hermes update (server-side, plugin /api/mobile/update/*) ──
@@ -1013,23 +1028,11 @@ fun SettingsScreen(
 
             // ─── 8. ABOUT ───
             SettingsSection("About") {
-                // Version row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Version",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = "v${LocalContext.current.packageManager.getPackageInfo(LocalContext.current.packageName, 0).versionName ?: "?"}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
+                // Version row — GitHub-releases self-update check (12h
+                // throttle). Shows vCurrent; when behind, the refresh
+                // arrow becomes an Update button (same language as the
+                // Agent Version row below).
+                HermesAppVersionRow(viewModel = viewModel)
                 Spacer(modifier = Modifier.height(8.dp))
                 // Device row
                 Row(
@@ -1423,7 +1426,11 @@ fun HermesAgentAboutRow(viewModel: SettingsViewModel) {
     Row(
         modifier = Modifier.fillMaxWidth()
             .clickable(enabled = !state.loading && !state.applying) {
-                viewModel.loadUpdateInfo(fresh = true)
+                // Cached server-side (plugin TTL) — a fresh=true tap busted
+                // the cache and re-ran the slow GitHub probe every tap, so
+                // the row sat spinning ("looping"). Cold cache still does
+                // one full check; repeats are instant.
+                viewModel.loadUpdateInfo(fresh = false)
             },
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1461,6 +1468,66 @@ fun HermesAgentAboutRow(viewModel: SettingsViewModel) {
                 modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
             state.supported && !state.upToDate -> FilledTonalButton(
                 onClick = { viewModel.applyUpdate() },
+                modifier = Modifier.height(26.dp).defaultMinSize(minWidth = 0.dp, minHeight = 0.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            ) { Text("Update", fontSize = 13.sp) }
+            else -> Icon(Icons.Filled.Refresh, contentDescription = "Check for update",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+/** App self-update row (GitHub Releases, 12h throttle inside the
+ * checker): "Version · vCurrent · ↻" — flips to an Update button when a
+ * newer signed release exists; tap → downloads, verifies SHA256, opens
+ * the system installer (updates in place, same key). Mirrors the
+ * Agent Version row's design language. */
+@Composable
+fun HermesAppVersionRow(viewModel: SettingsViewModel) {
+    val state by viewModel.appUpdateState.collectAsState()
+    LaunchedEffect(Unit) { viewModel.checkAppUpdate() }
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clickable(enabled = !state.checking && !state.downloading) {
+                viewModel.checkAppUpdate()
+            },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "Version",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+            Text(
+                text = when {
+                    state.checking -> "checking…"
+                    state.downloading -> "downloading ${(state.progress * 100).toInt()}%"
+                    else -> "v${state.current}"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            val sub = when {
+                state.available -> "v${state.latest} available"
+                state.error != null && !state.checking -> state.error
+                else -> null
+            }
+            if (sub != null) Text(
+                sub, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        when {
+            state.checking || state.downloading -> CircularProgressIndicator(
+                modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            state.available -> FilledTonalButton(
+                onClick = { viewModel.downloadAppUpdate() },
                 modifier = Modifier.height(26.dp).defaultMinSize(minWidth = 0.dp, minHeight = 0.dp),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
             ) { Text("Update", fontSize = 13.sp) }

@@ -8,6 +8,7 @@ import com.hermes.mobile.data.model.ModelListResponse
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -751,6 +752,21 @@ class HermesApiService @Inject constructor(
     // GET /api/model/options returns providers[] with slug, name, models[].
     // Groups, ids and the default derive 100% from the response - no
     // hardcoded model names anywhere in this file.
+    //
+    // PERFORMANCE: the gateway probes the live custom provider on every
+    // options request, so the endpoint costs 3-23s (measured on-device).
+    // The picker must not pay that per open, so results are cached:
+    //   * fresh < 5 min           -> serve cache, zero network
+    //   * stale, cache present    -> serve cache NOW, revalidate in background
+    //   * expired, no usable send -> one network call, deduped via inflight
+    // Model switches / global default changes drop the cache explicitly.
+    private val modelCacheTtlMs = 5 * 60 * 1000L
+    @Volatile private var modelCache: Pair<Long, ModelListResponse>? = null
+    @Volatile private var inflight: kotlinx.coroutines.Deferred<ModelListResponse?>? = null
+    /** Background scope for cache revalidation (not tied to any screen). */
+    private val ioScope = kotlinx.coroutines.CoroutineScope(
+        Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+
     suspend fun fetchModelOptions(): ModelListResponse? {
         val cfg = config ?: getConfig()
         val base = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: return null
@@ -793,7 +809,9 @@ class HermesApiService @Inject constructor(
                         }
                     }
                     if (out.isEmpty()) return@use null
-                    ModelListResponse(models = out, current = current, default = current, provider = currentProvider)
+                    val resp = ModelListResponse(models = out, current = current, default = current, provider = currentProvider)
+                    modelCache = System.currentTimeMillis() to resp
+                    resp
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -801,9 +819,31 @@ class HermesApiService @Inject constructor(
         }
     }
 
+    /** Cached-first model list. Serve the cache instantly whenever one
+     * exists; refresh in the background when it aged past the TTL. Only
+     * a truly cold start (first open after install) waits for the network
+     * — and concurrent cold callers share one in-flight request. */
+    suspend fun fetchModelOptionsCached(): ModelListResponse? {
+        val cached = modelCache
+        val age = cached?.let { System.currentTimeMillis() - it.first } ?: Long.MAX_VALUE
+        if (cached != null && age < modelCacheTtlMs) return cached.second
+        if (cached != null) {
+            // Stale but usable: show it now, swap in the refresh when it lands.
+            ioScope.launch { fetchModelOptions()?.let { modelCache = System.currentTimeMillis() to it } }
+            return cached.second
+        }
+        inflight?.takeIf { it.isActive }?.let { return it.await() }
+        val d = ioScope.async { fetchModelOptions() }
+        inflight = d
+        return try { d.await() } finally { inflight = null }
+    }
+
+    /** Drop the cached inventory (settings changed elsewhere -> re-probe). */
+    fun invalidateModelCache() { modelCache = null }
+
     // Dynamic server default for sends with no model yet. No hardcoded id.
     suspend fun fetchDefaultModelId(): String {
-        val opts = try { fetchModelOptions() } catch (_: Exception) { null }
+        val opts = try { fetchModelOptionsCached() } catch (_: Exception) { null }
         if (opts != null) {
             if (opts.current.isNotBlank() && opts.models.any { it.id == opts.current }) return opts.current
             opts.models.firstOrNull()?.let { return it.id }

@@ -189,7 +189,7 @@ class RunController @Inject constructor(
             // 3. Token Optimizer: terse directive only where it pays (learned
             //    per model). Rides as `instructions` — /v1/runs extracts it as
             //    the ephemeral system prompt, same as the chat path's system msg.
-            val safeModel = model.ifBlank { api.fetchDefaultModelId() }
+            val safeModel = model.ifBlank { api.fetchDefaultModelId() }  // cached
             val applyTerse = api.terseDecision(safeModel)
             val serverId = api.serverIdFor(sessionId)?.takeIf { it.isNotBlank() } ?: sessionId
 

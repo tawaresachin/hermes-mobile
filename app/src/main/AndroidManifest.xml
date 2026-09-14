@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- In-app self-update: launch the system installer for a downloaded
+         release APK (Settings → About → Update). One-time user grant via
+         the "install unknown apps" screen Android shows itself. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Android 14+ requires this for local network access -->
