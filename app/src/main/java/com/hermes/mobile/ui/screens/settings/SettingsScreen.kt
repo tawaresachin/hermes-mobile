@@ -122,6 +122,11 @@ data class SettingsUiState(
     val skills: List<Pair<String, String>> = emptyList(),  // name -> description
     val serverListsLoading: Boolean = false,
     val serverListsLoaded: Boolean = false,
+    // Model providers (server-side custom endpoints)
+    val providers: List<org.json.JSONObject> = emptyList(),
+    val providersLoading: Boolean = false,
+    val providersLoaded: Boolean = false,
+    val providersError: String? = null,
     // True when the numbers came from the server ledger, false = local fallback.
     val usageIsServer: Boolean = true,
     // Auth fields
@@ -433,6 +438,118 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    // ─── Model providers (Settings card) ───
+
+    fun loadProviders() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(providersLoading = true, providersError = null) }
+            val o = try { repository.providersList() }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            _uiState.update {
+                if (o == null || !o.optBoolean("ok", false)) it.copy(
+                    providersLoading = false,
+                    providersError = o?.optString("error")?.ifBlank { null }
+                        ?: "Server does not expose provider management (plugin too old?)")
+                else {
+                    val arr = o.optJSONArray("endpoints")
+                    val list = ArrayList<org.json.JSONObject>()
+                    if (arr != null) for (i in 0 until arr.length()) list.add(arr.getJSONObject(i))
+                    it.copy(providers = list, providersLoading = false, providersLoaded = true)
+                }
+            }
+        }
+    }
+
+    /** upsert: id="" creates. apiKey null = keep existing; "" clears. */
+    fun saveProvider(id: String, name: String, baseUrl: String, apiKey: String?,
+                     models: List<String>, asDefault: Boolean,
+                     onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            val body = org.json.JSONObject()
+                .put("id", id).put("name", name).put("base_url", baseUrl)
+                .put("models", org.json.JSONArray(models))
+                .put("model", models.firstOrNull() ?: "")
+                .put("make_default", asDefault)
+            if (apiKey != null) body.put("api_key", apiKey)
+            val o = try { repository.providersSave(body) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            val ok = o?.optBoolean("ok", false) == true
+            if (ok) {
+                repository.invalidateModelCache()
+                val arr = o?.optJSONArray("endpoints")
+                val list = ArrayList<org.json.JSONObject>()
+                if (arr != null) for (i in 0 until arr.length()) list.add(arr.getJSONObject(i))
+                _uiState.update { it.copy(providers = list, providersError = null) }
+            }
+            onDone(ok, o?.optString("error")?.ifBlank { null }
+                ?: if (o == null) "Could not reach the server" else null)
+        }
+    }
+
+    fun deleteProvider(id: String, onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            val o = try { repository.providersDelete(id) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            val ok = o?.optBoolean("ok", false) == true
+            if (ok) {
+                repository.invalidateModelCache()
+                _uiState.update { st -> st.copy(providers = st.providers.filterNot {
+                    it.optString("id") == id }) }
+            }
+            onDone(ok, o?.optString("error")?.ifBlank { null }
+                ?: if (o == null) "Could not reach the server" else null)
+        }
+    }
+
+    fun activateProvider(id: String, onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            val o = try { repository.providersActivate(id) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            val ok = o?.optBoolean("ok", false) == true
+            if (ok) {
+                repository.invalidateModelCache()
+                loadProviders()   // refresh DEFAULT chip placement
+            }
+            onDone(ok, o?.optString("error")?.ifBlank { null }
+                ?: if (o == null) "Could not reach the server" else null)
+        }
+    }
+
+    /** Live-probe base_url+key against the server's /models before saving. */
+    fun validateProvider(baseUrl: String, apiKey: String?,
+                         onDone: (ok: Boolean, reachable: Boolean,
+                                  message: String, models: List<String>) -> Unit) {
+        viewModelScope.launch {
+            val body = org.json.JSONObject().put("base_url", baseUrl)
+                .put("name", "validate").put("model", "validate")
+            if (!apiKey.isNullOrBlank()) body.put("api_key", apiKey)
+            val o = try { repository.providersValidate(body) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            if (o == null) onDone(false, false, "Could not reach the server", emptyList())
+            else {
+                val arr = o.optJSONArray("models")
+                val list = ArrayList<String>()
+                if (arr != null) for (i in 0 until arr.length()) list.add(arr.getString(i))
+                onDone(o.optBoolean("ok", false), o.optBoolean("reachable", false),
+                    o.optString("message"), list)
+            }
+        }
+    }
+
+    fun dismissProvidersError() {
+        _uiState.update { it.copy(providersError = null) }
+    }
+
+    /** Surface a one-off provider mutation failure on the card. */
+    fun providersErrorNow(msg: String) {
+        _uiState.update { it.copy(providersError = msg) }
+    }
+
     fun runJobNow(jobId: String) {
         viewModelScope.launch { repository.jobAction(jobId, "run"); loadServerLists() }
     }
@@ -445,6 +562,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     val chatFontSp: kotlinx.coroutines.flow.StateFlow<Float> = repository.chatFontSp
+    val chatFontManual: kotlinx.coroutines.flow.StateFlow<Boolean> = repository.chatFontManual
     fun setChatFont(sp: Float) {
         repository.setChatFont(sp)
     }
@@ -561,6 +679,7 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val chatFontSp by viewModel.chatFontSp.collectAsState()
+    val chatFontManual by viewModel.chatFontManual.collectAsState()
     val scrollState = rememberScrollState()
     val context = LocalContext.current
 
@@ -892,33 +1011,79 @@ fun SettingsScreen(
                             modifier = Modifier.size(22.dp))
                         Spacer(modifier = Modifier.width(12.dp))
                         Text("Chat Text Size",
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface)
                         Spacer(modifier = Modifier.width(6.dp))
                         // Value sits right beside the label — weight(1f) pinned
                         // it to the card's far edge, leaving a dead gap mid-row.
-                        Text("${chatFontSp.toInt()} sp",
+                        val shown = if (chatFontSp * 2 % 2f < 0.01f ||
+                                         chatFontSp * 2 % 2f > 1.99f)
+                            "${chatFontSp.toInt()}" else "%.1f".format(chatFontSp)
+                        Text("$shown sp",
                             style = MaterialTheme.typography.labelMedium,
                             color = HermesPrimary)
-                    }
-                    Slider(
-                        value = chatFontSp,
-                        onValueChange = { viewModel.setChatFont(it) },
-                        valueRange = 12f..20f,
-                        steps = 7,
-                        colors = SliderDefaults.colors(
-                            thumbColor = HermesPrimary,
-                            activeTrackColor = HermesPrimary)
-                    )
-                    Row(modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = { viewModel.resetChatFont() }) {
-                            Text("Auto (device)")
+                        // Inline escape hatch — only once the size is manual.
+                        if (chatFontManual) {
+                            Spacer(Modifier.weight(1f))
+                            Text("Auto (device)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = HermesPrimary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { viewModel.resetChatFont() }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp))
                         }
                     }
-                    Text("Applies instantly across the app",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // 0.5 sp detents, hairline track + dot thumb —
+                    // quiet Material-3 shape, brand-blue fill.
+                    Slider(
+                        value = chatFontSp,
+                        onValueChange = { viewModel.setChatFont(
+                            kotlin.math.round(it * 2f) / 2f) },
+                        valueRange = 12f..20f,
+                        steps = 15,
+                        modifier = Modifier.height(28.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor = HermesPrimary,
+                            activeTrackColor = HermesPrimary,
+                            inactiveTrackColor =
+                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        ),
+                        track = { state ->
+                            val inactive = MaterialTheme.colorScheme
+                                .outlineVariant.copy(alpha = 0.55f)
+                            val active = HermesPrimary
+                            androidx.compose.foundation.Canvas(
+                                Modifier.fillMaxWidth().height(28.dp)) {
+                                val frac = ((state.value - 12f) / 8f)
+                                    .coerceIn(0f, 1f)
+                                val inset = 6.dp.toPx()
+                                val barW = size.width - inset * 2
+                                val y = size.height / 2f - 1.dp.toPx()
+                                drawRoundRect(
+                                    color = inactive,
+                                    topLeft = androidx.compose.ui.geometry.Offset(
+                                        inset, y),
+                                    size = androidx.compose.ui.geometry.Size(
+                                        barW, 2.dp.toPx()),
+                                    cornerRadius = androidx.compose.ui.geometry
+                                        .CornerRadius(1.dp.toPx()))
+                                if (frac > 0f) drawRoundRect(
+                                    color = active,
+                                    topLeft = androidx.compose.ui.geometry.Offset(
+                                        inset, y),
+                                    size = androidx.compose.ui.geometry.Size(
+                                        barW * frac, 2.dp.toPx()),
+                                    cornerRadius = androidx.compose.ui.geometry
+                                        .CornerRadius(1.dp.toPx()))
+                            }
+                        },
+                        thumb = {
+                            Box(Modifier.size(12.dp)
+                                .background(HermesPrimary, CircleShape))
+                        },
+                    )
                 }
                 SettingsToggle(
                     icon = Icons.Filled.Compress,
@@ -964,6 +1129,11 @@ fun SettingsScreen(
             // ─── 7. SERVER (update + cron jobs + skills, live from gateway) ───
             SettingsSection("Server") {
                 ServerListsPanel(viewModel = viewModel, uiState = uiState)
+            }
+
+            // ─── 7b. PROVIDERS (server-side model provider CRUD) ───
+            SettingsSection("Providers") {
+                ProvidersCard(viewModel = viewModel, uiState = uiState)
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -1534,6 +1704,341 @@ fun HermesAppVersionRow(viewModel: SettingsViewModel) {
             else -> Icon(Icons.Filled.Refresh, contentDescription = "Check for update",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+/* ── Providers card: server-side model-provider CRUD ──
+ * Rows come straight from the gateway (custom endpoints in the desktop's
+ * config). Add/edit opens a modal sheet; keys are write-only (the server
+ * returns a redacted preview). Validation probes the endpoint live before
+ * anything is saved. */
+@Composable
+fun ProvidersCard(viewModel: SettingsViewModel, uiState: SettingsUiState) {
+    var expanded by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<org.json.JSONObject?>(null) }
+    var showEditor by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf<String?>(null) }
+    var confirmDefault by remember { mutableStateOf<org.json.JSONObject?>(null) }
+    fun sheetError(msg: String?) { msg ?: return
+        viewModel.providersErrorNow(msg)
+    }
+
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .clickable {
+                    expanded = !expanded
+                    if (expanded && !uiState.providersLoaded) viewModel.loadProviders()
+                }
+                .padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Filled.Tune, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Model providers",
+                    style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface)
+                Text(if (expanded) "On the server — shared with desktop"
+                     else "Tap to load from the server",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
+            if (uiState.providersLoading) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else if (expanded) {
+                IconButton(onClick = { viewModel.loadProviders() },
+                    modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Reload",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null)
+            }
+        }
+        if (expanded) {
+            uiState.providersError?.let { err ->
+                Text(err, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(vertical = 6.dp))
+            }
+            uiState.providers.forEach { ep ->
+                val id = ep.optString("id")
+                val isDefault = ep.optBoolean("is_current", false)
+                Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(ep.optString("name").ifBlank { id },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface)
+                            Text(ep.optString("base_url").removePrefix("https://")
+                                    .removePrefix("http://")
+                                    .let { if (it.length > 34) it.take(34) + "…" else it } +
+                                    " · " + modelCountOf(ep.optJSONArray("models")) +
+                                    " models" +
+                                    (if (ep.optBoolean("has_api_key", false)) " · key set" else ""),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (isDefault) {
+                            Surface(color = HermesPrimary.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(8.dp)) {
+                                Text("DEFAULT", modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = HermesPrimary)
+                            }
+                        } else {
+                            IconButton(onClick = { confirmDefault = ep },
+                                modifier = Modifier.size(36.dp)) {
+                                Icon(Icons.Filled.StarOutline, "Set default",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        IconButton(onClick = { editing = ep; showEditor = true },
+                            modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.Edit, "Edit", modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        IconButton(onClick = { confirmDelete = id },
+                            modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.DeleteOutline, "Delete", modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                HorizontalDivider(thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            }
+            OutlinedButton(
+                onClick = { editing = null; showEditor = true },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                shape = RoundedCornerShape(10.dp)) {
+                Icon(Icons.Filled.Add, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Add provider")
+            }
+            Text("Any OpenAI-compatible endpoint (ollama, LM Studio, groq…). Saved on the server.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.padding(top = 6.dp))
+        }
+    }
+
+    if (showEditor) {
+        ProviderEditorSheet(
+            existing = editing,
+            onDismiss = { showEditor = false },
+            onValidate = { url, key, cb ->
+                viewModel.validateProvider(url, key) { ok, reachable, msg, models ->
+                    cb(ok, msg.ifBlank { if (reachable) "" else "Could not reach $url" }, models)
+                }
+            },
+            onSave = { id, name, url, key, models, asDef, done ->
+                viewModel.saveProvider(id, name, url, key, models, asDef) { ok, err ->
+                    if (ok) showEditor = false
+                    done(ok, err)
+                }
+            },
+        )
+    }
+
+    confirmDelete?.let { id ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text("Delete provider?") },
+            text = { Text("The endpoint and its stored key are removed from the server. It will drop out of the model picker.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = null
+                    viewModel.deleteProvider(id) { ok, err -> if (!ok) sheetError(err) }
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
+        )
+    }
+
+    confirmDefault?.let { ep ->
+        AlertDialog(
+            onDismissRequest = { confirmDefault = null },
+            title = { Text("Set ${ep.optString("name")} as default?") },
+            text = { Text("New chats will use this provider. Existing sessions keep their own model.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val eid = ep.optString("id")
+                    confirmDefault = null
+                    viewModel.activateProvider(eid) { ok, err -> if (!ok) sheetError(err) }
+                }) { Text("Set default") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDefault = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+private fun modelCountOf(a: org.json.JSONArray?): Int = a?.length() ?: 0
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ProviderEditorSheet(
+    existing: org.json.JSONObject?,
+    onDismiss: () -> Unit,
+    onValidate: (String, String?, (ok: Boolean, message: String, models: List<String>) -> Unit) -> Unit,
+    onSave: (id: String, name: String, url: String,
+             key: String?, models: List<String>, asDefault: Boolean,
+             done: (Boolean, String?) -> Unit) -> Unit,
+) {
+    var name by remember { mutableStateOf(existing?.optString("name").orEmpty()) }
+    var url by remember { mutableStateOf(existing?.optString("base_url").orEmpty()) }
+    var key by remember { mutableStateOf("") }
+    var showKey by remember { mutableStateOf(false) }
+    var models: List<String> by remember {
+        mutableStateOf(existing?.optJSONArray("models")?.let { a ->
+            (0 until a.length()).map { a.getString(it) } ?: emptyList<String>()
+        } ?: emptyList<String>())
+    }
+    var selected by remember {
+        mutableStateOf(existing?.optJSONArray("models")?.let { a ->
+            (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet())
+    }
+    var validating by remember { mutableStateOf(false) }
+    var valMsg by remember { mutableStateOf<String?>(null) }
+    var valOk by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var saveErr by remember { mutableStateOf<String?>(null) }
+    val hasKey = existing?.optBoolean("has_api_key", false) ?: false
+
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+            Text(if (existing == null) "Add provider" else "Edit provider",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface)
+            Spacer(Modifier.height(14.dp))
+            OutlinedTextField(value = name, onValueChange = { name = it; valMsg = null },
+                label = { Text("Name") },
+                singleLine = true, modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp))
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(value = url, onValueChange = { url = it; valMsg = null },
+                label = { Text("Base URL") },
+                singleLine = true, keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp))
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = key,
+                onValueChange = { key = it; valMsg = null },
+                label = { Text(if (hasKey && key.isEmpty()) "API key (leave empty to keep)" else "API key") },
+                singleLine = true,
+                visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { showKey = !showKey }) {
+                        Icon(if (showKey) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                            null, modifier = Modifier.size(18.dp))
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp))
+            Spacer(Modifier.height(10.dp))
+            if (valMsg != null) {
+                Surface(color = if (valOk) androidx.compose.material3.MaterialTheme.colorScheme
+                        .secondaryContainer.copy(alpha = 0.5f)
+                    else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(10.dp)) {
+                    Text(valMsg!!, Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (valOk) MaterialTheme.colorScheme.onSecondaryContainer
+                                else MaterialTheme.colorScheme.onErrorContainer)
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+            if (models.isNotEmpty()) {
+                Text("Models${if (selected.isEmpty()) " (none selected: all)" else " (${selected.size} selected)"}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(6.dp))
+                models.chunked(6).forEach { row ->
+                    Row(Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEach { m ->
+                            val on = selected.isEmpty() || selected.contains(m)
+                            Surface(
+                                onClick = {
+                                    val cur = if (selected.isEmpty()) models.toSet() else selected
+                                    val next = cur.toMutableSet()
+                                    if (!next.add(m)) next.remove(m)
+                                    selected = next
+                                },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (on) HermesPrimary.copy(alpha = 0.18f)
+                                        else MaterialTheme.colorScheme.surfaceVariant,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (on) HermesPrimary.copy(alpha = 0.6f)
+                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                            ) {
+                                Text(m.substringAfterLast('/'),
+                                    Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (on) HermesPrimary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1)
+                            }
+                        }
+                    }
+                }
+            }
+            saveErr?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp))
+            }
+            Spacer(Modifier.height(14.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    enabled = !saving && !validating &&
+                        name.isNotBlank() && url.isNotBlank(),
+                    onClick = {
+                        saving = true; saveErr = null
+                        onSave(existing?.optString("id").orEmpty(), name.trim(), url.trim(),
+                            key.takeIf { it.isNotBlank() },
+                            models.filter { selected.isEmpty() || selected.contains(it) },
+                            false) { ok, err ->
+                            saving = false
+                            if (!ok) saveErr = err
+                        }
+                    },
+                    modifier = Modifier.weight(2f), shape = RoundedCornerShape(22.dp)) {
+                    if (saving) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    else Text(if (existing == null) "Save" else "Update")
+                }
+                OutlinedButton(
+                    enabled = !validating && url.isNotBlank(),
+                    onClick = {
+                        validating = true; valMsg = null
+                        onValidate(url.trim(), key.takeIf { it.isNotBlank() }) { ok, msg, found ->
+                            validating = false; valOk = ok
+                            if (ok && found.isNotEmpty()) {
+                                models = found
+                                if (selected.isEmpty()) selected = found.toSet()
+                                valMsg = "Endpoint OK — ${found.size} models"
+                            } else {
+                                valMsg = msg.ifBlank { "Validation failed" }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f), shape = RoundedCornerShape(22.dp)) {
+                    if (validating) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    else Text("Check")
+                }
+            }
+            Spacer(Modifier.height(20.dp))
         }
     }
 }

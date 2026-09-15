@@ -514,6 +514,15 @@ class HermesRepository @Inject constructor(
     suspend fun updateVersion() = apiService.updateVersion()
     suspend fun updateApply() = apiService.updateApply()
 
+    // ─── Model providers (server-side custom endpoints) ───
+    suspend fun providersList() = apiService.providersList()
+    suspend fun providersSave(body: org.json.JSONObject) = apiService.providersSave(body)
+    suspend fun providersDelete(id: String) = apiService.providersDelete(id)
+    suspend fun providersActivate(id: String) = apiService.providersActivate(id)
+    suspend fun providersValidate(body: org.json.JSONObject) = apiService.providersValidate(body)
+    /** Provider set changed -> the cached model inventory is stale. */
+    fun invalidateModelCache() = apiService.invalidateModelCache()
+
     /** Expand a skill slash command via the server (Telegram-parity
      * injection); null = not a skill command. */
     suspend fun resolveSkillCommand(command: String, args: String): String? =
@@ -792,14 +801,21 @@ class HermesRepository @Inject constructor(
         apiService.prefs().getFloat("chat_font_sp",
             apiService.contextRes.resources.getInteger(com.hermes.mobile.R.integer.chat_font_sp).toFloat()))
     val chatFontSp: StateFlow<Float> = _chatFontSp
+    /** True while the user's own size overrides the device default — drives
+     * the inline "Auto (device)" affordance on the Settings row. */
+    private val _chatFontManual = MutableStateFlow(
+        apiService.prefs().contains("chat_font_sp"))
+    val chatFontManual: StateFlow<Boolean> = _chatFontManual
     fun setChatFont(sp: Float) {
         _chatFontSp.value = sp
+        _chatFontManual.value = true
         apiService.prefs().edit().putFloat("chat_font_sp", sp).apply()
     }
 
     /** Clear the override; flow re-seeds to the screen-class resource. */
     fun resetChatFontToAuto() {
         apiService.prefs().edit().remove("chat_font_sp").apply()
+        _chatFontManual.value = false
         _chatFontSp.value =
             apiService.contextRes.resources.getInteger(com.hermes.mobile.R.integer.chat_font_sp).toFloat()
     }

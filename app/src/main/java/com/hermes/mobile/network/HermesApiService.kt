@@ -1151,6 +1151,51 @@ class HermesApiService @Inject constructor(
         }
     }
 
+    /** POST $path with a JSON body (Bearer auth). Null on any failure;
+     * HTTP errors surface the parsed body when it is JSON (the plugin's
+     * provider routes return {ok:false,error} on 400/404/500). */
+    suspend fun postJson(path: String, body: JSONObject, method: String = "POST"): JSONObject? {
+        val cfg = config ?: getConfig()
+        val base = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: return null
+        val key = cfg.apiKey?.takeIf { it.isNotBlank() } ?: ""
+        return withContext(Dispatchers.IO) {
+            try {
+                val rb = Request.Builder().url(base.trimEnd('/') + path)
+                    .header("Content-Type", "application/json")
+                if (key.isNotBlank()) rb.header("Authorization", "Bearer $key")
+                when (method) {
+                    "DELETE" -> rb.delete(if (body.length() > 0) body.toString().toRequestBody(null) else null)
+                    else -> rb.post(body.toString().toRequestBody(null))
+                }
+                client.newCall(rb.build()).execute().use { resp ->
+                    val txt = resp.body?.string() ?: return@use null
+                    val json = runCatching { JSONObject(txt) }.getOrNull() ?: return@use null
+                    // 4xx/5xx with a structured error body still parse; the
+                    // caller checks ok. Only a non-JSON body counts as failure.
+                    json
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { null }
+        }
+    }
+
+    // ─── Model providers (plugin /api/mobile/providers/*) ───
+    // CRUD for OpenAI-compatible custom endpoints on the SERVER (desktop
+    // config). Keys: plaintext rides one way (app->server .env via key_env);
+    // the server only ever returns redacted previews.
+    suspend fun providersList(): JSONObject? = getJson("/api/mobile/providers")
+    suspend fun providersSave(body: JSONObject): JSONObject? =
+        postJson("/api/mobile/providers", body)
+    suspend fun providersDelete(id: String): JSONObject? =
+        postJson("/api/mobile/providers/" + java.net.URLEncoder.encode(id, "UTF-8")
+            .replace("+", "%20"), JSONObject(), "DELETE")
+    suspend fun providersActivate(id: String): JSONObject? =
+        postJson("/api/mobile/providers/" + java.net.URLEncoder.encode(id, "UTF-8")
+            .replace("+", "%20") + "/activate", JSONObject())
+    suspend fun providersValidate(body: JSONObject): JSONObject? =
+        postJson("/api/mobile/providers/validate", body)
+
     /** Live server-side context fill for a session (active-row token sum;
      * accurate even after a compression rotation while the app was away).
      * Returns 0 when unknown (older gateway without the route). */
