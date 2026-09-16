@@ -2,10 +2,13 @@ package com.hermes.mobile.ui.screens.chat
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -1393,7 +1396,7 @@ fun ChatScreen(
     ) { uri ->
         if (uri != null) {
             vm.hideEmojiPicker()
-            scope.launch(Dispatchers.IO) {
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val cr = context.contentResolver
                 val mimeType = cr.getType(uri) ?: "image/*"
                 val ext = when (mimeType) {
@@ -1418,7 +1421,7 @@ fun ChatScreen(
     ) { uri ->
         if (uri != null) {
             vm.hideEmojiPicker()
-            scope.launch(Dispatchers.IO) {
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val cr = context.contentResolver
                 val mimeType = cr.getType(uri) ?: "application/octet-stream"
                 val attachType = when {
@@ -1441,6 +1444,42 @@ fun ChatScreen(
                     attachType = attachType
                 )
             }
+        }
+    }
+
+    // Camera launcher: requests permission then opens camera
+    var cameraPhotoUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    val takePictureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) {
+            val uri = cameraPhotoUri
+            if (uri != null) {
+                vm.hideEmojiPicker()
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    pendingAttachment = PendingAttachment(
+                        uri = uri,
+                        fileName = "camera_${System.currentTimeMillis()}.jpg",
+                        mimeType = "image/jpeg",
+                        attachType = "image"
+                    )
+                }
+            } else {
+                vm.setError("Camera cancelled")
+            }
+        } else {
+            vm.setError("Camera cancelled")
+        }
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            val photoFile = java.io.File(context.cacheDir, "photo_${System.currentTimeMillis()}.jpg")
+            cameraPhotoUri = androidx.core.content.FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", photoFile
+            )
+            takePictureLauncher.launch(cameraPhotoUri!!)
+        } else {
+            vm.setError("Camera permission denied")
         }
     }
 
@@ -2187,6 +2226,10 @@ fun ChatScreen(
                 onFile = {
                     showAttachSheet = false
                     filePickerLauncher.launch(arrayOf("*/*"))
+                },
+                onCamera = {
+                    showAttachSheet = false
+                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                 },
                 onDismiss = { showAttachSheet = false }
             )

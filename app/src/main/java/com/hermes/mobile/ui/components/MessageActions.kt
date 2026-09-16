@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forward
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Reply
 import androidx.compose.material.icons.filled.AttachFile
@@ -125,6 +126,7 @@ private fun SheetActionRow(
 fun AttachSheet(
     onGallery: () -> Unit,
     onFile: () -> Unit,
+    onCamera: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -135,6 +137,7 @@ fun AttachSheet(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
             )
+            SheetActionRow(Icons.Filled.PhotoCamera, "Camera") { onCamera() }
             SheetActionRow(Icons.Filled.PhotoLibrary, "Gallery") { onGallery() }
             SheetActionRow(Icons.Filled.AttachFile, "File") { onFile() }
         }
