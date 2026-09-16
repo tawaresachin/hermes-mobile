@@ -130,8 +130,8 @@ class ChatViewModel @Inject constructor(
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
 
     // ── Streaming state ──
-    private val _streamingContent = MutableStateFlow("")
-    val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
+    private val _streamingContent = MutableStateFlow<String?>("")
+    val streamingContent: StateFlow<String?> = _streamingContent.asStateFlow()
 
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
@@ -208,6 +208,13 @@ class ChatViewModel @Inject constructor(
             when {
                 sessionId != null -> resumeSession(sessionId)
                 _sessionId.value != null -> {
+                    // Re-entering the Chat tab for the same session —
+                    // observeMessages/observeLiveTurn may still be running
+                    // from before. Cancelling first prevents a second
+                    // collector firing _messages.value = ... on top of
+                    // the live one (visible reload without new data).
+                    messageJob?.cancel()
+                    liveJob?.cancel()
                     observeMessages(_sessionId.value!!)
                     observeLiveTurn(_sessionId.value!!)
                 }
@@ -298,6 +305,17 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun resumeSession(sessionId: String) {
         try {
+            // Cancel any running collectors from a prior session before
+            // reading server truth — otherwise both observeMessages() and
+            // observeLiveTurn() run simultaneously for different sessions,
+            // each calling _messages.value = ... and producing a visible
+            // reload (two passes over the same data on a single open).
+            messageJob?.cancel()
+            liveJob?.cancel()
+            _messages.value = emptyList()
+            _streamingContent.value = null
+            _isStreaming.value = false
+
             _sessionId.value = sessionId
             restoreSessionModel(sessionId)
             observeLiveTurn(sessionId)
@@ -1525,7 +1543,7 @@ fun ChatScreen(
                             // or the live provider note (rate-limit wait,
                             // retry countdown) so a long backoff never reads
                             // as a dead chat.
-                            text = if (isStreaming && streamingContent.isBlank())
+                            text = if (isStreaming && (streamingContent?.isBlank() == true))
                                 turnStatusNote?.takeIf { it.isNotBlank() } ?: ThinkingSubtitle()
                             else
                                 selectedModelName,
@@ -1588,7 +1606,7 @@ fun ChatScreen(
                     // indicator. The bubble appears the moment content
                     // streams. Blank non-streaming rows stay filtered out.
                     it.role != MessageRole.ASSISTANT ||
-                        (it.isStreaming && streamingContent.isNotBlank()) ||
+                        (it.isStreaming && (streamingContent?.isNotBlank() == true)) ||
                         (!it.isStreaming && it.content.isNotBlank())
                 }
         }
@@ -1818,7 +1836,7 @@ fun ChatScreen(
                             }
                             MessageBubble(
                                 message = message,
-                                displayContent = displayContent,
+                                displayContent = displayContent ?: "",
                                 isStreaming = isStreamingThis,
                                 baseUrl = vm.getBaseUrl(),
                                 isFirstInGroup = isGroupStart,
@@ -1913,7 +1931,7 @@ fun ChatScreen(
                             // Full-width table overlay for assistant messages
                             FullWidthTableOverlay(
                                 message = message,
-                                displayContent = displayContent,
+                                displayContent = displayContent ?: "",
                                 isStreaming = isStreamingThis,
                                 isDark = LocalDarkTheme.current
                             )
