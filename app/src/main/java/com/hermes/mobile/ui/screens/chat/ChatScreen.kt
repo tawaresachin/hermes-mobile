@@ -975,29 +975,32 @@ class ChatViewModel @Inject constructor(
             replyTo: Message? = null,
             steer: Boolean = false
         ) {
+            sendWithAttachments(text, listOfNotNull(attachment), context, onAttachComplete, replyTo, steer)
+        }
+        fun sendWithAttachments(
+            text: String,
+            attachments: List<PendingAttachment>,
+            context: android.content.Context,
+            onAttachComplete: () -> Unit,
+            replyTo: Message? = null,
+            steer: Boolean = false
+        ) {
             val sid = _sessionId.value ?: return
             if (sendInFlight) return
             sendInFlight = true
-            // Clear the composer BEFORE the slow upload starts: the send
-            // slot falls back to the mic and a second tap has nothing to
-            // resend. (Was: cleared only in onAttachComplete AFTER upload.)
             onAttachComplete()
             viewModelScope.launch {
                 try {
                     var attachUrl: String? = null
                     var attachType: String? = null
                     var attachPath: String = ""
-                    if (attachment != null) {
-                        // Server truth: aiohttp client_max_size on the api_server
-                        // app rejects ANY body > 10 MB with 413 body_too_large
-                        // before the upload route runs — so 10 MB is the real
-                        // cap, not the route's own 25 MB constant.
+                    for (attachment in attachments) {
                         var tempFile: java.io.File? = null
                         try {
                             tempFile = cacheAttachmentToTemp(context, attachment.uri)
                             if (tempFile == null) {
                                 _errorMessage.value = "Attachment too large or unreadable (max 9 MB — gateway limit)"
-                                return@launch
+                                continue
                             }
                             repository.uploadFile(
                                 tempFile!!, attachment.fileName, attachment.mimeType, sid
@@ -1011,8 +1014,6 @@ class ChatViewModel @Inject constructor(
                         } catch (e: Exception) {
                             _errorMessage.value = "Upload failed — check the connection and try again"
                         } finally {
-                            // The cacheDir copy must vanish even when the
-                            // upload throws or the scope is cancelled.
                             tempFile?.delete()
                         }
                     }
@@ -1345,7 +1346,9 @@ fun ChatScreen(
     }
 
     var inputText by remember { mutableStateOf("") }
-    var pendingAttachment by remember { mutableStateOf<PendingAttachment?>(null) }
+    var pendingAttachments by remember { mutableStateOf<List<PendingAttachment>>(emptyList()) }
+    fun addPendingAttachment(a: PendingAttachment) { pendingAttachments = pendingAttachments + a }
+    fun clearPendingAttachments() { pendingAttachments = emptyList() }
     // Image awaiting annotation in the markup editor (Cursor-style visual
     // direction — draw on the photo before the agent sees it).
     var markupTarget by remember { mutableStateOf<PendingAttachment?>(null) }
@@ -1405,44 +1408,46 @@ fun ChatScreen(
                     "image/webp" -> "webp"
                     else -> "jpg"
                 }
-                pendingAttachment = PendingAttachment(
+                addPendingAttachment(PendingAttachment(
                     uri = uri,
                     fileName = "gallery_${System.currentTimeMillis()}.$ext",
                     mimeType = mimeType,
                     attachType = "image"
-                )
+                ))
             }
         }
     }
 
     // ── File picker (stores selection, doesn't upload until send clicked) ──
     val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris != null) {
             vm.hideEmojiPicker()
             scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val cr = context.contentResolver
-                val mimeType = cr.getType(uri) ?: "application/octet-stream"
-                val attachType = when {
-                    mimeType.startsWith("image/") -> "image"
-                    mimeType.startsWith("video/") -> "video"
-                    mimeType.startsWith("audio/") -> "audio"
-                    else -> "file"
+                for (uri in uris) {
+                    val mimeType = cr.getType(uri) ?: "application/octet-stream"
+                    val attachType = when {
+                        mimeType.startsWith("image/") -> "image"
+                        mimeType.startsWith("video/") -> "video"
+                        mimeType.startsWith("audio/") -> "audio"
+                        else -> "file"
+                    }
+                    val displayName = android.provider.OpenableColumns.DISPLAY_NAME
+                    val fileName = cr.query(uri, null, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val idx = cursor.getColumnIndex(displayName)
+                            if (idx >= 0) cursor.getString(idx) else null
+                        } else null
+                    } ?: "${attachType}_${System.currentTimeMillis()}"
+                    addPendingAttachment(PendingAttachment(
+                        uri = uri,
+                        fileName = fileName,
+                        mimeType = mimeType,
+                        attachType = attachType
+                    ))
                 }
-                val displayName = android.provider.OpenableColumns.DISPLAY_NAME
-                val fileName = cr.query(uri, null, null, null, null)?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val idx = cursor.getColumnIndex(displayName)
-                        if (idx >= 0) cursor.getString(idx) else null
-                    } else null
-                } ?: "${attachType}_${System.currentTimeMillis()}"
-                pendingAttachment = PendingAttachment(
-                    uri = uri,
-                    fileName = fileName,
-                    mimeType = mimeType,
-                    attachType = attachType
-                )
             }
         }
     }
@@ -1455,12 +1460,12 @@ fun ChatScreen(
             if (uri != null) {
                 vm.hideEmojiPicker()
                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    pendingAttachment = PendingAttachment(
+                    addPendingAttachment(PendingAttachment(
                         uri = uri,
                         fileName = "camera_${System.currentTimeMillis()}.jpg",
                         mimeType = "image/jpeg",
                         attachType = "image"
-                    )
+                    ))
                 }
             } else {
                 vm.setError("Camera cancelled")
@@ -2147,8 +2152,8 @@ fun ChatScreen(
                     androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
                 )
                 // Use ViewModel scope so cancellation doesn't lose messages
-                vm.sendWithAttachment(inputText.trim(), pendingAttachment, context, onAttachComplete = {
-                    pendingAttachment = null
+                vm.sendWithAttachments(inputText.trim(), pendingAttachments, context, onAttachComplete = {
+                    pendingAttachments = emptyList()
                     inputText = ""
                 }, replyTo = pendingReply)
                 DraftStore.clear(sessionIdState ?: "")
@@ -2180,9 +2185,9 @@ fun ChatScreen(
                 vm.hideEmojiPicker()
             },
             onAttach = { showAttachSheet = true },
-            pendingAttachment = pendingAttachment,
-            onRemoveAttachment = { pendingAttachment = null },
-            onMarkup = { pendingAttachment?.let { markupTarget = it } },
+            pendingAttachments = pendingAttachments,
+            onRemoveAttachment = { attachment -> pendingAttachments = pendingAttachments.filter { it != attachment } },
+            onMarkup = { pendingAttachments.firstOrNull()?.let { markupTarget = it } },
             isStreaming = isStreaming,
             showEmojiPicker = showEmojiPicker,
             onToggleEmojiPicker = { vm.toggleEmojiPicker() },
@@ -2209,7 +2214,7 @@ fun ChatScreen(
                 onDismiss = { markupTarget = null },
                 onSend = { flattenedFile ->
                     markupTarget = null
-                    pendingAttachment = null
+                    pendingAttachments = emptyList()
                     vm.sendMarkedImage(inputText.trim(), flattenedFile, pendingReply)
                 }
             )
@@ -3952,8 +3957,8 @@ fun InputBar(
     onVoice: () -> Unit,
     onEmoji: (String) -> Unit,
     onAttach: () -> Unit,
-    pendingAttachment: PendingAttachment?,
-    onRemoveAttachment: () -> Unit,
+    pendingAttachments: List<PendingAttachment>,
+    onRemoveAttachment: (PendingAttachment) -> Unit,
     onMarkup: (() -> Unit)? = null,
     isStreaming: Boolean,
     showEmojiPicker: Boolean,
@@ -3988,10 +3993,10 @@ fun InputBar(
             }
 
             // Attachment preview (like Telegram: thumbnail + name above text field)
-            if (pendingAttachment != null) {
+            for (att in pendingAttachments) {
                 AttachmentPreview(
-                    attachment = pendingAttachment,
-                    onRemove = onRemoveAttachment,
+                    attachment = att,
+                    onRemove = { onRemoveAttachment(att) },
                     onMarkup = onMarkup
                 )
             }
@@ -4015,7 +4020,7 @@ fun InputBar(
                     .padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                    val hasContent = inputText.isNotBlank() || pendingAttachment != null
+                    val hasContent = inputText.isNotBlank() || pendingAttachments.isNotEmpty()
 
                     // ── 0. Bot command pill (opens the full command sheet;
                     // typing replaces it with the emoji button) ──
