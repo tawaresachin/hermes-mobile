@@ -1473,7 +1473,8 @@ fun ChatScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            val photoFile = java.io.File(context.cacheDir, "photo_${System.currentTimeMillis()}.jpg")
+            val photoDir = java.io.File(context.cacheDir, "camera").apply { mkdirs() }
+            val photoFile = java.io.File(photoDir, "photo_${System.currentTimeMillis()}.jpg")
             cameraPhotoUri = androidx.core.content.FileProvider.getUriForFile(
                 context, "${context.packageName}.fileprovider", photoFile
             )

@@ -3,6 +3,7 @@
      system viewer (Telegram-style tap-to-open). -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="attachments" path="attachments/" />
+    <cache-path name="camera" path="." />
     <!-- Self-update APK downloads handed to the system installer. -->
     <cache-path name="updates" path="updates/" />
 </paths>
