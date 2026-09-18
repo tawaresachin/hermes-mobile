@@ -991,9 +991,8 @@ class ChatViewModel @Inject constructor(
             onAttachComplete()
             viewModelScope.launch {
                 try {
-                    var attachUrl: String? = null
-                    var attachType: String? = null
-                    var attachPath: String = ""
+                    // Upload every file, collecting (url, path, type) per attachment.
+                    val uploaded = mutableListOf<Triple<String, String, String>>()
                     for (attachment in attachments) {
                         var tempFile: java.io.File? = null
                         try {
@@ -1005,9 +1004,7 @@ class ChatViewModel @Inject constructor(
                             repository.uploadFile(
                                 tempFile!!, attachment.fileName, attachment.mimeType, sid
                             )?.let { (url, path) ->
-                                attachUrl = url
-                                attachPath = path
-                                attachType = attachment.attachType
+                                uploaded.add(Triple(url, path, attachment.attachType))
                             }
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
@@ -1017,9 +1014,22 @@ class ChatViewModel @Inject constructor(
                             tempFile?.delete()
                         }
                     }
-                    if (text.isNotBlank() || attachUrl != null) {
-                        sendMessage(text, attachUrl, attachType, replyTo = replyTo, attachmentPath = attachPath, steer = steer)
+                    if (uploaded.isEmpty()) return@launch
+                    // The wire carries ONE attachment per message (TurnText.mediaNote
+                    // is singular), so N files = N FIFO turns: the user's caption rides
+                    // on the FIRST, every remaining file gets its own message right
+                    // after it. Nothing is dropped or silently attached-twice.
+                    val first = uploaded.first()
+                    val headText = if (text.isNotBlank()) text else ""
+                    enqueueMessage(sid, headText, first.first, first.third, replyTo, first.second,
+                        displayText = if (text.isNotBlank()) text else null)
+                    for (extra in uploaded.drop(1)) {
+                        enqueueMessage(sid, "", extra.first, extra.third, null, extra.second)
                     }
+                    // Idle: nothing is streaming, so the FIFO queue would sit — start
+                    // the head message now. Streaming: the live-turn collector
+                    // auto-drains the queue as each turn settles.
+                    if (!_isStreaming.value) drainQueue(sid)
                 } finally {
                     sendInFlight = false
                 }
