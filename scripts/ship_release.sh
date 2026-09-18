@@ -108,6 +108,7 @@ gpgsign --verify "$DIST/SHA256SUMS.asc" "$DIST/SHA256SUMS" 2>&1 | tail -1
 cp "$PLG_REPO/docs/hermes-release-public-key.asc" "$DIST/"
 ASSETS+=( "$DIST/SHA256SUMS" "$DIST/SHA256SUMS.asc" "$DIST/hermes-release-public-key.asc" )
 
+# Create or update the release + assets.
 if perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' gh release view "$TAG" -R "$SLUG" >/dev/null 2>&1; then
   perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' gh release edit "$TAG" -R "$SLUG" --notes-file "$NOTES_FILE"
   for a in "${ASSETS[@]}"; do
@@ -119,4 +120,24 @@ else
     -R "$SLUG" --target "$(gitx "$REPO" rev-parse "refs/tags/$TAG^{commit}")" \
     --title "$KIND $TAG" --notes-file "$NOTES_FILE"
   echo "==> created release $TAG on $SLUG"
+fi
+
+# Normalize the release to PUBLIC + correctly tagged. The create/edit paths
+# above can leave the release as a draft (older `gh` without `--publish`, or a
+# release that was first created as a draft), and the asset URLs then carry an
+# `untagged-…` slug. After the create/update branch, run one deterministic
+# `gh api` POST that clears the draft flag and re-anchors target-commitish to
+# the tag's commit so the release is public and tag-based.
+perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' gh api "repos/$SLUG/releases/tags/$TAG" \
+  -X POST -f draft=false \
+  -f target_commitish="$(gitx "$REPO" rev-parse "refs/tags/$TAG^{commit}")" \
+  >/dev/null 2>&1 || \
+  perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' gh api "repos/$SLUG/releases/tags/$TAG" \
+    -X POST -f draft=false >/dev/null 2>&1 || true
+
+if [ "$(perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' gh api "repos/$SLUG/releases/tags/$TAG" --jq '.draft' 2>/dev/null)" = "false" ]; then
+  echo "==> released $TAG on $SLUG (public)"
+else
+  echo "!! could not publish $TAG on $SLUG — verify manually: gh release list" >&2
+  exit 5
 fi
