@@ -316,7 +316,9 @@ class SettingsViewModel @Inject constructor(
     /** Throttled app-update check (cached verdict shown while inside
      * the 12h window). */
     fun checkAppUpdate() {
-        viewModelScope.launch { appUpdate.check() }
+        // force=true: a manual tap must give visible feedback — a live check,
+        // not a silent no-op inside the 12h throttle window.
+        viewModelScope.launch { appUpdate.check(force = true) }
     }
 
     fun downloadAppUpdate() {
@@ -1682,6 +1684,7 @@ fun HermesAppVersionRow(viewModel: SettingsViewModel) {
                 maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
             val sub = when {
+                state.upToDate -> "Up to date"
                 state.available -> "v${state.latest} available"
                 state.error != null && !state.checking -> state.error
                 else -> null

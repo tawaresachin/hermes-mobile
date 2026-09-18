@@ -51,6 +51,8 @@ data class AppUpdateState(
     val available: Boolean = false,
     val latest: String = "",
     val notes: String = "",
+    /** A fresh check completed and we are on the newest release. */
+    val upToDate: Boolean = false,
     /** Download progress 0..1 (only meaningful while downloading). */
     val downloading: Boolean = false,
     val progress: Float = 0f,
@@ -98,14 +100,17 @@ class AppUpdateChecker @Inject constructor(
     }
 
     /**
-     * Check for a newer release. Honors the 12h window — repeated About
-     * visits, offline devices, or impatient taps never exceed 2 API
-     * calls/day. The cached verdict stays visible either way.
+     * Check for a newer release.
+     * - force=false honors the 12h window (auto-refresh on About open): a
+     *   fresh cached verdict just re-renders, no second API call.
+     * - force=true is a MANUAL tap: always run a live check so the user sees
+     *   real feedback ("checking…" spinner, then "Up to date" / the error /
+     *   "vX available") instead of a silent no-op.
      */
     suspend fun check(force: Boolean = false) {
         if (!force && cachedFresh) return
         if (_state.value.checking) return
-        _state.value = _state.value.copy(checking = true, error = null)
+        _state.value = _state.value.copy(checking = true, error = null, upToDate = false)
         try {
             withContext(Dispatchers.IO) {
             val req = Request.Builder()
@@ -232,9 +237,11 @@ class AppUpdateChecker @Inject constructor(
     }
 
     private fun persist(version: String, apkUrl: String, sumsUrl: String, notes: String) {
+        val avail = versionCodeFromTag(version) > BuildConfig.VERSION_CODE
         _state.value = _state.value.copy(
             latest = version,
-            available = versionCodeFromTag(version) > BuildConfig.VERSION_CODE,
+            available = avail,
+            upToDate = !avail,
             notes = notes,
         )
         prefs.edit()

@@ -3,7 +3,9 @@
      system viewer (Telegram-style tap-to-open). -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="attachments" path="attachments/" />
-    <cache-path name="camera" path="." />
+    <!-- Camera captures land in cache/camera/. Expose ONLY that subdir —
+         never the whole cacheDir (the v0.0.56 path="." was too broad). -->
+    <cache-path name="camera" path="camera/" />
     <!-- Self-update APK downloads handed to the system installer. -->
     <cache-path name="updates" path="updates/" />
 </paths>

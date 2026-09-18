@@ -6,7 +6,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
 import androidx.compose.animation.*
@@ -1403,31 +1402,6 @@ fun ChatScreen(
     var showImageViewer by remember { mutableStateOf<String?>(null) }
     var imageViewerUrl by remember { mutableStateOf<String?>(null) }
 
-    // ── Gallery picker (Telegram-style attach sheet) ──
-    val galleryLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        if (uri != null) {
-            vm.hideEmojiPicker()
-            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                val cr = context.contentResolver
-                val mimeType = cr.getType(uri) ?: "image/*"
-                val ext = when (mimeType) {
-                    "image/png" -> "png"
-                    "image/gif" -> "gif"
-                    "image/webp" -> "webp"
-                    else -> "jpg"
-                }
-                addPendingAttachment(PendingAttachment(
-                    uri = uri,
-                    fileName = "gallery_${System.currentTimeMillis()}.$ext",
-                    mimeType = mimeType,
-                    attachType = "image"
-                ))
-            }
-        }
-    }
-
     // ── File picker (stores selection, doesn't upload until send clicked) ──
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -2235,9 +2209,11 @@ fun ChatScreen(
             AttachSheet(
                 onGallery = {
                     showAttachSheet = false
-                    galleryLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
+                    // PickVisualMedia is single-select at the API level — it
+                    // cannot multi-select on any Android version. Multi-select
+                    // lives in OpenMultipleDocuments (the same multi-URI path
+                    // the File row uses), scoped to images + videos.
+                    filePickerLauncher.launch(arrayOf("image/*", "video/*"))
                 },
                 onFile = {
                     showAttachSheet = false
