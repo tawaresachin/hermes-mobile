@@ -1013,7 +1013,14 @@ class ChatViewModel @Inject constructor(
                             tempFile?.delete()
                         }
                     }
-                    if (uploaded.isEmpty()) return@launch
+                    // No attachments (or every upload failed): send the text
+                    // the pre-0.0.57 way. 0.0.57's rewrite silently dropped
+                    // text-only messages here (empty upload list -> return),
+                    // which is the "hello vanished, new/old chat broken" bug.
+                    if (uploaded.isEmpty()) {
+                        if (text.isNotBlank()) sendMessage(text, replyTo = replyTo, steer = steer)
+                        return@launch
+                    }
                     // The wire carries ONE attachment per message (TurnText.mediaNote
                     // is singular), so N files = N FIFO turns: the user's caption rides
                     // on the FIRST, every remaining file gets its own message right
