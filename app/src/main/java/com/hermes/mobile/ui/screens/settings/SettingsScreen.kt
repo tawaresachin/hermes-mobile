@@ -781,15 +781,13 @@ fun SettingsScreen(
         Box(modifier = Modifier.fillMaxSize()) {
         HermesWatermark()
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(horizontal = 20.dp)
+            modifier = Modifier.fillMaxSize()
         ) {
-            Spacer(modifier = Modifier.height(12.dp))
-
+            // ── Fixed header ──
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -809,7 +807,14 @@ fun SettingsScreen(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+
+            // ── Scrollable content ──
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(scrollState)
+                    .padding(start = 20.dp, end = 20.dp, top = 8.dp)
+            ) {
 
             // ─── 1. CONNECTION (merged — URL + QR + Test + Refresh) ───
             SettingsSection("Connection") {
@@ -1462,6 +1467,7 @@ fun SettingsScreen(
                     }
                 }
             }
+        }
         }
         }
     }

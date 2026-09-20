@@ -279,56 +279,54 @@ fun HomeScreen(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
         HermesWatermark()
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                top = 24.dp,
-                bottom = 24.dp
-            )
+                .padding(horizontal = 16.dp)
         ) {
-            // ── Compact header (Telegram-style: title + status line) ──
-            item(key = "header") {
-                HomeHeader(
-                    greeting = uiState.greeting,
-                    emoji = uiState.greetingEmoji,
-                    status = uiState.connectionStatus,
-                    serverUrl = uiState.serverBaseUrl,
-                    latency = uiState.connectionLatency,
-                    onRefresh = { viewModel.refreshConnection() }
-                )
-            }
+            // ── Fixed header (Telegram-style: title + status line) ──
+            HomeHeader(
+                greeting = uiState.greeting,
+                emoji = uiState.greetingEmoji,
+                status = uiState.connectionStatus,
+                serverUrl = uiState.serverBaseUrl,
+                latency = uiState.connectionLatency,
+                onRefresh = { viewModel.refreshConnection() }
+            )
+
+            // ── Fixed quick actions row ──
+            QuickActionsRow(
+                isLoading = uiState.isLoading,
+                onNewChat = { viewModel.createNewSession(onCreated = onNavigateToChat) },
+                onResumeSession = onNavigateToSessions,
+                onVoiceInput = onNavigateToVoice
+            )
 
             // ── Error surface (e.g. session creation failure) ──
             uiState.error?.let { err ->
-                item(key = "home_error") {
-                    Text(
-                        text = err,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                Text(
+                    text = err,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                )
+            }
+
+            // ── Scrollable: recent sessions list ──
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    top = 12.dp,
+                    bottom = 24.dp
+                )
+            ) {
+                // ── Recent Sessions ──
+                item(key = "recent_header") {
+                    RecentSessionsHeader(
+                        sessionCount = uiState.sessions.size,
+                        onSeeAll = onNavigateToSessions
                     )
                 }
-            }
-
-            // ── Quick actions: compact pill row ──
-            item(key = "quick_actions") {
-                QuickActionsRow(
-                    isLoading = uiState.isLoading,
-                    onNewChat = { viewModel.createNewSession(onCreated = onNavigateToChat) },
-                    onResumeSession = onNavigateToSessions,
-                    onVoiceInput = onNavigateToVoice
-                )
-            }
-
-            // ── Recent Sessions ──
-            item(key = "recent_header") {
-                RecentSessionsHeader(
-                    sessionCount = uiState.sessions.size,
-                    onSeeAll = onNavigateToSessions
-                )
-            }
 
             if (uiState.sessions.isEmpty()) {
                 item(key = "empty_sessions") {
@@ -357,6 +355,7 @@ fun HomeScreen(
                     }
                 }
             }
+        }
         }
         }
 
