@@ -3457,8 +3457,8 @@ fun ApprovalCard(
     onResolve: (String) -> Unit,
 ) {
     val label = mapOf(
-        "once" to "Allow once", "session" to "Allow session",
-        "always" to "Always allow", "deny" to "Deny")
+        "once" to "Once", "session" to "Session",
+        "always" to "Always", "deny" to "Deny")
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
         shape = RoundedCornerShape(14.dp),

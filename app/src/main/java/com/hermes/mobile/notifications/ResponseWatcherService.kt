@@ -41,21 +41,9 @@ import com.hermes.mobile.R
  */
 class ResponseWatcherService : Service() {
 
-    private val handler = Handler(Looper.getMainLooper())
     private var startedAt = 0L
     private var currentSession = ""
     private var currentQuery = ""
-
-    /** Live ticker: refreshes the ongoing notification. STOPS the moment a
-     * ready notification replaces it — otherwise it would re-post the
-     * "is typing…" bubble over the reply (the bug the user caught). */
-    private val ticker = object : Runnable {
-        override fun run() {
-            if (readyPosted) return
-            updateNotification()
-            handler.postDelayed(this, 1000)
-        }
-    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -64,39 +52,13 @@ class ResponseWatcherService : Service() {
         currentQuery = intent?.getStringExtra(EXTRA_QUERY).orEmpty()
         startedAt = SystemClock.elapsedRealtime()
         startForeground(NOTIF_ID_ONGOING, ongoingNotification())
-        handler.removeCallbacks(ticker)
-        handler.postDelayed(ticker, 1000)
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(ticker)
-        // If the ready reply replaced the ongoing notification, keep it
-        // visible after the service stops (DETACH = drop foreground status
-        // but leave the notification). Otherwise remove it cleanly — a
-        // plain stop must not leave a stale "is typing…" bubble.
-        try {
-            if (readyPosted) {
-                if (android.os.Build.VERSION.SDK_INT >= 24) {
-                    stopForeground(Service.STOP_FOREGROUND_DETACH)
-                } else {
-                    stopForeground(false)
-                }
-            } else {
-                stopForeground(true)
-            }
-        } catch (_: Exception) { }
+        // Cleanly stop the foreground service; notification is dismissible
+        stopForeground(true)
         super.onDestroy()
-    }
-
-    private fun updateNotification() {
-        if (currentSession.isBlank()) return
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        try {
-            nm.notify(NOTIF_ID_ONGOING, ongoingNotification())
-        } catch (_: Exception) {
-            // MIUI/restricted apps can throw on notify — never crash the watcher.
-        }
     }
 
     private fun hermesPerson(): Person {
@@ -111,37 +73,27 @@ class ResponseWatcherService : Service() {
     }
 
     private fun ongoingNotification(): Notification {
-        val pi = tapIntent(currentSession)
-        val now = System.currentTimeMillis()
-        // Telegram-style: the user's message bubble + "Hermes is typing…"
-        // from the Hermes persona. No progress bar, no chrome — just the
-        // logo and the message stack (exactly how Telegram renders a chat
-        // notification: conversation title, timestamp, stacked bubbles).
-        // Slim single-line card (MessagingStyle rendered as a wide
-        // expanded conversation panel on MIUI/stock shades). The query
-        // rides as subtext so the row stays one line.
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            // The ACTUAL Hermes logo — MIUI's shade shows the small icon in
-            // the avatar slot; a white glyph was invisible on white cards.
-            // The launcher adaptive icon IS the girl logo, so the shade now
-            // shows the real image, exactly like a Telegram contact photo.
-            .setSmallIcon(R.drawable.hermes_logo_circle)
-            .setLargeIcon(hermesAvatarBitmap())
-            // Telegram: the accent color tints the small icon + time.
-            .setColor(0xFF0088CC.toInt())
-            .setContentTitle("Hermes")
-            // Collapsed summary MUST show the typing state (Telegram shows
-            // "Hermes: is typing…" in the shade) — NOT the user's own
-            // message, which made the thinking indicator disappear.
-            .setContentText("is typing…")
-            .setSubText(if (currentQuery.isNotBlank()) "Re: " + currentQuery.replace("\n", " ").take(60) + "\u2026" else null)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setWhen(now)
-            .setShowWhen(true)
-            .setContentIntent(pi)
-            .build()
-    }
+            val pi = tapIntent(currentSession)
+            val now = System.currentTimeMillis()
+            // TELEGRAM-STYLE: no "typing..." notification in the shade.
+            // Only the ready reply is shown (see notifyReady). This avoids
+            // the zombie notification that can't be swiped away.
+            // We still need a foreground service for priority, but with a
+            // minimal, dismissible notification.
+            return NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.hermes_logo_circle)
+                .setLargeIcon(hermesAvatarBitmap())
+                .setColor(0xFF0088CC.toInt())
+                .setContentTitle("Hermes")
+                .setContentText("Generating response…")
+                .setSubText(if (currentQuery.isNotBlank()) "Re: " + currentQuery.replace("\n", " ").take(60) + "…" else null)
+                .setOngoing(false)
+                .setOnlyAlertOnce(true)
+                .setWhen(now)
+                .setShowWhen(true)
+                .setContentIntent(pi)
+                .build()
+        }
 
     private fun hermesAvatarBitmap(): Bitmap? {
         return try {
