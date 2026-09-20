@@ -1973,33 +1973,38 @@ private fun ProviderEditorSheet(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(6.dp))
-                models.chunked(6).forEach { row ->
-                    Row(Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        row.forEach { m ->
-                            val on = selected.isEmpty() || selected.contains(m)
-                            Surface(
-                                onClick = {
+                // Bounded, scrollable region: the list can grow long, but the
+                // Save/Check row below it stays visible. One model per row with
+                // its FULL name — the old 6-chips-per-row layout cut long names.
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    models.forEach { m ->
+                        val on = selected.isEmpty() || selected.contains(m)
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = on,
+                                onCheckedChange = {
                                     val cur = if (selected.isEmpty()) models.toSet() else selected
                                     val next = cur.toMutableSet()
                                     if (!next.add(m)) next.remove(m)
                                     selected = next
-                                },
-                                shape = RoundedCornerShape(14.dp),
-                                color = if (on) HermesPrimary.copy(alpha = 0.18f)
-                                        else MaterialTheme.colorScheme.surfaceVariant,
-                                border = androidx.compose.foundation.BorderStroke(
-                                    1.dp,
-                                    if (on) HermesPrimary.copy(alpha = 0.6f)
-                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
-                            ) {
-                                Text(m.substringAfterLast('/'),
-                                    Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (on) HermesPrimary
-                                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1)
-                            }
+                                }
+                            )
+                            Text(m,
+                                Modifier.weight(1f).padding(start = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (on) MaterialTheme.colorScheme.onSurface
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
