@@ -997,7 +997,7 @@ class ChatViewModel @Inject constructor(
                         try {
                             tempFile = cacheAttachmentToTemp(context, attachment.uri)
                             if (tempFile == null) {
-                                _errorMessage.value = "Attachment too large or unreadable (max 9 MB — gateway limit)"
+                                _errorMessage.value = "Attachment too large or unreadable (max 25 MB — gateway limit)"
                                 continue
                             }
                             repository.uploadFile(
@@ -1242,10 +1242,10 @@ class ChatViewModel @Inject constructor(
                                 val n = ins.read(buf)
                                 if (n < 0) break
                                 total += n
-                                // The gateway 413s any body over 10 MB
-                                // (aiohttp client_max_size); 9 MB leaves
+                                // The gateway 413s any body over 25 MB
+                                // (aiohttp client_max_size); 25 MB leaves
                                 // headroom for multipart framing overhead.
-                                if (total > 9L * 1024 * 1024) return@use false
+                                if (total > 25L * 1024 * 1024) return@use false
                                 out.write(buf, 0, n)
                             }
                             true
