@@ -32,7 +32,7 @@ object SecurePrefs {
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
-        } catch (t: Throwable) {
+        } catch (t: Exception) {
             // MIUI/Xiaomi key-store failure or a pre-existing plain file —
             // never let crypto break the app. Flag the downgrade so a
             // maintainer sees it in the diag log instead of it being silent.

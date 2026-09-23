@@ -36,7 +36,6 @@ class HermesApiService @Inject constructor(
     @ApplicationContext private val context: Context,
     private val authInterceptor: AuthInterceptor
 ) {
-
     companion object {
         const val MIN_PLUGIN_PROTOCOL: Int = 1
         const val PLUGIN_RELEASES_URL: String =
@@ -228,9 +227,6 @@ class HermesApiService @Inject constructor(
         val prev = config
         config = cfg
         if (prev == cfg) {
-            // Unchanged - skip the prefs write. healthCheck polls every 5s
-            // and passes a fresh object; writing on every poll is needless
-            // disk I/O.
             return
         }
         prefs.edit()
@@ -240,6 +236,10 @@ class HermesApiService @Inject constructor(
             .putString(KEY_API_KEY, cfg.apiKey.orEmpty())
             .putString(KEY_SETUP_TOKEN, cfg.setupToken.orEmpty())
             .apply()
+        // Invalidate the interceptor's in-memory key cache so
+        // the next request picks up the fresh key without a
+        // SharedPreferences round-trip.
+        authInterceptor.refreshKeyCache()
     }
 
     /** Forget the pairing entirely (logout). */
@@ -247,6 +247,7 @@ class HermesApiService @Inject constructor(
         config = null
         prefs.edit().remove(KEY_BASE_URL).apply()
         secretPrefs.edit().remove(KEY_API_KEY).remove(KEY_SETUP_TOKEN).apply()
+        authInterceptor.refreshKeyCache()
     }
 
     fun getConfig(): ServerConfig? {
@@ -1120,11 +1121,15 @@ class HermesApiService @Inject constructor(
 
     // ─── Switch Model (via dedicated endpoint) ───
 
+    /** Switch model for a session (local-only).
+     * Direct API has no server-side switch endpoint (POST /v1/models/switch
+     * is 404). Model travels per chat request, so switch is local-only.
+     * Any non-blank server-advertised id is accepted - no hardcoded list.
+     * Returns true to keep the UI toggle functional; the actual model
+     * takes effect on the next request via saveModelForSession. */
     suspend fun switchModel(sessionId: String, modelName: String, global: Boolean = false): Boolean {
-        // Direct API has no server-side switch endpoint (POST /v1/models/switch
-        // is 404). Model travels per chat request, so switch is local-only.
-        // Any non-blank server-advertised id is accepted - no hardcoded list.
         if (modelName.isBlank()) return false
+        saveModelForSession(sessionId, modelName, "")
         return true
     }
 
@@ -1380,27 +1385,34 @@ class HermesApiService @Inject constructor(
         }
     }
 
-    // ─── Text-to-Speech ───
-    // Default: Indian English female voice (edge-tts). Pass a different
-    // voice (e.g. "en-IN-PrabhatNeural" male) for variety.
+    /** Text-to-Speech (hermes-mobile-qr plugin route: /api/audio/speak).
+     * Default: Indian English female voice (edge-tts). Pass a different
+     * voice (e.g. "en-IN-PrabhatNeural" male) for variety.
+     * The voice parameter maps to the plugin's `profile` field. */
     suspend fun textToSpeech(text: String, voice: String = "en-IN-NeerjaNeural"): ByteArray? {
         val baseUrl = config?.baseUrl ?: return null
         return withContext(Dispatchers.IO) {
             try {
                 val payload = JSONObject().apply {
                     put("text", text)
-                    put("voice", voice)
+                    if (voice.isNotBlank()) put("profile", voice)
                 }
                 val request = Request.Builder()
-                    .url("$baseUrl/api/tts")
+                    .url("$baseUrl/api/audio/speak")
                     .post(payload.toString().toRequestBody(jsonMediaType))
                     .build()
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    response.body?.bytes()
-                } else {
-                    response.close()
-                    null
+                client.newCall(request).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        return@use null
+                    }
+                    val body = resp.body?.string() ?: return@use null
+                    val dataUrl = JSONObject(body).optString("data_url", "")
+                    if (dataUrl.isBlank()) null
+                    else {
+                        // data_url is "data:<mime>;base64,<...>"
+                        val b64 = dataUrl.substringAfter("base64,")
+                        android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e

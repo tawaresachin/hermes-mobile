@@ -67,7 +67,7 @@ object RunEventCodec {
             }
             "run.failed" -> RunEvent.Failed(o.optString("error", "Run failed"))
             "run.cancelled" -> RunEvent.Cancelled(o.optString("output", ""))
-            "run.status" -> RunEvent.Status(o.optString("event"),
+            "run.status" -> RunEvent.Status("run.status",
                 note = o.optString("note").ifBlank { null })
             "run.stopping", "run.steered", "approval.responded" -> RunEvent.Status(o.optString("event"))
             else -> null

@@ -26,22 +26,37 @@ class AuthInterceptor @Inject constructor(
      * KeyStore master-key derivation + full prefs-file decrypt EVERY time —
      * this runs on every HTTP request (including every Coil image load).
      * SharedPreferences instances are internally thread-safe and live-view
-     * updates, so one cached instance stays correct after pairing/logout. */
+     * updates, so one cached instance stays correct after pairing/logout.
+     * The API key is cached in memory and refreshed on logout/pairing. */
     private val securePrefs by lazy {
         try {
             com.hermes.mobile.security.SecurePrefs.get(context, SECURE_PREFS_NAME)
         } catch (_: Exception) { null }
     }
 
+    /** In-memory key cache. Refreshed when updateApiKey() is called
+     * (pairing/logout), not on every request. */
+    private var cachedApiKey: String? = null
+
+    /** Force-refresh the in-memory key cache. Called on pairing
+     * and logout so the next request uses fresh credentials. */
+    fun refreshKeyCache() {
+        cachedApiKey = null
+    }
+
+    private fun readApiKey(): String {
+        cachedApiKey?.let { return it }
+        val prefs = securePrefs?.getString(KEY_API_KEY, "").orEmpty()
+        if (prefs.isNotBlank()) { cachedApiKey = prefs; return prefs }
+        val plain = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val legacy = plain.getString(KEY_API_KEY, "") ?: ""
+        if (legacy.isNotBlank()) cachedApiKey = legacy
+        return legacy
+    }
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
-        // Primary: secure store (HermesApiService.updateConfig writes here).
-        // Fallback: plain store (legacy installs).
-        var apiKey = securePrefs?.getString(KEY_API_KEY, "").orEmpty()
-        if (apiKey.isBlank()) {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            apiKey = prefs.getString(KEY_API_KEY, "") ?: ""
-        }
+        val apiKey = readApiKey()
 
         return if (apiKey.isNotBlank()) {
             val authenticatedRequest = originalRequest.newBuilder()
