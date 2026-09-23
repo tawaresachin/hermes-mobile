@@ -19,5 +19,11 @@ local.properties
 *.apk
 *.aab
 
+# Build logs
+build*.log
+
+# Nested repos / tooling
+hermes-bridge-registry/
+
 # OS
 .DS_Store
