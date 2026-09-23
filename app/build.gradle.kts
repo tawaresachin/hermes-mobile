@@ -1,1 +1,191 @@
-aW1wb3J0IGphdmEudXRpbC5Qcm9wZXJ0aWVzCgpwbHVnaW5zIHsKICAgIGlkKCJjb20uYW5kcm9pZC5hcHBsaWNhdGlvbiIpCiAgICBpZCgib3JnLmpldGJyYWlucy5rb3RsaW4uYW5kcm9pZCIpCiAgICBpZCgib3JnLmpldGJyYWlucy5rb3RsaW4ucGx1Z2luLmNvbXBvc2UiKQogICAgaWQoImNvbS5nb29nbGUuZGV2dG9vbHMua3NwIikKICAgIGlkKCJjb20uZ29vZ2xlLmRhZ2dlci5oaWx0LmFuZHJvaWQiKQp9CgphbmRyb2lkIHsKICAgIG5hbWVzcGFjZSA9ICJjb20uaGVybWVzLm1vYmlsZSIKICAgIGNvbXBpbGVTZGsgPSAzNAoKICAgIC8vIFJlbGVhc2Ugc2lnbmluZzogcmVhZCBmcm9tIGxvY2FsLnByb3BlcnRpZXMgKGdpdGlnbm9yZWQpIG9yIEhFUk1FU18qIGVudi4KICAgIC8vIEFic2VudCDihpIgZmFsbHMgYmFjayB0byBkZWJ1ZyBzaWduaW5nIHNvIENJL290aGVyIG1hY2hpbmVzIHN0aWxsIGJ1aWxkLgogICAgdmFsIGtzUHJvcHMgPSBQcm9wZXJ0aWVzKCkuYXBwbHkgewogICAgICAgIHZhbCBmID0gcm9vdFByb2plY3QuZmlsZSgibG9jYWwucHJvcGVydGllcyIpCiAgICAgICAgaWYgKGYuZXhpc3RzKCkpIGYuaW5wdXRTdHJlYW0oKS51c2UgeyBsb2FkKGl0KSB9CiAgICB9CiAgICBmdW4gc2lnbmluZ1Byb3AobmFtZTogU3RyaW5nKSA9CiAgICAgICAga3NQcm9wcy5nZXRQcm9wZXJ0eSgiaGVybWVzLiRuYW1lIikgPzogU3lzdGVtLmdldGVudigiSEVSTUVTXyR7bmFtZS51cHBlcmNhc2UoKX0iKQogICAgdmFsIGtzUGF0aCA9IHNpZ25pbmdQcm9wKCJrZXlzdG9yZSIpCgogICAgc2lnbmluZ0NvbmZpZ3MgewogICAgICAgIGlmIChrc1BhdGggIT0gbnVsbCkgewogICAgICAgICAgICBjcmVhdGUoInJlbGVhc2UiKSB7CiAgICAgICAgICAgICAgICBzdG9yZUZpbGUgPSByb290UHJvamVjdC5maWxlKGtzUGF0aCkKICAgICAgICAgICAgICAgIHN0b3JlUGFzc3dvcmQgPSBzaWduaW5nUHJvcCgic3RvcmVQYXNzd29yZCIpCiAgICAgICAgICAgICAgICBrZXlBbGlhcyA9ICJoZXJtZXMtbW9iaWxlIgogICAgICAgICAgICAgICAga2V5UGFzc3dvcmQgPSBzaWduaW5nUHJvcCgia2V5UGFzc3dvcmQiKQogICAgICAgICAgICB9CiAgICAgICAgfQogICAgfQoKICAgIGRlZmF1bHRDb25maWcgewogICAgICAgIGFwcGxpY2F0aW9uSWQgPSAiY29tLmhlcm1lcy5tb2JpbGUiCiAgICAgICAgbWluU2RrID0gMjYKICAgICAgICB0YXJnZXRTZGsgPSAzNAogICAgICAgIHZlcnNpb25Db2RlID0gNjUKICAgICAgICB2ZXJzaW9uTmFtZSA9ICIwLjAuNjUiCgogICAgICAgIHRlc3RJbnN0cnVtZW50YXRpb25SdW5uZXIgPSAiYW5kcm9pZHgudGVzdC5ydW5uZXIuQW5kcm9pZEpVbml0UnVubmVyIgoKICAgICAgICBqYXZhQ29tcGlsZU9wdGlvbnMgewogICAgICAgICAgICBhbm5vdGF0aW9uUHJvY2Vzc29yT3B0aW9ucyB7CiAgICAgICAgICAgICAgICBhcmd1bWVudHNbInJvb20uc2NoZW1hTG9jYXRpb24iXSA9ICIkcHJvamVjdERpci9zY2hlbWFzIgogICAgICAgICAgICB9CiAgICAgICAgfQogICAgfQoKICAgIGJ1aWxkVHlwZXMgewogICAgICAgIHJlbGVhc2UgewogICAgICAgICAgICBzaWduaW5nQ29uZmlnID0gc2lnbmluZ0NvbmZpZ3MuZmluZEJ5TmFtZSgicmVsZWFzZSIpID86IHNpZ25pbmdDb25maWdzLmdldEJ5TmFtZSgiZGVidWciKQogICAgICAgICAgICBpc01pbmlmeUVuYWJsZWQgPSB0cnVlCiAgICAgICAgICAgIC8vIHNocmlua1Jlc291cmNlcyBPRkYg4oCUIHNhbWUgQUdQIHplcm8taG9sZSBwYWRkaW5nIGFydGlmYWN0IGFzIGRlYnVnIChzZWUgYmVsb3cpCiAgICAgICAgICAgIGlzU2hyaW5rUmVzb3VyY2VzID0gZmFsc2UKICAgICAgICAgICAgcHJvZ3VhcmRGaWxlcygKICAgICAgICAgICAgICAgIGdldERlZmF1bHRQcm9ndWFyZEZpbGUoInByb2d1YXJkLWFuZHJvaWQtb3B0aW1pemUudHh0IiksCiAgICAgICAgICAgICAgICAicHJvZ3VhcmQtcnVsZXMucHJvIgogICAgICAgICAgICApCiAgICAgICAgfQogICAgICAgIGRlYnVnIHsKICAgICAgICAgICAgLy8gUjggb24gZGVidWcgdG9vIOKAlCB0aGUgZGVsaXZlcmVkIEFQSyBpcyB0aGUgZGVidWcgYnVpbGQsIGFuZAogICAgICAgICAgICAvLyB3aXRob3V0IG1pbmlmeSBpdCBzaGlwcyB+OE1CIG9mIGRlYWQgZGV4IChhbGwgMjAwMCsgbWF0ZXJpYWwKICAgICAgICAgICAgLy8gaWNvbnMsIHVudXNlZCBkZXBzKS4gU2FtZSBzaWduYXR1cmUsIGluc3RhbGxzIG92ZXIgZXhpc3RpbmcuCiAgICAgICAgICAgIC8vIE5PVEU6IGlzU2hyaW5rUmVzb3VyY2VzIHN0YXlzIE9GRiBoZXJlIOKAlCB3aXRoIGl0IG9uLCBBR1AgcGFkcwogICAgICAgICAgICAvLyB0aGUgQVBLIHdpdGggYSB+MTVNQiB6ZXJvIGhvbGUgKHppcGFsaWduL3BhZ2UtYWxpZ24gYXJ0aWZhY3QpLAogICAgICAgICAgICAvLyBtYWtpbmcgdGhlIGZpbGUgQklHR0VSIHRoYW4gYmVmb3JlLgogICAgICAgICAgICBpc01pbmlmeUVuYWJsZWQgPSB0cnVlCiAgICAgICAgICAgIGlzU2hyaW5rUmVzb3VyY2VzID0gZmFsc2UKICAgICAgICAgICAgcHJvZ3VhcmRGaWxlcygKICAgICAgICAgICAgICAgIGdldERlZmF1bHRQcm9ndWFyZEZpbGUoInByb2d1YXJkLWFuZHJvaWQtb3B0aW1pemUudHh0IiksCiAgICAgICAgICAgICAgICAicHJvZ3VhcmQtcnVsZXMucHJvIgogICAgICAgICAgICApCiAgICAgICAgfQogICAgfQoKICAgIGJ1aWxkRmVhdHVyZXMgewogICAgICAgIGNvbXBvc2UgPSB0cnVlCiAgICAgICAgYnVpbGRDb25maWcgPSB0cnVlCiAgICB9CgogICAgbGludCB7CiAgICAgICAgYmFzZWxpbmUgPSBmaWxlKCJsaW50LWJhc2VsaW5lLnhtbCIpCiAgICB9CgogICAgY29tcGlsZU9wdGlvbnMgewogICAgICAgIHNvdXJjZUNvbXBhdGliaWxpdHkgPSBKYXZhVmVyc2lvbi5WRVJTSU9OXzE3CiAgICAgICAgdGFyZ2V0Q29tcGF0aWJpbGl0eSA9IEphdmFWZXJzaW9uLlZFUlNJT05fMTcKICAgIH0KCiAgICBrb3RsaW5PcHRpb25zIHsKICAgICAgICBqdm1UYXJnZXQgPSAiMTciCiAgICB9CgogICAgcGFja2FnaW5nIHsKICAgICAgICByZXNvdXJjZXMgewogICAgICAgICAgICBleGNsdWRlcyArPSAiL01FVEEtSU5GL3tBTDIuMCxMR1BMMi4xfSIKICAgICAgICB9CiAgICAgICAgLy8gQ29tcHJlc3MgdGhlICh0aW55KSBuYXRpdmUgbGliczogcGFnZS1hbGlnbmVkIHVuY29tcHJlc3NlZCBsaWJzCiAgICAgICAgLy8gY2F1c2UgQUdQIHRvIHBhZCB0aGUgQVBLIHdpdGggYSB+MTRNQiB6ZXJvIGhvbGUgYWZ0ZXIgbWluaWZ5CiAgICAgICAgLy8gKGxpYnMgZ2V0IHBsYWNlZCBhdCBhIGZpeGVkIG9mZnNldCBmYXIgcGFzdCB0aGUgY29udGVudCkuCiAgICAgICAgam5pTGlicyB7CiAgICAgICAgICAgIHVzZUxlZ2FjeVBhY2thZ2luZyA9IHRydWUKICAgICAgICB9CiAgICB9Cn0KCmRlcGVuZGVuY2llcyB7CiAgICAvLyBDb21wb3NlIEJPTSAtIHVzZSB2ZXJzaW9uIHRoYXQgc3VwcG9ydHMgQVBJIDM0CiAgICB2YWwgY29tcG9zZUJvbSA9IHBsYXRmb3JtKCJhbmRyb2lkeC5jb21wb3NlOmNvbXBvc2UtYm9tOjIwMjQuMDkuMDAiKQogICAgaW1wbGVtZW50YXRpb24oY29tcG9zZUJvbSkKCiAgICAvLyBDb3JlIC0gcGlubmVkIHZlcnNpb25zIHRoYXQgc3VwcG9ydCBBUEkgMzQKICAgIGltcGxlbWVudGF0aW9uKCJhbmRyb2lkeC5jb3JlOmNvcmUta3R4OjEuMTMuMSIpCiAgICBpbXBsZW1lbnRhdGlvbigiYW5kcm9pZHgubGlmZWN5Y2xlOmxpZmVjeWNsZS1ydW50aW1lLWt0eDoyLjguNyIpCiAgICBpbXBsZW1lbnRhdGlvbigiYW5kcm9pZHguYWN0aXZpdHk6YWN0aXZpdHktY29tcG9zZToxLjkuMyIpCgogICAgLy8gQ29tcG9zZSBVSQogICAgaW1wbGVtZW50YXRpb24oImFuZHJvaWR4LmNvbXBvc2UudWk6dWkiKQogICAgaW1wbGVtZW50YXRpb24oImFuZHJvaWR4LmNvbXBvc2UudWk6dWktdG9vbGluZy1wcmV2aWV3IikKICAgIGltcGxlbWVudGF0aW9uKCJhbmRyb2lkeC5jb21wb3NlLm1hdGVyaWFsMzptYXRlcmlhbDMiKQogICAgaW1wbGVtZW50YXRpb24oImFuZHJvaWR4LmNvbXBvc2UubWF0ZXJpYWw6bWF0ZXJpYWwtaWNvbnMtZXh0ZW5kZWQiKQogICAgaW1wbGVtZW50YXRpb24oImFuZHJvaWR4LmNvbXBvc2UuYW5pbWF0aW9uOmFuaW1hdGlvbiIpCiAgICBpbXBsZW1lbnRhdGlvbigiYW5kcm9pZHguY29tcG9zZS5mb3VuZGF0aW9uOmZvdW5kYXRpb24iKQoKICAgIC8vIE5hdmlnYXRpb24KICAgIGltcGxlbWVudGF0aW9uKCJhbmRyb2lkeC5uYXZpZ2F0aW9uOm5hdmlnYXRpb24tY29tcG9zZToyLjguNSIpCgogICAgLy8gV2luZG93IHNpemUgY2xhc3NlcyAoYWRhcHRpdmUgbGF5b3V0KQogICAgaW1wbGVtZW50YXRpb24oImFuZHJvaWR4LmNvbXBvc2UubWF0ZXJpYWwzOm1hdGVyaWFsMy13aW5kb3ctc2l6ZS1jbGFzcyIpCgogICAgLy8gTGlmZWN5Y2xlICYgVmlld01vZGVsCiAgICBpbXBsZW1lbnRhdGlvbigiYW5kcm9pZHgubGlmZWN5Y2xlOmxpZmVjeWNsZS12aWV3bW9kZWwtY29tcG9zZToyLjguNyIpCiAgICBpbXBsZW1lbnRhdGlvbigiYW5kcm9pZHgubGlmZWN5Y2xlOmxpZmVjeWNsZS1ydW50aW1lLWNvbXBvc2U6Mi44LjciKQoKICAgIC8vIEhpbHQgREkKICAgIGltcGxlbWVudGF0aW9uKCJjb20uZ29vZ2xlLmRhZ2dlcjpoaWx0LWFuZHJvaWQ6Mi41My4xIikKICAgIGtzcCgiY29tLmdvb2dsZS5kYWdnZXI6aGlsdC1hbmRyb2lkLWNvbXBpbGVyOjIuNTMuMSIpCiAgICBpbXBsZW1lbnRhdGlvbigiYW5kcm9pZHguaGlsdDpoaWx0LW5hdmlnYXRpb24tY29tcG9zZToxLjIuMCIpCgogICAgLy8gTmV0d29yayAtIE9rSHR0cCAoZGlyZWN0IHVzYWdlIOKAlCBSZXRyb2ZpdC9Hc29uIHJlbW92ZWQ6IHplcm8gcmVmZXJlbmNlcykKICAgIGltcGxlbWVudGF0aW9uKCJjb20uc3F1YXJldXAub2todHRwMzpva2h0dHA6NC4xMi4wIikKICAgIGltcGxlbWVudGF0aW9uKCJjb20uc3F1YXJldXAub2todHRwMzpsb2dnaW5nLWludGVyY2VwdG9yOjQuMTIuMCIpCiAgICBpbXBsZW1lbnRhdGlvbigiY29tLnNxdWFyZXVwLm9raHR0cDM6b2todHRwLXNzZTo0LjEyLjAiKQoKICAgIC8vIFJvb20gRGF0YWJhc2UKICAgIGltcGxlbWVudGF0aW9uKCJhbmRyb2lkeC5yb29tOnJvb20tcnVudGltZToyLjYuMSIpCiAgICBpbXBsZW1lbnRhdGlvbigiYW5kcm9pZHgucm9vbTpyb29tLWt0eDoyLjYuMSIpCiAgICBrc3AoImFuZHJvaWR4LnJvb206cm9vbS1jb21waWxlcjoyLjYuMSIpCgogICAgLy8gRGF0YVN0b3JlIFByZWZlcmVuY2VzCiAgICBpbXBsZW1lbnRhdGlvbigiYW5kcm9pZHguZGF0YXN0b3JlOmRhdGFzdG9yZS1wcmVmZXJlbmNlczoxLjEuMSIpCgogICAgLy8gSW1hZ2UgbG9hZGluZwogICAgaW1wbGVtZW50YXRpb24oImlvLmNvaWwta3Q6Y29pbC1jb21wb3NlOjIuNy4wIikKCiAgICAvLyBRUiBjb2RlIHNjYW5uaW5nICh6eGluZyBlbWJlZGRlZCBzY2FubmVyKQogICAgaW1wbGVtZW50YXRpb24oImNvbS5qb3VybmV5YXBwczp6eGluZy1hbmRyb2lkLWVtYmVkZGVkOjQuMy4wIikKCiAgICAvLyBFbmNyeXB0ZWQgc3RvcmFnZSBmb3Igc2VjcmV0cyAodG9rZW5zLCBkZXZpY2UgY3JlZGVudGlhbHMpCiAgICBpbXBsZW1lbnRhdGlvbigiYW5kcm9pZHguc2VjdXJpdHk6c2VjdXJpdHktY3J5cHRvOjEuMS4wLWFscGhhMDYiKQoKICAgIC8vIEF1ZGlvCiAgICBpbXBsZW1lbnRhdGlvbigiYW5kcm9pZHgubWVkaWE6bWVkaWE6MS43LjAiKQoKICAgIC8vIENvcm91dGluZXMKICAgIGltcGxlbWVudGF0aW9uKCJvcmcuamV0YnJhaW5zLmtvdGxpbng6a290bGlueC1jb3JvdXRpbmVzLWFuZHJvaWQ6MS45LjAiKQoKICAgIC8vIFRlc3RpbmcKICAgIHRlc3RJbXBsZW1lbnRhdGlvbigianVuaXQ6anVuaXQ6NC4xMy4yIikKICAgIC8vIFRoZSBtb2NrYWJsZSBhbmRyb2lkLmphciBTVFVCUyBvcmcuanNvbiAodGhyb3dzICJub3QgbW9ja2VkIikg4oCUIHRoZSBydW4KICAgIC8vIGV2ZW50IGNvZGVjIHRlc3RzIGV4ZXJjaXNlIHJlYWwgSlNPTiBmcmFtZXMsIHNvIHB1dCB0aGUgcmVmZXJlbmNlIGltcGwKICAgIC8vIGFoZWFkIG9mIHRoZSBzdHVicyBvbiB0aGUgdW5pdC10ZXN0IGNsYXNzcGF0aC4KICAgIHRlc3RJbXBsZW1lbnRhdGlvbigib3JnLmpzb246anNvbjoyMDI0MDMwMyIpCiAgICB0ZXN0SW1wbGVtZW50YXRpb24oIm9yZy5qZXRicmFpbnMua290bGlueDprb3RsaW54LWNvcm91dGluZXMtdGVzdDoxLjkuMCIpCiAgICB0ZXN0SW1wbGVtZW50YXRpb24oImlvLm1vY2trOm1vY2trOjEuMTMuMTMiKQogICAgYW5kcm9pZFRlc3RJbXBsZW1lbnRhdGlvbigiYW5kcm9pZHgudGVzdC5leHQ6anVuaXQ6MS4yLjEiKQogICAgYW5kcm9pZFRlc3RJbXBsZW1lbnRhdGlvbigiYW5kcm9pZHgudGVzdC5lc3ByZXNzbzplc3ByZXNzby1jb3JlOjMuNi4xIikKICAgIGFuZHJvaWRUZXN0SW1wbGVtZW50YXRpb24oY29tcG9zZUJvbSkKICAgIGFuZHJvaWRUZXN0SW1wbGVtZW50YXRpb24oImFuZHJvaWR4LmNvbXBvc2UudWk6dWktdGVzdC1qdW5pdDQiKQogICAgZGVidWdJbXBsZW1lbnRhdGlvbigiYW5kcm9pZHguY29tcG9zZS51aTp1aS10b29saW5nIikKICAgIGRlYnVnSW1wbGVtZW50YXRpb24oImFuZHJvaWR4LmNvbXBvc2UudWk6dWktdGVzdC1tYW5pZmVzdCIpCn0KCmFuZHJvaWQuYXBwbGljYXRpb25WYXJpYW50cy5jb25maWd1cmVFYWNoIHsKICAgIG91dHB1dHMuZm9yRWFjaCB7IG91dHB1dCAtPgogICAgICAgIChvdXRwdXQgYXMgY29tLmFuZHJvaWQuYnVpbGQuZ3JhZGxlLmludGVybmFsLmFwaS5BcGtWYXJpYW50T3V0cHV0SW1wbCkub3V0cHV0RmlsZU5hbWUgPSAiSGVybWVzLU1vYmlsZS12JHt2ZXJzaW9uTmFtZX0uYXBrIgogICAgfQp9Cg==
+import java.util.Properties
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
+    id("com.google.dagger.hilt.android")
+}
+
+android {
+    namespace = "com.hermes.mobile"
+    compileSdk = 34
+
+    // Release signing: read from local.properties (gitignored) or HERMES_* env.
+    // Absent → falls back to debug signing so CI/other machines still build.
+    val ksProps = Properties().apply {
+        val f = rootProject.file("local.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    fun signingProp(name: String) =
+        ksProps.getProperty("hermes.$name") ?: System.getenv("HERMES_${name.uppercase()}")
+    val ksPath = signingProp("keystore")
+
+    signingConfigs {
+        if (ksPath != null) {
+            create("release") {
+                storeFile = rootProject.file(ksPath)
+                storePassword = signingProp("storePassword")
+                keyAlias = "hermes-mobile"
+                keyPassword = signingProp("keyPassword")
+            }
+        }
+    }
+
+    defaultConfig {
+        applicationId = "com.hermes.mobile"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 65
+        versionName = "0.0.65"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments["room.schemaLocation"] = "$projectDir/schemas"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            // shrinkResources OFF — same AGP zero-hole padding artifact as debug (see below)
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+        debug {
+            // R8 on debug too — the delivered APK is the debug build, and
+            // without minify it ships ~8MB of dead dex (all 2000+ material
+            // icons, unused deps). Same signature, installs over existing.
+            // NOTE: isShrinkResources stays OFF here — with it on, AGP pads
+            // the APK with a ~15MB zero hole (zipalign/page-align artifact),
+            // making the file BIGGER than before.
+            isMinifyEnabled = true
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    lint {
+        baseline = file("lint-baseline.xml")
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        // Compress the (tiny) native libs: page-aligned uncompressed libs
+        // cause AGP to pad the APK with a ~14MB zero hole after minify
+        // (libs get placed at a fixed offset far past the content).
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+dependencies {
+    // Compose BOM - use version that supports API 34
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
+    implementation(composeBom)
+
+    // Core - pinned versions that support API 34
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.activity:activity-compose:1.9.3")
+
+    // Compose UI
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.animation:animation")
+    implementation("androidx.compose.foundation:foundation")
+
+    // Navigation
+    implementation("androidx.navigation:navigation-compose:2.8.5")
+
+    // Window size classes (adaptive layout)
+    implementation("androidx.compose.material3:material3-window-size-class")
+
+    // Lifecycle & ViewModel
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+
+    // Hilt DI
+    implementation("com.google.dagger:hilt-android:2.53.1")
+    ksp("com.google.dagger:hilt-android-compiler:2.53.1")
+    implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+
+    // Network - OkHttp (direct usage — Retrofit/Gson removed: zero references)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
+
+    // Room Database
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
+
+    // DataStore Preferences
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+
+    // Image loading
+    implementation("io.coil-kt:coil-compose:2.7.0")
+
+    // QR code scanning (zxing embedded scanner)
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+
+    // Encrypted storage for secrets (tokens, device credentials)
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // Audio
+    implementation("androidx.media:media:1.7.0")
+
+    // Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // Testing
+    testImplementation("junit:junit:4.13.2")
+    // The mockable android.jar STUBS org.json (throws "not mocked") — the run
+    // event codec tests exercise real JSON frames, so put the reference impl
+    // ahead of the stubs on the unit-test classpath.
+    testImplementation("org.json:json:20240303")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("io.mockk:mockk:1.13.13")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+android.applicationVariants.configureEach {
+    outputs.forEach { output ->
+        (output as com.android.build.gradle.internal.api.ApkVariantOutputImpl).outputFileName = "Hermes-Mobile-v${versionName}.apk"
+    }
+}
