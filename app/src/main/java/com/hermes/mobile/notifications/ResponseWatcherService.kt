@@ -150,7 +150,19 @@ class ResponseWatcherService : Service() {
             val intent = Intent(context, ResponseWatcherService::class.java)
                 .putExtra(EXTRA_SESSION_ID, sessionId)
                 .putExtra(EXTRA_QUERY, query)
-            ContextCompat.startForegroundService(context, intent)
+            // Android 12+: startForegroundService from the background throws
+            // ForegroundServiceStartNotAllowedException and force-closes the
+            // app — the auto-recover path re-adopted a waiting_for_approval
+            // turn from the background. When backgrounded the service can't
+            // start anyway; notifyReady/notifyApproval post the notification
+            // without it, so skip instead of crashing.
+            if (!AppForeground.isForeground) return
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (_: Exception) {
+                // Android rejected the foreground start (battery policy,
+                // background launch restriction) — never crash the app.
+            }
         }
 
         /** Stream finished (or failed). Stop the watcher; if the app is
