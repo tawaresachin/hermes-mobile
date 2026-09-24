@@ -88,6 +88,11 @@ class RunController @Inject constructor(
         val toolLines: List<ToolTrailReducer.Line> = emptyList(),
         val pendingApproval: ApprovalRequest? = null,
         val stopping: Boolean = false,
+        /** The Token-Optimizer decision that actually rode this turn's wire
+         * payload — the observe() at finish must feed back THIS flag, not a
+         * fresh terseDecision() call (which double-increments the model
+         * counter and re-probes off-cadence). */
+        val applyTerse: Boolean = true,
         /** Latest agent lifecycle note (rate-limit wait / retry countdown)
          * surfaced so a long provider backoff never reads as a dead chat. */
         val statusNote: String? = null,
@@ -211,7 +216,7 @@ class RunController @Inject constructor(
             _turns.update {
                 it + (sessionId to LiveTurn(
                     sessionId = sessionId, runId = runId, assistantMsgId = placeholder,
-                    userMsgId = uid, query = query, model = safeModel))
+                    userMsgId = uid, query = query, model = safeModel, applyTerse = applyTerse))
             }
             // Ongoing "is typing…" watcher — survives screen changes; the
             // completion path replaces it with the reply notification.
@@ -385,8 +390,9 @@ class RunController @Inject constructor(
         val (prevIn, prevOut) = api.lastUsageTotals(sid)
         val turnOut = if (usageOut > prevOut) usageOut - prevOut else 0L
         if (usageIn > 0 || usageOut > 0) api.saveUsageTotals(sid, maxOf(usageIn, prevIn), maxOf(usageOut, prevOut))
-        // Terse-replies learning rides the per-turn OUTPUT delta.
-        if (turnOut > 0) api.terseObserve(turn.model, turnOut, api.terseDecision(turn.model))
+        // Terse-replies learning rides the per-turn OUTPUT delta; feed back
+        // the flag that actually rode this turn's wire (turn.applyTerse).
+        if (turnOut > 0) api.terseObserve(turn.model, turnOut, turn.applyTerse)
 
         val content = when {
             failed != null && output.isBlank() -> "⚠️ $failed"
