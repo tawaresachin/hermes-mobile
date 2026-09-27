@@ -94,6 +94,7 @@ fi
 # ── deployed plugin copy (gateway reads the new number on next start) ──
 if [ -d "$DEPLOY_DIR/hermes_mobile_plugin" ]; then
   cp "$PLUGIN_REPO"/src/hermes_mobile_plugin/*.py "$DEPLOY_DIR/hermes_mobile_plugin/"
+  cp "$PLUGIN_REPO/src/hermes_mobile_plugin/plugin.yaml" "$DEPLOY_DIR/hermes_mobile_plugin/plugin.yaml"
   cp "$PLUGIN_REPO/plugin.yaml" "$DEPLOY_DIR/plugin.yaml"
   rm -rf "$DEPLOY_DIR/__pycache__" "$DEPLOY_DIR/hermes_mobile_plugin/__pycache__"
   echo "   deployed plugin synced: $DEPLOY_DIR"
