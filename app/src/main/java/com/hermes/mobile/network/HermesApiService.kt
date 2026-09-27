@@ -722,9 +722,10 @@ class HermesApiService @Inject constructor(
                                 }
                             currentModel = json.optString("current", "")
                         }
-                        if (models == null || models.isEmpty()) return@use null
+                        val parsed = models
+                        if (parsed == null || parsed.isEmpty()) return@use null
                         ModelListResponse(
-                            models = models,
+                            models = parsed,
                             current = currentModel,
                             default = "",
                             provider = ""
