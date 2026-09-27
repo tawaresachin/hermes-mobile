@@ -57,6 +57,8 @@ class HermesApiService @Inject constructor(
          *  the 300s OkHttp read timeout. */
         private const val STREAM_IDLE_TIMEOUT_MS = 90_000L
         private const val WATCHDOG_POLL_MS = 2_000L
+        /** Gateway attachment cap is 25 MB; downloads refuse anything bigger. */
+        const val MAX_ATTACHMENT_DOWNLOAD_BYTES = 30_000_000L
         private const val KEY_DARK_THEME = "dark_theme"
     }
 
@@ -683,43 +685,29 @@ class HermesApiService @Inject constructor(
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         val body = response.body?.string() ?: return@use null
-                        // Try parsing as array directly first (mobile plugin format)
+                        // One parser for both plugin formats (bare array /
+                        // {models:[...], current}); the OpenAI {data:[...]}
+                        // shape has different keys and stays separate.
+                        fun parseModels(arr: JSONArray) = (0 until arr.length()).map { i ->
+                            val m = arr.getJSONObject(i)
+                            ModelInfo(
+                                id = m.optString("id", ""),
+                                name = m.optString("name", ""),
+                                isVision = m.optBoolean("isVision", false),
+                                isFree = m.optBoolean("isFree", false),
+                                provider = m.optString("provider", ""),
+                                baseUrl = m.optString("baseUrl", "")
+                            )
+                        }
                         var models: List<ModelInfo>? = null
                         var currentModel = ""
                         try {
-                            val arr = JSONArray(body)
-                            models = (0 until arr.length()).map { i ->
-                                val m = arr.getJSONObject(i)
-                                ModelInfo(
-                                    id = m.optString("id", ""),
-                                    name = m.optString("name", ""),
-                                    isVision = m.optBoolean("isVision", false),
-                                    isFree = m.optBoolean("isFree", false),
-                                    provider = m.optString("provider", ""),
-                                    baseUrl = m.optString("baseUrl", "")
-                                )
-                            }
+                            models = parseModels(JSONArray(body))
                         } catch (_: Exception) {
-                            // Try parsing as object with "models" field (legacy format)
                             val json = JSONObject(body)
-                            val modelsArr = json.optJSONArray("models")
-                            if (modelsArr != null) {
-                                models = (0 until modelsArr.length()).map { i ->
-                                    val m = modelsArr.getJSONObject(i)
-                                    ModelInfo(
-                                        id = m.optString("id", ""),
-                                        name = m.optString("name", ""),
-                                        isVision = m.optBoolean("isVision", false),
-                                        isFree = m.optBoolean("isFree", false),
-                                        provider = m.optString("provider", ""),
-                                        baseUrl = m.optString("baseUrl", "")
-                                    )
-                                }
-                                currentModel = json.optString("current", "")
-                            } else {
-                                // Try OpenAI format: {"object": "list", "data": [...]}
-                                val dataArr = json.optJSONArray("data")
-                                if (dataArr != null) {
+                            json.optJSONArray("models")?.let { models = parseModels(it) }
+                                ?: json.optJSONArray("data")?.let { dataArr ->
+                                    // OpenAI format: {"object": "list", "data": [...]}
                                     models = (0 until dataArr.length()).map { i ->
                                         val m = dataArr.getJSONObject(i)
                                         ModelInfo(
@@ -732,7 +720,7 @@ class HermesApiService @Inject constructor(
                                         )
                                     }
                                 }
-                            }
+                            currentModel = json.optString("current", "")
                         }
                         if (models == null || models.isEmpty()) return@use null
                         ModelListResponse(
@@ -1474,7 +1462,14 @@ class HermesApiService @Inject constructor(
             try {
                 val request = Request.Builder().url(url).get().build()
                 client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) response.body?.bytes() else null
+                    if (!response.isSuccessful) return@use null
+                    // Never stream an unbounded body into heap: a wrong (or
+                    // hostile) content-length beyond the gateway's own 25 MB
+                    // cap is a guaranteed OOM. Declared OR streamed, refuse.
+                    val declared = response.body?.contentLength() ?: -1L
+                    if (declared > MAX_ATTACHMENT_DOWNLOAD_BYTES) return@use null
+                    val bytes = response.body?.bytes() ?: return@use null
+                    if (bytes.size > MAX_ATTACHMENT_DOWNLOAD_BYTES) null else bytes
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e

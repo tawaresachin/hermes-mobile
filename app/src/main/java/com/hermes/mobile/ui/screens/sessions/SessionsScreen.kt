@@ -1115,9 +1115,10 @@ private fun SessionsEmptyState(
  * - **This week**    → "Mon 3:45 PM"
  * - **Older**        → "Jan 5, 2025"
  */
-// Cached formatters — SimpleDateFormat is expensive to construct per row.
-private val tsWeekdayFmt = SimpleDateFormat("EEEE", Locale.getDefault())
-private val tsDateFmt = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
+// Cached formatters — immutable DateTimeFormatter: thread-safe (shared
+// SimpleDateFormat is not) and cheap to construct per call anyway.
+private val tsWeekdayFmt = java.time.format.DateTimeFormatter.ofPattern("EEEE")
+private val tsDateFmt = java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy")
 
 private fun formatTimestamp(millis: Long): String {
     if (millis <= 0L) return "Unknown"
@@ -1125,12 +1126,14 @@ private fun formatTimestamp(millis: Long): String {
     // Telegram-style relative time: now / 5m / 3h / Yesterday / weekday / date
     val now = System.currentTimeMillis()
     val diff = now - millis
+    val zdt = java.time.Instant.ofEpochMilli(millis)
+        .atZone(java.time.ZoneId.systemDefault())
     return when {
         diff < 60_000L -> "now"
         diff < 3_600_000L -> "${diff / 60_000L}m"
         diff < 86_400_000L -> "${diff / 3_600_000L}h"
         diff < 172_800_000L -> "Yesterday"
-        diff < 7L * 86_400_000L -> tsWeekdayFmt.format(Date(millis))
-        else -> tsDateFmt.format(Date(millis))
+        diff < 7L * 86_400_000L -> tsWeekdayFmt.format(zdt)
+        else -> tsDateFmt.format(zdt)
     }
 }

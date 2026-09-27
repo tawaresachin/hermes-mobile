@@ -57,10 +57,6 @@ fun BigMicButton(
     val midPx  = with(density) { 52.dp.toPx() }
     val innerPx = with(density) { 42.dp.toPx() }
 
-    var pulsePhase by remember { mutableFloatStateOf(0f) }
-    var ringProgress by remember { mutableFloatStateOf(0f) }
-    var glowAlpha by remember { mutableFloatStateOf(0f) }
-    var waveformPhase by remember { mutableFloatStateOf(0f) }
     var isPressed by remember { mutableStateOf(false) }
     var elapsedSeconds by remember { mutableIntStateOf(0) }
 
@@ -70,21 +66,9 @@ fun BigMicButton(
             while (true) { delay(1000); elapsedSeconds++ }
         }
     }
-
-    LaunchedEffect(isRecording) {
-        if (!isRecording) {
-            while (true) { pulsePhase = (pulsePhase + 0.02f).coerceAtMost(1f); delay(16); if (pulsePhase >= 1f) pulsePhase = 0f }
-        }
-    }
-    LaunchedEffect(isRecording) {
-        if (isRecording) { ringProgress = 0f; while (ringProgress < 1f) { ringProgress = (ringProgress + 0.005f).coerceAtMost(1f); delay(16) } } else { ringProgress = 0f }
-    }
-    LaunchedEffect(isRecording) {
-        if (isRecording) { glowAlpha = 0f; while (glowAlpha < 0.4f) { glowAlpha = (glowAlpha + 0.01f).coerceAtMost(0.4f); delay(16) } } else { glowAlpha = 0f }
-    }
-    LaunchedEffect(isRecording) {
-        if (isRecording) { while (true) { waveformPhase = (waveformPhase + 0.05f).coerceAtMost(1f); delay(32) } } else { waveformPhase = 0f }
-    }
+    // The old pulse/ring/glow/waveform phase loops wrote 4 states at 60fps
+    // that NO drawing code ever read (the halos below are static gradients)
+    // — pure battery drain while recording. Removed, not lost.
 
     val s by animateFloatAsState(targetValue = if (isPressed && !isRecording) 0.92f else 1f, label = "mic_scale")
 

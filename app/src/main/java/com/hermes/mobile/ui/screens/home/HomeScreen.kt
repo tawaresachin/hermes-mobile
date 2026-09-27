@@ -723,9 +723,7 @@ private fun SwipeableSessionItem(
 // ─── Session Item (Telegram-style row) ───
 
 // Cached — SimpleDateFormat is expensive to construct per row per frame.
-private val relTimeDateFmt = java.text.SimpleDateFormat(
-    "d MMM", java.util.Locale.getDefault()
-)
+private val relTimeDateFmt = java.time.format.DateTimeFormatter.ofPattern("d MMM")
 
 private fun formatRelativeTime(timestamp: Long): String {
     val diff = System.currentTimeMillis() - timestamp
@@ -734,7 +732,8 @@ private fun formatRelativeTime(timestamp: Long): String {
         diff < 3_600_000L -> "${diff / 60_000L}m"
         diff < 86_400_000L -> "${diff / 3_600_000L}h"
         diff < 7L * 86_400_000L -> "${diff / 86_400_000L}d"
-        else -> relTimeDateFmt.format(java.util.Date(timestamp))
+        else -> relTimeDateFmt.format(
+            java.time.Instant.ofEpochMilli(timestamp).atZone(java.time.ZoneId.systemDefault()))
     }
 }
 

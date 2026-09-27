@@ -41,10 +41,13 @@ interface SessionDao {
 
 @Dao
 interface MessageDao {
-    @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
+    // id is the autoincrement rowid — the tie-breaker keeps same-ms rows in
+    // insertion order (timestamps collide when a turn's user+assistant rows
+    // land in the same millisecond; without it, bubble order flips randomly).
+    @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC, id ASC")
     fun getMessages(sessionId: String): Flow<List<Message>>
 
-    @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
+    @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC, id ASC")
     suspend fun getMessagesOnce(sessionId: String): List<Message>
 
     @Query("SELECT * FROM messages WHERE content LIKE :query ORDER BY timestamp DESC")

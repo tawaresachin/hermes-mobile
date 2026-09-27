@@ -107,6 +107,10 @@ class RunController @Inject constructor(
     // Transport handles + poll fallbacks, one per session.
     private val eventSources = ConcurrentHashMap<String, EventSource>()
     private val pollJobs = ConcurrentHashMap<String, Job>()
+    /** Authoritative streaming text per session (SSE deltas); the LiveTurn
+     * snapshot is only a throttled view of this. Cleaned on every terminal. */
+    private val streamBuilders = ConcurrentHashMap<String, StringBuilder>()
+    private val streamEmitAt = ConcurrentHashMap<String, Long>()
 
     fun liveTurn(sessionId: String): LiveTurn? = _turns.value[sessionId]
     fun isBusy(sessionId: String): Boolean = _turns.value.containsKey(sessionId)
@@ -213,6 +217,7 @@ class RunController @Inject constructor(
             }
 
             api.saveActiveRun(sessionId, runId)
+            reconnectBudget[sessionId] = 3
             _turns.update {
                 it + (sessionId to LiveTurn(
                     sessionId = sessionId, runId = runId, assistantMsgId = placeholder,
@@ -245,6 +250,14 @@ class RunController @Inject constructor(
 
     // ── Event consumption (SSE primary, status polling fallback) ────────
 
+    // Bounded SSE reconnect budget per session: a silent-dial blip should
+    // NOT freeze live text for the rest of the turn (polling still delivers,
+    // but the typing animation shouldn't die). Re-subscribing a DEAD source
+    // is supported (events are re-subscribable); attach() stays idempotent
+    // so a HEALTHY source is never cancelled — that is what would orphan
+    // the run's queue server-side.
+    private val reconnectBudget = ConcurrentHashMap<String, Int>()
+
     /** Wire the delivery channels for a session's live turn. Idempotent:
      * a reopen after navigating away must NOT cancel the healthy event
      * source — the server drops the run's event queue when an SSE handler
@@ -262,6 +275,15 @@ class RunController @Inject constructor(
             onTransportLost = {
                 eventSources.remove(sessionId)
                 startPolling(sessionId)
+                val budget = reconnectBudget[sessionId] ?: 0
+                if (budget > 0 && _turns.value.containsKey(sessionId)) {
+                    reconnectBudget[sessionId] = budget - 1
+                    scope.launch {
+                        delay(2_000)
+                        if (_turns.value.containsKey(sessionId) &&
+                            !eventSources.containsKey(sessionId)) attach(sessionId)
+                    }
+                }
             },
         )
         if (source == null) startPolling(sessionId) else eventSources[sessionId] = source
@@ -270,7 +292,19 @@ class RunController @Inject constructor(
     private fun handleEvent(sessionId: String, ev: RunEventCodec.RunEvent) {
         when (ev) {
             is RunEventCodec.RunEvent.Delta -> {
-                updateTurn(sessionId) { it.copy(streamingText = it.streamingText + ev.text) }
+                // Chunk copies are O(len) each — one per DELTA is the
+                // amortized floor. The STATE WRITE (map copy + new snapshot →
+                // recomposition) is throttled to ~40ms; terminal/poll paths
+                // read the builder so the final text is never short.
+                val sb = streamBuilders.getOrPut(sessionId) { StringBuilder() }
+                synchronized(sb) { sb.append(ev.text) }
+                val now = System.currentTimeMillis()
+                val last = streamEmitAt.get(sessionId) ?: 0L
+                if (now - last >= 40) {
+                    streamEmitAt[sessionId] = now
+                    val text = synchronized(sb) { sb.toString() }
+                    updateTurn(sessionId) { it.copy(streamingText = text) }
+                }
             }
             is RunEventCodec.RunEvent.ToolStarted -> {
                 updateTurn(sessionId) { it.copy(toolLines = ToolTrailReducer.started(it.toolLines, ev.tool, ev.preview)) }
@@ -369,6 +403,11 @@ class RunController @Inject constructor(
         }
     }
 
+    /** Authoritative streaming text: the builder (SSE deltas, throttled out
+     * to the snapshot) wins over the possibly-lagged LiveTurn field. */
+    private fun accumulated(sessionId: String, turn: LiveTurn): String =
+        streamBuilders[sessionId]?.let { synchronized(it) { it.toString() } } ?: turn.streamingText
+
     // ── Terminal handling ───────────────────────────────────────────────
 
     /** Persist the final bubble + bookkeeping. Idempotent per session: the
@@ -378,12 +417,16 @@ class RunController @Inject constructor(
         _turns.update { it - sessionId }
         eventSources.remove(sessionId)?.cancel()
         pollJobs.remove(sessionId)?.cancel()
+        reconnectBudget.remove(sessionId)
+        val acc = accumulated(sessionId, turn)
+        streamBuilders.remove(sessionId); streamEmitAt.remove(sessionId)
         api.clearActiveRun(sessionId)
-        scope.launch { finalizeTurn(turn, output, usageIn, usageOut, failed) }
+        scope.launch { finalizeTurn(turn, output, usageIn, usageOut, failed, acc) }
     }
 
     private suspend fun finalizeTurn(
-        turn: LiveTurn, output: String, usageIn: Long, usageOut: Long, failed: String?
+        turn: LiveTurn, output: String, usageIn: Long, usageOut: Long, failed: String?,
+        accumulatedText: String = turn.streamingText,
     ) {
         val sid = turn.sessionId
         // Session totals → this turn's delta (runs report cumulative usage).
@@ -397,7 +440,7 @@ class RunController @Inject constructor(
         val content = when {
             failed != null && output.isBlank() -> "⚠️ $failed"
             failed != null -> output + "\n\n⚠️ $failed"
-            output.isBlank() && turn.streamingText.isNotBlank() -> turn.streamingText
+            output.isBlank() && accumulatedText.isNotBlank() -> accumulatedText
             else -> output
         }
         val clean = TurnText.stripUploadUrls(sid, content)
@@ -443,6 +486,8 @@ class RunController @Inject constructor(
         _turns.update { it - sessionId }
         eventSources.remove(sessionId)?.cancel()
         pollJobs.remove(sessionId)?.cancel()
+        reconnectBudget.remove(sessionId)
+        streamBuilders.remove(sessionId); streamEmitAt.remove(sessionId)
         api.clearActiveRun(sessionId)
         val serverId = api.serverIdFor(sessionId)?.takeIf { it.isNotBlank() } ?: sessionId
         val msgs = api.fetchSessionMessages(serverId)
@@ -462,7 +507,7 @@ class RunController @Inject constructor(
             if (!api.stopRun(turn.runId)) {
                 // Stop rejected (run already gone): settle locally from the
                 // text that arrived so far — never leave a stuck bubble.
-                finish(sessionId, turn.streamingText, 0, 0, failed = null)
+                finish(sessionId, accumulated(sessionId, turn), 0, 0, failed = null)
             }
         }
     }

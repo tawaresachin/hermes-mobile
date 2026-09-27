@@ -51,7 +51,10 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            // No silent debug-signing fallback: a debug-signed release breaks
+            // in-place updates and mislabels trust. Configure the keystore in
+            // local.properties or don't assembleRelease.
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             // shrinkResources OFF — same AGP zero-hole padding artifact as debug (see below)
             isShrinkResources = false
@@ -142,7 +145,6 @@ dependencies {
 
     // Network - OkHttp (direct usage — Retrofit/Gson removed: zero references)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
 
     // Room Database

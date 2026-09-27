@@ -200,6 +200,9 @@ class ResponseWatcherService : Service() {
                 .setColor(0xFF0088CC.toInt())
                 .setContentTitle("Hermes")
                 .setContentText(text)
+                // Chat text must not surface over a secure lockscreen
+                // (PRIVATE = shown unlocked, hidden on secure lock).
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
                 .setSubText(if (query.isNotBlank()) "Re: " + query.replace("\n", " ").take(60) + "\u2026" else null)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
                 .setAutoCancel(true)
@@ -254,6 +257,7 @@ class ResponseWatcherService : Service() {
                 .setColor(0xFFE5A100.toInt())
                 .setContentTitle("Hermes needs your approval")
                 .setContentText(command.take(120).ifBlank { description.take(120) })
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
                 .setStyle(NotificationCompat.BigTextStyle()
                     .bigText(listOf(command, description).filter { it.isNotBlank() }.joinToString("\n")))
                 .setAutoCancel(true)
