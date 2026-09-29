@@ -64,5 +64,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Approval notification action buttons (ResponseWatcherService.notifyApproval):
+             resolves the choice without opening the app; @AndroidEntryPoint gives it
+             Hilt-injected RunController/HermesApiService. -->
+        <receiver
+            android:name=".notifications.ApprovalActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>

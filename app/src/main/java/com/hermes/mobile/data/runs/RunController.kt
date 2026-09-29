@@ -325,7 +325,11 @@ class RunController @Inject constructor(
                     return
                 }
                 // The phone's real job: wake the user for the decision.
-                ResponseWatcherService.notifyApproval(context, sessionId, ev.command, ev.description)
+                ResponseWatcherService.notifyApproval(
+                    context, sessionId, ev.command, ev.description,
+                    choices = ev.choices,
+                    runId = _turns.value[sessionId]?.runId.orEmpty(),
+                    requestId = ev.requestId)
             }
             is RunEventCodec.RunEvent.Completed -> finish(sessionId, ev.output, ev.inputTokens, ev.outputTokens, failed = null)
             is RunEventCodec.RunEvent.Failed -> finish(sessionId, "", 0, 0, failed = ev.error)
@@ -384,15 +388,28 @@ class RunController @Inject constructor(
                         if (a != null && _turns.value[sessionId]?.pendingApproval == null) {
                             val choices = a.optJSONArray("choices")?.let { arr -> (0 until arr.length()).map { i -> arr.optString(i) } }
                                 ?: listOf("once", "deny")
+                            val requestId = a.optString("request_id", "")
                             updateTurn(sessionId) {
                                 it.copy(pendingApproval = ApprovalRequest(
                                     a.optString("command", ""), a.optString("description", ""),
-                                    choices, a.optString("request_id", "")))
+                                    choices, requestId))
                             }
                             if (api.isAutoApprove()) {
                                 val choice = if ("session" in choices) "session"
                                     else if ("once" in choices) "once" else "deny"
                                 resolveApproval(sessionId, choice)
+                            } else {
+                                // Same bug class as the SSE path: the card can
+                                // FIRST appear here (SSE dropped mid-approval),
+                                // so the background wake + action buttons must
+                                // fire here too. The pendingApproval==null
+                                // guard above dedupes against the SSE post.
+                                ResponseWatcherService.notifyApproval(
+                                    context, sessionId,
+                                    a.optString("command", ""), a.optString("description", ""),
+                                    choices = choices,
+                                    runId = turn.runId,
+                                    requestId = requestId)
                             }
                         }
                     }

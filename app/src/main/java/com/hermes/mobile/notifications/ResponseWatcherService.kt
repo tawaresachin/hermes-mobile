@@ -116,6 +116,12 @@ class ResponseWatcherService : Service() {
         const val CHANNEL_ID = "agent_responses"
         const val EXTRA_SESSION_ID = "session_id"
         const val EXTRA_QUERY = "query"
+        // Approval notification action buttons (see notifyApproval): each button
+        // broadcasts ACTION_APPROVAL_CHOICE carrying the session + the choice.
+        const val ACTION_APPROVAL_CHOICE = "com.hermes.mobile.ACTION_APPROVAL_CHOICE"
+        const val EXTRA_RUN_ID = "run_id"
+        const val EXTRA_REQUEST_ID = "request_id"
+        const val EXTRA_CHOICE = "choice"
         // ONE id for both states: the ready reply REPLACES the ongoing
         // "is typing…" notification in place. Two ids left the typing
         // notification visible on top of the reply (user bug report).
@@ -123,7 +129,7 @@ class ResponseWatcherService : Service() {
         // Approval prompts are a SEPARATE row: they must survive the typing
         // notification being replaced and outlive the reply (the decision is
         // still pending after the run finishes or fails).
-        private const val NOTIF_ID_APPROVAL = 1002
+        const val NOTIF_ID_APPROVAL = 1002
 
         /** Set the moment a ready notification replaces the ongoing one —
          * the ticker stops re-posting "is typing…" over the reply. */
@@ -236,8 +242,16 @@ class ResponseWatcherService : Service() {
         /** A tool call is waiting for the user's Approve/Deny decision.
          * The phone's core job (Codex/Devin pattern): wake the user with the
          * exact command; tapping opens the session where the approval card
-         * lives. Separate id — never replaces the ongoing "typing" row. */
-        fun notifyApproval(context: Context, sessionId: String, command: String, description: String) {
+         * lives. Separate id — never replaces the ongoing "typing" row.
+         *
+         * Action buttons mirror the chat session's approval card: up to
+         * THREE notification actions (Android's hard cap) from the run's
+         * server choice set; each fires [ACTION_APPROVAL_CHOICE], handled
+         * by the Hilt receiver that resolves through RunController (or the
+         * API directly after process death, when no live turn exists). */
+        fun notifyApproval(context: Context, sessionId: String, command: String, description: String,
+                          choices: List<String> = listOf("once", "deny"),
+                          runId: String = "", requestId: String = "") {
             if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
             ensureChannel(context)
             val pi = PendingIntent.getActivity(
@@ -251,6 +265,29 @@ class ResponseWatcherService : Service() {
             val avatar: Bitmap? = try {
                 BitmapFactory.decodeResource(context.resources, R.drawable.hermes_logo_circle)
             } catch (_: Exception) { null }
+            // Buttons mirror the chat approval card (server's choice set, in order).
+            // Android caps a notification at 3 actions — keep the FIRST three
+            // (server order: once/session/always/deny), deny is the last element
+            // so it survives the cap for any 4-choice set.
+            val shown = choices.take(3) + (choices.drop(3).takeLast(1).filter { "deny" == it })
+            .distinct().take(3)
+            val label = { c: String -> mapOf(
+                "once" to "Once", "session" to "Session",
+                "always" to "Always", "deny" to "Deny")[c] ?: c.replaceFirstChar { it.uppercase() } }
+            val actions = shown.map { c ->
+                val extra = Intent(ACTION_APPROVAL_CHOICE).apply {
+                    setPackage(context.packageName)
+                    putExtra(EXTRA_SESSION_ID, sessionId)
+                    putExtra(EXTRA_RUN_ID, runId)
+                    putExtra(EXTRA_REQUEST_ID, requestId)
+                    putExtra(EXTRA_CHOICE, c)
+                }
+                NotificationCompat.Action(
+                    0, label(c),
+                    PendingIntent.getBroadcast(context, c.hashCode(), extra,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                )
+            }
             val notif = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.hermes_logo_circle)
                 .setLargeIcon(avatar)
@@ -263,6 +300,7 @@ class ResponseWatcherService : Service() {
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setContentIntent(pi)
+                .apply { actions.forEach { addAction(it) } }
                 .build()
             try {
                 NotificationManagerCompat.from(context).notify(NOTIF_ID_APPROVAL, notif)
