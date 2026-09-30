@@ -351,6 +351,11 @@ class SettingsViewModel @Inject constructor(
             if (o == null || !o.optBoolean("ok", false)) {
                 _updateState.update {
                     it.copy(loading = false,
+                        // A refused/failed check must not keep showing the
+                        // Update button from an earlier live check: on this
+                        // host the button no-ops forever (update refused,
+                        // gateway restarts, version unchanged).
+                        supported = false,
                         error = o?.optString("error")?.ifBlank { null }
                             ?: "Server does not expose update status (plugin too old?)")
                 }
