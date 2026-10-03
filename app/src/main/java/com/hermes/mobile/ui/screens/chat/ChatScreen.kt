@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
 import androidx.compose.animation.*
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.StiffnessMediumLow
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
@@ -2975,7 +2976,7 @@ fun MessageBubble(
                                 shift.value < -90f && onReply != null -> {
                                     shift.animateTo(
                                         0f,
-                                        spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)
+                                        spring(dampingRatio = 0.8f, stiffness = StiffnessMediumLow)
                                     )
                                     onReply()
                                 }
@@ -2986,7 +2987,7 @@ fun MessageBubble(
                                 }
                                 else -> shift.animateTo(
                                     0f,
-                                    spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)
+                                    spring(dampingRatio = 0.75f, stiffness = StiffnessMediumLow)
                                 )
                             }
                         },
