@@ -29,6 +29,11 @@ jobs:
           cmake-version: 3.22.1
           emulator: false
           disable-animations: true
+          packages: ""
+
+      - name: Install required SDK packages
+        run: |
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools" "cmake;3.22.1" "ndk;27.0.12077973" --channel=3
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
