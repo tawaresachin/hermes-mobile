@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
@@ -68,6 +69,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -2897,7 +2899,8 @@ fun MessageBubble(
         // detector; past 135px movement is damped (0.35x) for the sluggish feel.
         val shift = remember { Animatable(0f) }
         val swipeScope = rememberCoroutineScope()
-        val maxPx = maxWidth.toPx()
+        val density = LocalDensity.current
+        val maxPx = with(density) { maxWidth.toPx() }
         // Backdrop: delete icon on the left (revealed swiping right),
         // reply on the right (revealed swiping left).
         if (onReply != null || onDelete != null) {
