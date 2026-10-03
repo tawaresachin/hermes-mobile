@@ -2993,7 +2993,7 @@ fun MessageBubble(
                         },
                         onDragCancel = { shift.snapTo(0f) }
                     )
-                },
+                }
                 .graphicsLayer { translationX = shift.value },
             horizontalArrangement = alignment
         ) {
