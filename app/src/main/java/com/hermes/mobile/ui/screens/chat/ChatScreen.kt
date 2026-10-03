@@ -50,6 +50,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
@@ -91,6 +92,7 @@ import com.hermes.mobile.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlin.math.abs
 import java.util.regex.Pattern
 import javax.inject.Inject
 import androidx.compose.ui.tooling.preview.Preview
@@ -2890,6 +2892,37 @@ fun MessageBubble(
     // bubbles (up to ~94% incl. tail/avatar lanes); short texts still hug.
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val bubbleMax = this.maxWidth * 0.94f
+        // Swipe: drag MOVES the bubble (draw-phase only — graphicsLayer below),
+        // release springs it back or commits. 90px commit kept from the old
+        // detector; past 135px movement is damped (0.35x) for the sluggish feel.
+        val shift = remember { Animatable(0f) }
+        val swipeScope = rememberCoroutineScope()
+        // Backdrop: delete icon on the left (revealed swiping right),
+        // reply on the right (revealed swiping left).
+        if (onReply != null || onDelete != null) {
+            Row(
+                modifier = Modifier.matchParentSize().padding(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.graphicsLayer {
+                        alpha = (if (shift.value > 0f) shift.value / 135f else 0f).coerceIn(0f, 1f)
+                    }
+                )
+                Icon(
+                    imageVector = Icons.Filled.Reply,
+                    contentDescription = "Reply",
+                    tint = HermesPrimary,
+                    modifier = Modifier.graphicsLayer {
+                        alpha = (if (shift.value < 0f) -shift.value / 135f else 0f).coerceIn(0f, 1f)
+                    }
+                )
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2909,25 +2942,56 @@ fun MessageBubble(
                 )
                 .pointerInput(onReply, onDelete, isStreaming, selectionMode) {
                     if (isStreaming || selectionMode) return@pointerInput
+                    if (onReply == null && onDelete == null) return@pointerInput
                     // Telegram gestures: swipe LEFT = reply (hint_swipe_reply),
-                    // swipe RIGHT = delete. Accumulate the drag (per-event
-                    // deltas) and fire once past 90px; vertical scroll is
-                    // untouched.
-                    var acc = 0f
-                    detectHorizontalDragGestures { change, dragAmount ->
-                        change.consume()
-                        acc += dragAmount
-                        if (acc < -90f && onReply != null) {
-                            com.hermes.mobile.ui.haptics.Haptics.tick(haptics)
-                            onReply()
-                            acc = 0f
-                        } else if (acc > 90f && onDelete != null) {
-                            com.hermes.mobile.ui.haptics.Haptics.press(haptics)
-                            onDelete()
-                            acc = 0f
-                        }
-                    }
+                    // swipe RIGHT = delete. Deltas feed the shift Animatable;
+                    // commit at 90px (same as the old detector), otherwise the
+                    // release spring returns the bubble. Vertical scroll is
+                    // untouched: horizontal deltas only.
+                    var armed = false
+                    detectHorizontalDragGestures(
+                        onDragStart = { armed = false },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            val raw = shift.value + dragAmount
+                            val clamped = if (abs(raw) <= 135f) raw
+                                else if (raw > 0f) 135f + (raw - 135f) * 0.35f
+                                else -135f + (raw + 135f) * 0.35f
+                            swipeScope.launch { shift.snapTo(clamped) }
+                            // One haptic tick per crossing (re-arm near centre).
+                            if (raw in -40f..40f) armed = false
+                            else if (!armed && raw < -90f && onReply != null) {
+                                armed = true
+                                com.hermes.mobile.ui.haptics.Haptics.tick(haptics)
+                            } else if (!armed && raw > 90f && onDelete != null) {
+                                armed = true
+                                com.hermes.mobile.ui.haptics.Haptics.press(haptics)
+                            }
+                        },
+                        onDragEnd = {
+                            when {
+                                shift.value < -90f && onReply != null -> {
+                                    shift.animateTo(
+                                        0f,
+                                        spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)
+                                    )
+                                    onReply()
+                                }
+                                shift.value > 90f && onDelete != null -> {
+                                    shift.animateTo(maxWidth.toPx() * 1.1f, tween(140))
+                                    shift.snapTo(0f)
+                                    onDelete()
+                                }
+                                else -> shift.animateTo(
+                                    0f,
+                                    spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)
+                                )
+                            }
+                        },
+                        onDragCancel = { shift.snapTo(0f) }
+                    )
                 },
+                .graphicsLayer { translationX = shift.value },
             horizontalArrangement = alignment
         ) {
             // ── Selection-mode checkbox (Telegram's animated leading

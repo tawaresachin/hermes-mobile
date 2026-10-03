@@ -37,8 +37,8 @@ android {
         applicationId = "com.hermes.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 70
-        versionName = "0.0.70"
+        versionCode = 71
+        versionName = "0.0.71"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -54,7 +54,8 @@ android {
             // No silent debug-signing fallback: a debug-signed release breaks
             // in-place updates and mislabels trust. Configure the keystore in
             // local.properties or don't assembleRelease.
-            signingConfig = signingConfigs.getByName("release")
+            val releaseSigning = signingConfigs.findByName("release")
+            if (releaseSigning != null) signingConfig = releaseSigning
             isMinifyEnabled = true
             // shrinkResources OFF — same AGP zero-hole padding artifact as debug (see below)
             isShrinkResources = false
