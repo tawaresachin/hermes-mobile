@@ -2897,6 +2897,7 @@ fun MessageBubble(
         // detector; past 135px movement is damped (0.35x) for the sluggish feel.
         val shift = remember { Animatable(0f) }
         val swipeScope = rememberCoroutineScope()
+        val maxPx = maxWidth.toPx()
         // Backdrop: delete icon on the left (revealed swiping right),
         // reply on the right (revealed swiping left).
         if (onReply != null || onDelete != null) {
@@ -2951,7 +2952,7 @@ fun MessageBubble(
                     var armed = false
                     detectHorizontalDragGestures(
                         onDragStart = { armed = false },
-                        onDrag = { change, dragAmount ->
+                        onHorizontalDrag = { change, dragAmount ->
                             change.consume()
                             val raw = shift.value + dragAmount
                             val clamped = if (abs(raw) <= 135f) raw
@@ -2971,24 +2972,24 @@ fun MessageBubble(
                         onDragEnd = {
                             when {
                                 shift.value < -90f && onReply != null -> {
-                                    shift.animateTo(
-                                        0f,
-                                        spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)
-                                    )
+                                    swipeScope.launch {
+                                        shift.animateTo(0f, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow))
+                                    }
                                     onReply()
                                 }
                                 shift.value > 90f && onDelete != null -> {
-                                    shift.animateTo(maxWidth.toPx() * 1.1f, tween(140))
-                                    shift.snapTo(0f)
+                                    swipeScope.launch {
+                                        shift.animateTo(maxPx * 1.1f, tween(140))
+                                        shift.snapTo(0f)
+                                    }
                                     onDelete()
                                 }
-                                else -> shift.animateTo(
-                                    0f,
-                                    spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)
-                                )
+                                else -> swipeScope.launch {
+                                    shift.animateTo(0f, spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow))
+                                }
                             }
                         },
-                        onDragCancel = { shift.snapTo(0f) }
+                        onDragCancel = { swipeScope.launch { shift.snapTo(0f) } }
                     )
                 }
                 .graphicsLayer { translationX = shift.value },
