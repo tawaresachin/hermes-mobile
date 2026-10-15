@@ -863,16 +863,8 @@ class HermesRepository @Inject constructor(
         return try {
             val sessions = sessionDao.getAllSessions().first()
             val sessionsCount = sessions.size
-            var messagesCount = 0
-            var tokensUsed = 0L
-            for (session in sessions) {
-                val msgs = messageDao.getMessagesOnce(session.id)
-                messagesCount += msgs.size
-                for (msg in msgs) {
-                    if (msg.tokens > 0) tokensUsed += msg.tokens
-                }
-            }
-            UsageStats(sessionsCount, messagesCount, tokensUsed)
+            val sum = messageDao.countAndTokenSum()
+            UsageStats(sessionsCount, sum.cnt, sum.totalTokens)
         } catch (_: Exception) {
             UsageStats(0, 0, 0)
         }

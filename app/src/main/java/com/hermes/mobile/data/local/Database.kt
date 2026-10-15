@@ -41,6 +41,9 @@ interface SessionDao {
 
 @Dao
 interface MessageDao {
+    /** Aggregate result for usage stats (single-query replacement for O(n*m) loop). */
+    data class MessageCountSum(val cnt: Int, val totalTokens: Long)
+
     // id is the autoincrement rowid — the tie-breaker keeps same-ms rows in
     // insertion order (timestamps collide when a turn's user+assistant rows
     // land in the same millisecond; without it, bubble order flips randomly).
@@ -93,6 +96,9 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE sessionId = :sessionId")
     suspend fun deleteSessionMessages(sessionId: String)
+
+    @Query("SELECT COUNT(*) as cnt, COALESCE(SUM(tokens), 0) as totalTokens FROM messages")
+    suspend fun countAndTokenSum(): MessageDao.MessageCountSum
 
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteMessage(messageId: Long)

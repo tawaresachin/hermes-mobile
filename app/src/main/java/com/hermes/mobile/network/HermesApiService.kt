@@ -1223,30 +1223,6 @@ class HermesApiService @Inject constructor(
         }
     }
 
-    // ─── Simple Chat (non-streaming) ───
-
-    suspend fun sendChat(
-        query: String,
-        sessionId: String? = null
-    ): String {
-        val baseUrl = config?.baseUrl ?: return ""
-        val model = fetchDefaultModelId()
-        return withContext(Dispatchers.IO) {
-            val payload = JSONObject().apply {
-                put("model", model)
-                put("query", query)
-                put("stream", false)
-                sessionId?.let { put("session_id", it) }
-            }
-            val request = Request.Builder()
-                .url("$baseUrl/v1/chat/completions")
-                .post(payload.toString().toRequestBody(jsonMediaType))
-                .build()
-            val response = client.newCall(request).execute()
-            response.body?.string() ?: "{}"
-        }
-    }
-
     // ─── Archive flag (server-side; verified contract: PATCH accepts
     // {"archived":bool}, returns the session, and an archived row drops
     // out of GET /api/sessions) ───

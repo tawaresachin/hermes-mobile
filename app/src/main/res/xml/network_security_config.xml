@@ -3,17 +3,30 @@
     <!-- Cleartext posture (deliberate, documented):
          The bridge server is HTTP-only and reachable over Tailscale
          (100.x raw IPs), LAN (192.168.x / 10.x) and localhost. Android's
-         <domain> entries cannot match raw IPs/CIDRs, and the primary
-         connection (Tailscale direct) is a raw 100.x IP, so cleartext
-         must stay enabled globally.
-         Exposure boundary: cleartext only exists on PRIVATE networks
-         (the user's own tailnet/LAN). Public traffic via the Cloudflare
+         <domain> entries cannot match raw IPs/CIDRs, so cleartext must stay
+         enabled for those ranges. Public hosts are GATED by the app's own
+         isTrustedServerHost() check before any API call is made, but this
+         layer catches mistyped public URLs at the OS even if the app guard
+         is bypassed.
+         Exposure boundary: cleartext traffic only goes to PRIVATE networks
+         (user's own tailnet/LAN/localhost). Public traffic via Cloudflare
          tunnel is TLS-terminated by cloudflared before it reaches the
-         bridge. Auth (API key / JWT bearer) is enforced at the app layer
-         on every request; the server rejects unauthenticated access. -->
+         bridge. Auth (API key bearer) is enforced at the app layer. -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+    <!-- Domain-restricted cleartext: only localhost / Tailscale-adjacent.
+         Any request to a public hostname falls back to the system trust
+         anchors which enforce TLS — the app's own URL guard catches mistyped
+         public URLs before a connection attempt is made, but this layer
+         catches it at the OS even if the app guard is bypassed. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">*.local</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
 </network-security-config>

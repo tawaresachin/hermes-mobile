@@ -314,15 +314,15 @@ class ResponseWatcherService : Service() {
 object AppForeground {
     @Volatile var isForeground: Boolean = true
         private set
-    private var started = 0
+    private val started = java.util.concurrent.atomic.AtomicInteger(1) // activity already running at init
 
     fun onActivityStarted() {
-        started++
+        started.incrementAndGet()
         isForeground = true
     }
 
     fun onActivityStopped() {
-        started = (started - 1).coerceAtLeast(0)
-        if (started == 0) isForeground = false
+        val count = started.decrementAndGet().coerceAtLeast(0)
+        if (count == 0) isForeground = false
     }
 }
