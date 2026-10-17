@@ -9,19 +9,24 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # JDK 17: the version this build is verified against locally (AGP 8.7.3 / Kotlin 2.1.0).
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: 17
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # setup-android's default `packages` is "tools platform-tools", but the
+          # `tools` package no longer exists -> `sdkmanager tools` exits 1.
+          # "" disables it; the next step installs what the build actually needs.
+          packages: ""
 
-      # Nothing else installs the build platform: setup-android only takes a
+      # Nothing else installs the build platform: setup-android only accepts a
       # `packages` input, so api-level/ndk-version/build-tools there are ignored.
       # The app has no native code, so no NDK or CMake is needed.
       - name: Install build platform and build-tools
