@@ -1350,7 +1350,7 @@ class HermesApiService @Inject constructor(
         }
     }
 
-    /** Text-to-Speech (hermes-mobile-qr plugin route: /api/audio/speak).
+    /** Text-to-Speech (hermes-mobile-plugin plugin route: /api/audio/speak).
      * Default: Indian English female voice (edge-tts). Pass a different
      * voice (e.g. "en-IN-PrabhatNeural" male) for variety.
      * The voice parameter maps to the plugin's `profile` field. */
@@ -1399,7 +1399,7 @@ class HermesApiService @Inject constructor(
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", fileName, file.asRequestBody(mimeType.toMediaTypeOrNull()))
                     .build()
-                // hermes-mobile-qr plugin route: /api/audio/upload?session_id=<sid>
+                // hermes-mobile-plugin plugin route: /api/audio/upload?session_id=<sid>
                 // -> {url:"/api/audio/download/<sid>/<stored>", path:"..."}. The URL is
                 // relative; bubbles resolve it against baseUrl on display.
                 val urlBuilder = ("$baseUrl/api/audio/upload").toHttpUrlOrNull()?.newBuilder()?.apply {
@@ -1464,7 +1464,7 @@ class HermesApiService @Inject constructor(
         }
     }
 
-    // ── Audio STT / TTS (hermes-mobile-qr plugin routes) ──────────────
+    // ── Audio STT / TTS (hermes-mobile-plugin plugin routes) ──────────────
 
     suspend fun transcribeAudio(audioB64: String, mimeType: String = "audio/wav", model: String? = null): String {
         val baseUrl = config?.baseUrl ?: throw RuntimeException("Not connected")

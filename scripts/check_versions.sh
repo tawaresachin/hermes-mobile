@@ -7,7 +7,7 @@
 #          + tag vX == HEAD
 #   PLUGIN plugin.yaml version = "P" (single source; constants.py DERIVES
 #          PLUGIN_VERSION from it) + tag vP == HEAD
-#          + deployed copy (~/.hermes/plugins/hermes-mobile-qr) matches repo
+#          + deployed copy (~/.hermes/plugins/hermes-mobile-plugin) matches repo
 #
 # Exit 0 = consistent. Used by release.sh, pre-commit hooks, and CI.
 set -uo pipefail
@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_REPO="$(dirname "$SCRIPT_DIR")"
 # Sibling of the app repo in both layouts (see release.sh).
 PLUGIN_REPO="${PLUGIN_REPO:-$(dirname "$APP_REPO")/hermes-mobile-plugin}"
-DEPLOY_DIR="$HOME/.hermes/plugins/hermes-mobile-qr"
+DEPLOY_DIR="$HOME/.hermes/plugins/hermes-mobile-plugin"
 fail=0
 note() { printf '%s\n' "$*"; }
 ok()   { note "  ok   $*"; }

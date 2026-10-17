@@ -109,7 +109,7 @@ python3 -m pip install "hermes-mobile-plugin[install] @ git+https://github.com/t
 # or from this release:
 python3 -m pip install hermes_mobile_plugin-$VER-py3-none-any.whl
 hermes-mobile-plugin install   # key + phone access + plugin + gateway + QR
-hermes plugins list            # must show: hermes-mobile-qr   enabled
+hermes plugins list            # must show: hermes-mobile-plugin   enabled
 \`\`\`
 
 **Verify:**

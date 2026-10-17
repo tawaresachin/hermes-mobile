@@ -23,7 +23,7 @@ APP_REPO="$(dirname "$SCRIPT_DIR")"
 # (~/hermes-mobile-app + ~/hermes-mobile-plugin, and
 # ~/Documents/github/hermes-mobile + .../hermes-mobile-plugin).
 PLUGIN_REPO="${PLUGIN_REPO:-$(dirname "$APP_REPO")/hermes-mobile-plugin}"
-DEPLOY_DIR="$HOME/.hermes/plugins/hermes-mobile-qr"
+DEPLOY_DIR="$HOME/.hermes/plugins/hermes-mobile-plugin"
 
 NEW_APP="${1:?usage: release.sh <app|x.y.z|none> [<plugin|x.y.z|none>] [\"message\"]}"
 NEW_PLG="${2:-none}"
