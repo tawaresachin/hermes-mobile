@@ -1342,10 +1342,11 @@ fun SettingsScreen(
                     SetupHelpSection(
                         title = "1. On your computer",
                         steps = listOf(
-                            "Install the plugin once:  pip install git+https://github.com/tawaresachin/hermes-mobile-plugin",
+                            "Needs Python 3.10 or newer — check with:  python3 --version",
+                            "Install the plugin:  python3 -m pip install \"git+https://github.com/tawaresachin/hermes-mobile-plugin@v0.0.32\"",
                             "Then run:  hermes-mobile-plugin install",
-                            "Start Hermes:  hermes gateway run",
-                            "Show the pairing QR:  hermes-mobile-plugin qr"
+                            "It sets up the key, phone access and the QR itself",
+                            "Check it says 'enabled':  hermes plugins list"
                         )
                     )
                     Spacer(modifier = Modifier.height(16.dp))
@@ -1360,9 +1361,10 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     SetupHelpSection(
-                        title = "3. Different Wi-Fi networks?",
+                        title = "3. If the phone can't connect",
                         steps = listOf(
-                            "Same Wi-Fi: skip this step.",
+                            "Allow phone access if you turned it off:  hermes config set platforms.api_server.extra.host 0.0.0.0",
+                            "Apply it:  hermes gateway restart",
                             "Different networks: install free Tailscale on BOTH devices",
                             "Sign in to the same Tailscale account, turn the VPN on",
                             "Scan the QR again — it will carry the new address"

@@ -103,12 +103,13 @@ $CHANGES
 
 Server-side companion plugin for Hermes Agent. **Pure Python** — this single \`py3-none-any\` wheel works unchanged on Windows, macOS, Linux and Termux; native deps (pyyaml, qrcode) resolve per-OS from PyPI at install time. No per-OS binaries exist because none are needed.
 
-**Install (any OS):**
+**Install (any OS):** needs Python 3.10+ (macOS has no `pip`: use `python3 -m pip`)
 \`\`\`bash
-pip install "hermes-mobile-plugin[install] @ git+https://github.com/tawaresachin/hermes-mobile-plugin.git@$TAG"
+python3 -m pip install "hermes-mobile-plugin[install] @ git+https://github.com/tawaresachin/hermes-mobile-plugin.git@$TAG"
 # or from this release:
-pip install hermes_mobile_plugin-$VER-py3-none-any.whl
-hermes-mobile-plugin install   # restart gateway, then: hermes-mobile-plugin qr
+python3 -m pip install hermes_mobile_plugin-$VER-py3-none-any.whl
+hermes-mobile-plugin install   # key + phone access + plugin + gateway + QR
+hermes plugins list            # must show: hermes-mobile-qr   enabled
 \`\`\`
 
 **Verify:**

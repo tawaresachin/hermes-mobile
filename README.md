@@ -71,7 +71,9 @@ a GPG detached signature (key published in the
 
 1. On your computer: install [Hermes Agent](https://hermes-agent.nousresearch.com), then
    [`hermes-mobile-plugin`](https://github.com/tawaresachin/hermes-mobile-plugin) —
-   `pip install git+https://github.com/tawaresachin/hermes-mobile-plugin && hermes-mobile-plugin install` prints a QR.
+   `python3 -m pip install git+https://github.com/tawaresachin/hermes-mobile-plugin@v0.0.32 && hermes-mobile-plugin install`
+   prints a QR (needs Python 3.10+). The install writes the API key, allows phone access,
+   deploys and enables the plugin itself — `hermes plugins list` must say `enabled`.
 2. On your phone: install the latest
    [Hermes Mobile APK](https://github.com/tawaresachin/hermes-mobile/releases).
 3. App → Settings → **Connect with QR** → scan. URL, API key, and connection test configure
