@@ -19,7 +19,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_REPO="$(dirname "$SCRIPT_DIR")"
-PLUGIN_REPO="${PLUGIN_REPO:-$HOME/hermes-mobile-plugin}"
+# The plugin repo is the app repo's sibling in both layouts in use
+# (~/hermes-mobile-app + ~/hermes-mobile-plugin, and
+# ~/Documents/github/hermes-mobile + .../hermes-mobile-plugin).
+PLUGIN_REPO="${PLUGIN_REPO:-$(dirname "$APP_REPO")/hermes-mobile-plugin}"
 DEPLOY_DIR="$HOME/.hermes/plugins/hermes-mobile-qr"
 
 NEW_APP="${1:?usage: release.sh <app|x.y.z|none> [<plugin|x.y.z|none>] [\"message\"]}"
@@ -74,8 +77,12 @@ if [ -n "$NEW_APP" ]; then
   # 0.0.100 == 0.1.0 — Android would reject one of them as a downgrade).
   IFS=. read -r MA MI PA <<< "$NEW_APP"
   CODE=$(( 10#$MA * 1000000 + 10#$MI * 1000 + 10#$PA ))
-  sed -i "s/versionCode = [0-9][0-9]*/versionCode = $CODE/; s/versionName = \"[0-9.]*\"/versionName = \"$NEW_APP\"/" \
-    "$APP_REPO/app/build.gradle.kts"
+  # perl -i, not sed -i: BSD/macOS sed rejects the bare -i form. Values reach
+  # perl through the environment so shell and perl quoting cannot collide.
+  CODE="$CODE" V="$NEW_APP" perl -i -pe '
+    s/versionCode = [0-9]+/versionCode = $ENV{CODE}/;
+    s/versionName = "[0-9.]+"/versionName = "$ENV{V}"/;
+  ' "$APP_REPO/app/build.gradle.kts"
   gitx "$APP_REPO" add app/build.gradle.kts scripts
   gitx "$APP_REPO" diff --cached --quiet || gitx "$APP_REPO" commit -q --no-verify -m "release app v$NEW_APP${MSG:+ — $MSG}"
   release_repo "$APP_REPO" "$NEW_APP"
@@ -83,9 +90,11 @@ fi
 
 # ── plugin bump ───────────────────────────────────────────────────────
 if [ -n "$NEW_PLG" ]; then
-  sed -i "s/^version: \"[0-9.]*\"/version: \"$NEW_PLG\"/" "$PLUGIN_REPO/plugin.yaml"
+  V="$NEW_PLG" perl -i -pe 's/^version: "[0-9.]+"/version: "$ENV{V}"/' "$PLUGIN_REPO/plugin.yaml"
   cp "$PLUGIN_REPO/plugin.yaml" "$PLUGIN_REPO/src/hermes_mobile_plugin/plugin.yaml"
-  sed -i "0,/^version = \"[0-9.]*\"/s//version = \"$NEW_PLG\"/" "$PLUGIN_REPO/pyproject.toml"
+  # -0777 slurps the file, so a plain s/// (no /g) replaces only the FIRST
+  # `version = ` line — what GNU sed's non-portable 0,/re/ address did.
+  V="$NEW_PLG" perl -0777 -i -pe 's/^version = "[0-9.]+"/version = "$ENV{V}"/m' "$PLUGIN_REPO/pyproject.toml"
   gitx "$PLUGIN_REPO" add plugin.yaml src/hermes_mobile_plugin/plugin.yaml pyproject.toml
   gitx "$PLUGIN_REPO" diff --cached --quiet || gitx "$PLUGIN_REPO" commit -q --no-verify -m "release plugin v$NEW_PLG${MSG:+ — $MSG}"
   release_repo "$PLUGIN_REPO" "$NEW_PLG"
@@ -100,12 +109,13 @@ if [ -d "$DEPLOY_DIR/hermes_mobile_plugin" ]; then
   echo "   deployed plugin synced: $DEPLOY_DIR"
 fi
 
-# ── install the version-contract pre-commit hook in both repos ──
-for repo in "$APP_REPO" "$PLUGIN_REPO"; do
-  mkdir -p "$repo/.git/hooks"
-  cp "$SCRIPT_DIR/git-hooks/pre-commit" "$repo/.git/hooks/pre-commit"
-  chmod +x "$repo/.git/hooks/pre-commit"
-done
+# ── install the version-contract pre-commit hook ──
+# App repo only. The plugin repo releases itself now (its auto-tag.yml creates
+# the tag), so "tag == HEAD" can never hold at plugin-commit time, and its
+# contract is enforced there.
+mkdir -p "$APP_REPO/.git/hooks"
+cp "$SCRIPT_DIR/git-hooks/pre-commit" "$APP_REPO/.git/hooks/pre-commit"
+chmod +x "$APP_REPO/.git/hooks/pre-commit"
 
 # ── ship GitHub Releases (signed APK / wheel+sdist). SKIP_SHIP=1 to defer. ──
 if [ "${SKIP_SHIP:-0}" != "1" ]; then

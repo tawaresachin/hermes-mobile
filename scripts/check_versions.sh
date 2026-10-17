@@ -14,7 +14,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_REPO="$(dirname "$SCRIPT_DIR")"
-PLUGIN_REPO="${PLUGIN_REPO:-$HOME/hermes-mobile-plugin}"
+# Sibling of the app repo in both layouts (see release.sh).
+PLUGIN_REPO="${PLUGIN_REPO:-$(dirname "$APP_REPO")/hermes-mobile-plugin}"
 DEPLOY_DIR="$HOME/.hermes/plugins/hermes-mobile-qr"
 fail=0
 note() { printf '%s\n' "$*"; }
@@ -36,11 +37,20 @@ EXPECT_CODE=$(( 10#$MA * 1000000 + 10#$MI * 1000 + 10#$PA ))
 [ "$CODE" = "$EXPECT_CODE" ] && ok "app versionCode $CODE derived from $NAME" \
   || bad "app versionCode $CODE != $EXPECT_CODE (use release.sh to bump)"
 
-# PLUGIN_VERSION must be *derived* from plugin.yaml — no hardcoded constant
-DERIVED=$(cd "$PLUGIN_REPO" && PYTHONPATH=src "${PYTHON:-python3}" -c \
+# PLUGIN_VERSION must be *derived* from plugin.yaml — no hardcoded constant.
+# Prefer the plugin repo's own venv: the system python3 can sit below the
+# plugin's 3.10 floor and cannot even parse its `int | None` annotations.
+PY="${PYTHON:-}"
+if [ -z "$PY" ]; then
+  for c in "$PLUGIN_REPO/.venv/bin/python" python3 python; do
+    command -v "$c" >/dev/null 2>&1 && { PY="$c"; break; }
+  done
+fi
+[ -n "$PY" ] || PY=python3
+DERIVED=$(cd "$PLUGIN_REPO" && PYTHONPATH=src "$PY" -c \
   'from hermes_mobile_plugin.constants import PLUGIN_VERSION; print(PLUGIN_VERSION)' 2>/dev/null)
 if [ "$DERIVED" = "$PV" ]; then ok "PLUGIN_VERSION derives from plugin.yaml == $PV"
-elif [ -z "$DERIVED" ]; then bad "could not import PLUGIN_VERSION (python3 + PYTHONPATH=src?)"
+elif [ -z "$DERIVED" ]; then bad "could not import PLUGIN_VERSION via '$PY' (set PYTHON=/path/to/python3.10+)"
 else bad "PLUGIN_VERSION=$DERIVED but plugin.yaml says $PV"; fi
 
 # pyproject packaging metadata must not drift from the manifest

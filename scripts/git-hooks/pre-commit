@@ -3,11 +3,22 @@
 # version contract (both repos + tags) must hold. Prevents the hand-edit
 # drift that motivated it. Bypass knowingly with: git commit --no-verify
 set -uo pipefail
+# check_versions.sh lives in the APP repo. Resolve it: explicit override, then
+# this repo, then the sibling layout, then the legacy ~/hermes-mobile-app one.
+CV="${HERMES_APP_REPO:+$HERMES_APP_REPO/scripts/check_versions.sh}"
+for d in "$PWD" "$(dirname "$PWD")/hermes-mobile" "$HOME/hermes-mobile-app"; do
+  [ -n "$CV" ] && break
+  [ -x "$d/scripts/check_versions.sh" ] && CV="$d/scripts/check_versions.sh"
+done
+# Fail open (loudly) when the checker is missing: it means the tooling install
+# is incomplete, not that the contract is broken — blocking would strand the
+# developer with no way to fix it.
+[ -x "$CV" ] || { echo "!! check_versions.sh not found — version contract NOT checked (set HERMES_APP_REPO)"; exit 0; }
 files=$(git diff --cached --name-only)
 if echo "$files" | grep -qE 'app/build.gradle.kts|plugin.yaml|constants.py'; then
-  "$HOME/hermes-mobile-app/scripts/check_versions.sh" || {
+  "$CV" || {
     echo "!! version contract broken — commit blocked"
-    echo "!! bump correctly with: ~/hermes-mobile-app/scripts/release.sh <x.y.z>"
+    echo "!! bump correctly with: $(dirname "$CV")/release.sh <x.y.z>"
     exit 1
   }
 fi

@@ -21,7 +21,9 @@ gpgsign() { perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' gpg --batch --yes --pinen
 KIND="${1:?usage: ship_release.sh <app|plugin> <version> [extra notes...]}"; shift
 VER="${1:?version}"; shift
 NOTES_OVERRIDE="$*"
-APP_REPO="$HOME/hermes-mobile-app"; PLG_REPO="$HOME/hermes-mobile-plugin"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_REPO="${APP_REPO:-$(dirname "$SCRIPT_DIR")}"
+PLG_REPO="${PLG_REPO:-$(dirname "$APP_REPO")/hermes-mobile-plugin}"
 case "$KIND" in
   app)    REPO="$APP_REPO"; SLUG="tawaresachin/hermes-mobile";;
   plugin) REPO="$PLG_REPO"; SLUG="tawaresachin/hermes-mobile-plugin";;
@@ -31,6 +33,12 @@ TAG="v$VER"
 gitx "$REPO" fetch -q origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || \
   perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' git -C "$REPO" fetch -q origin "refs/tags/$TAG" 2>/dev/null || true
 gitx "$REPO" rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "!! $REPO has no tag $TAG — run release.sh first" >&2; exit 3; }
+
+# Signing is mandatory — SHA256SUMS.asc is the integrity proof. Check it here,
+# with an actionable message, instead of at the first gpgsign deep into a run.
+[ -f "$KDIR/gpg-password" ] || { echo "!! missing $KDIR/gpg-password (gpg passphrase) — cannot sign $TAG" >&2; exit 3; }
+perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' gpg --list-secret-keys "$GPG_KEYID" >/dev/null 2>&1 \
+  || { echo "!! gpg key $GPG_KEYID is not in this keyring — cannot sign $TAG" >&2; exit 3; }
 
 DIST="$KDIR/dist-$KIND-$TAG"; rm -rf "$DIST"; mkdir -p "$DIST"
 ASSETS=()
