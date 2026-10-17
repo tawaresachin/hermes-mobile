@@ -79,10 +79,13 @@ else
   check_tag "$PLUGIN_REPO" "$PV" "plugin"
 fi
 
-# deployed plugin copy must match the repo exactly (source is canonical)
+# deployed plugin copy must match the repo exactly (source is canonical).
+# The bundled plugin.yaml is excluded on purpose: install deploys exactly one
+# manifest, at the deploy root (checked separately right below), so the copy
+# inside the package dir is expected to be absent.
 if [ -d "$DEPLOY_DIR/hermes_mobile_plugin" ]; then
   if diff -rq "$PLUGIN_REPO/src/hermes_mobile_plugin" "$DEPLOY_DIR/hermes_mobile_plugin" \
-       --exclude=__pycache__ >/dev/null 2>&1 \
+       --exclude=__pycache__ --exclude=plugin.yaml >/dev/null 2>&1 \
      && diff -q "$YAM" "$DEPLOY_DIR/plugin.yaml" >/dev/null 2>&1; then
     ok "deployed plugin == repo source"
   else
