@@ -71,7 +71,13 @@ check_tag() { # <repo> <ver> <label>
   fi
 }
 check_tag "$APP_REPO" "$NAME" "app"
-check_tag "$PLUGIN_REPO" "$PV" "plugin"
+# release.sh sets PLUGIN_TAG_PENDING=1 for the push that triggers the plugin
+# repo's own auto-tag.yml, which creates that tag a moment later.
+if [ "${PLUGIN_TAG_PENDING:-0}" = "1" ]; then
+  note "  --   plugin tag v$PV pending CI (auto-tag.yml creates it)"
+else
+  check_tag "$PLUGIN_REPO" "$PV" "plugin"
+fi
 
 # deployed plugin copy must match the repo exactly (source is canonical)
 if [ -d "$DEPLOY_DIR/hermes_mobile_plugin" ]; then

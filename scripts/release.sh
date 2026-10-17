@@ -97,7 +97,11 @@ if [ -n "$NEW_PLG" ]; then
   V="$NEW_PLG" perl -0777 -i -pe 's/^version = "[0-9.]+"/version = "$ENV{V}"/m' "$PLUGIN_REPO/pyproject.toml"
   gitx "$PLUGIN_REPO" add plugin.yaml src/hermes_mobile_plugin/plugin.yaml pyproject.toml
   gitx "$PLUGIN_REPO" diff --cached --quiet || gitx "$PLUGIN_REPO" commit -q --no-verify -m "release plugin v$NEW_PLG${MSG:+ — $MSG}"
-  release_repo "$PLUGIN_REPO" "$NEW_PLG"
+  # Push the bump and stop. hermes-mobile-plugin's auto-tag.yml owns everything
+  # after this (tag, wheel+sdist, GitHub release, PyPI) and triggers on this
+  # push. Tagging here would make it see an existing tag and skip all of it,
+  # leaving the version tagged with no artifacts and no PyPI upload.
+  gitx "$PLUGIN_REPO" push -q origin "$(gitx "$PLUGIN_REPO" branch --show-current)"
 fi
 
 # ── deployed plugin copy (gateway reads the new number on next start) ──
@@ -117,15 +121,18 @@ mkdir -p "$APP_REPO/.git/hooks"
 cp "$SCRIPT_DIR/git-hooks/pre-commit" "$APP_REPO/.git/hooks/pre-commit"
 chmod +x "$APP_REPO/.git/hooks/pre-commit"
 
-# ── ship GitHub Releases (signed APK / wheel+sdist). SKIP_SHIP=1 to defer. ──
-if [ "${SKIP_SHIP:-0}" != "1" ]; then
-  if [ -n "$NEW_APP" ]; then
-    ( cd "$APP_REPO" && ./gradlew :app:assembleRelease -q ) &&       "$SCRIPT_DIR/ship_release.sh" app "$NEW_APP" || echo "   !! app release ship failed (fix + rerun scripts/ship_release.sh app $NEW_APP)"
-  fi
-  if [ -n "$NEW_PLG" ]; then
-    "$SCRIPT_DIR/ship_release.sh" plugin "$NEW_PLG" || echo "   !! plugin ship failed (rerun scripts/ship_release.sh plugin $NEW_PLG)"
-  fi
+# ── ship the GitHub Release (signed APK). SKIP_SHIP=1 to defer. ──
+# Only the APK: the plugin repo ships itself from its own CI (auto-tag.yml),
+# and shipping it here too would race that for the same release.
+if [ "${SKIP_SHIP:-0}" != "1" ] && [ -n "$NEW_APP" ]; then
+  ( cd "$APP_REPO" && ./gradlew :app:assembleRelease -q ) &&       "$SCRIPT_DIR/ship_release.sh" app "$NEW_APP" || echo "   !! app release ship failed (fix + rerun scripts/ship_release.sh app $NEW_APP)"
 fi
 
-"$SCRIPT_DIR/check_versions.sh"
+if [ -n "$NEW_PLG" ]; then
+  # auto-tag.yml creates the plugin tag moments from now, so the contract check
+  # would otherwise report the tag missing on this immediate run.
+  PLUGIN_TAG_PENDING=1 "$SCRIPT_DIR/check_versions.sh"
+else
+  "$SCRIPT_DIR/check_versions.sh"
+fi
 echo "==> done: app=${NEW_APP:-$CUR_APP} plugin=${NEW_PLG:-$CUR_PLG} (tags pushed)"
