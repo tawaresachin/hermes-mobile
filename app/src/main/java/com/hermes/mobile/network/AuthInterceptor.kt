@@ -54,11 +54,28 @@ class AuthInterceptor @Inject constructor(
         return legacy
     }
 
+    /** Host of the configured gateway. The Bearer key is only ever sent
+     * there: message content can contain absolute URLs, and an unconditional
+     * header would hand the key to whatever host that URL names. */
+    private fun configuredHost(): String? {
+        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString("base_url", "") ?: return null
+        if (raw.isBlank()) return null
+        return try {
+            java.net.URI(raw).host?.lowercase()
+        } catch (_: Exception) { null }
+    }
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
         val apiKey = readApiKey()
+        // baseHost == null means we are not configured yet (no key either);
+        // keep the historical behaviour there rather than silently dropping auth.
+        val baseHost = configuredHost()
+        val sameServer = baseHost == null ||
+            originalRequest.url.host.equals(baseHost, ignoreCase = true)
 
-        return if (apiKey.isNotBlank()) {
+        return if (apiKey.isNotBlank() && sameServer) {
             val authenticatedRequest = originalRequest.newBuilder()
                 .header("Authorization", "Bearer $apiKey")
                 .build()

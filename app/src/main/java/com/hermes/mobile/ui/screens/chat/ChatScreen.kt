@@ -4724,17 +4724,12 @@ private fun ImageViewerDialog(url: String, onDismiss: () -> Unit) {
                 )
             }
         },
+        // A "Save" action used to sit here doing nothing (`/* TODO: download */`).
+        // A dead button is worse than none, so only Close remains until a real
+        // save (authenticated fetch -> MediaStore) exists.
         confirmButton = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                TextButton(onClick = onDismiss) {
-                    Text("Close")
-                }
-                TextButton(onClick = { /* TODO: download */ }) {
-                    Text("Save")
-                }
+            TextButton(onClick = onDismiss) {
+                Text("Close")
             }
         },
         dismissButton = {}

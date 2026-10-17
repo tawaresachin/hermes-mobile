@@ -85,7 +85,7 @@ data class ModelListResponse(
 // ─── Server Config ───
 
 data class ServerConfig(
-    val baseUrl: String = "http://localhost:8080",
+    val baseUrl: String = "http://localhost:8642",
     val isConnected: Boolean = false,
     val apiKey: String = "",
     val setupToken: String = "",

@@ -17,11 +17,11 @@
             <certificates src="system" />
         </trust-anchors>
     </base-config>
-    <!-- Domain-restricted cleartext: only localhost / Tailscale-adjacent.
-         Any request to a public hostname falls back to the system trust
-         anchors which enforce TLS — the app's own URL guard catches mistyped
-         public URLs before a connection attempt is made, but this layer
-         catches it at the OS even if the app guard is bypassed. -->
+    <!-- Redundant belt-and-braces only. `base-config` above already permits
+         cleartext everywhere (Android <domain> cannot match raw 100.x/
+         192.168.x IPs, so the permissive base is REQUIRED for Tailscale/LAN).
+         This block therefore does NOT restrict public hosts — the app's
+         isTrustedServerHost() guard is the only thing that does. -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">*.local</domain>

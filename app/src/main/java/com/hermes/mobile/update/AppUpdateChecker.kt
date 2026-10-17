@@ -183,11 +183,15 @@ class AppUpdateChecker @Inject constructor(
                             ?.trim()?.substringBefore(' ')?.lowercase()
                             ?.takeIf { it.length == 64 }
                     }
-                } catch (e: Exception) { null }   // sums are best-effort integrity
+                } catch (e: Exception) { null }
             }
+            // Integrity is not optional. Without the release SHA256SUMS we
+            // cannot verify the APK, and installing unverified bytes is an RCE
+            // vector — refuse instead of installing unverified.
+            if (expected == null) error("checksum unavailable — update refused")
             // Already on disk from a cancelled installer round? Verify and
             // reuse instead of re-downloading 3.7 MB.
-            val reuse = apk.exists() && expected != null &&
+            val reuse = apk.exists() &&
                 runCatching { sha256(apk) == expected }.getOrDefault(false)
             if (!reuse) {
                 withContext(Dispatchers.IO) {
@@ -211,7 +215,7 @@ class AppUpdateChecker @Inject constructor(
                         }
                     }
                 }
-                if (expected != null && sha256(apk) != expected) {
+                if (sha256(apk) != expected) {
                     apk.delete()
                     error("checksum mismatch — APK discarded")
                 }

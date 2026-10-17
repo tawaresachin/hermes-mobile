@@ -857,7 +857,10 @@ class HermesRepository @Inject constructor(
 
     /** Full-text search across all session messages (local DB). */
     suspend fun searchMessages(query: String): List<Message> =
-        messageDao.searchMessages("%$query%")
+        // `%` and `_` in the user's query are literal characters, not wildcards.
+        messageDao.searchMessages(
+            "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        )
 
     suspend fun getUsageStats(): UsageStats {
         return try {

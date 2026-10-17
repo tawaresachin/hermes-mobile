@@ -53,6 +53,16 @@ if [ -n "$NOTES_OVERRIDE" ]; then NOTES_EXTRA=$(printf '%s\n\n' "$NOTES_OVERRIDE
 if [ "$KIND" = app ]; then
   APK="$APP_REPO/app/build/outputs/apk/release/Hermes-Mobile-v$VER.apk"
   [ -f "$APK" ] || { echo "!! missing $APK — run assembleRelease first" >&2; exit 4; }
+  # A release build with no signingConfig emits an UNSIGNED apk that still
+  # carries the release filename; signing with the DEBUG key is just as bad
+  # (it breaks in-place updates for every installed user). Never ship
+  # unverified bytes.
+  APKSIGNER=$(ls -d "${ANDROID_HOME:-$HOME/Library/Android/sdk}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
+  [ -n "$APKSIGNER" ] || APKSIGNER=$(command -v apksigner || true)
+  [ -n "$APKSIGNER" ] || { echo "!! apksigner not found (set ANDROID_HOME) — cannot verify $APK" >&2; exit 4; }
+  "$APKSIGNER" verify "$APK" >/dev/null 2>&1 || { echo "!! $APK is NOT signed — refusing to ship" >&2; exit 4; }
+  "$APKSIGNER" verify --print-certs "$APK" 2>/dev/null | grep -q "CN=Android Debug" && \
+    { echo "!! $APK is DEBUG-signed — refusing to ship" >&2; exit 4; }
   cp "$APK" "$DIST/"
   ASSETS+=("$DIST/Hermes-Mobile-v$VER.apk")
   cat > "$NOTES_FILE" <<EOF

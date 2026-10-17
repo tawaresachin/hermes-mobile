@@ -314,7 +314,10 @@ class ResponseWatcherService : Service() {
 object AppForeground {
     @Volatile var isForeground: Boolean = true
         private set
-    private val started = java.util.concurrent.atomic.AtomicInteger(1) // activity already running at init
+    // 0 = no activity started yet. onActivityStarted() is the first thing to
+    // touch this object, so a non-zero seed makes the first `stop` land at 1
+    // and the app never reports background — which silently kills notifications.
+    private val started = java.util.concurrent.atomic.AtomicInteger(0)
 
     fun onActivityStarted() {
         started.incrementAndGet()

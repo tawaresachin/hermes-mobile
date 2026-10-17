@@ -205,7 +205,7 @@ class HomeViewModel @Inject constructor(
                 _uiState.update { state ->
                     state.copy(
                         connectionStatus = ConnectionStatus.DISCONNECTED,
-                        serverBaseUrl = "http://localhost:8080"
+                        serverBaseUrl = "http://localhost:8642"
                     )
                 }
             }

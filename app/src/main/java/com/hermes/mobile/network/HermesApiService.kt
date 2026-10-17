@@ -283,7 +283,7 @@ class HermesApiService @Inject constructor(
         return restored
     }
 
-    fun getBaseUrl(): String = config?.baseUrl ?: "http://localhost:8080"
+    fun getBaseUrl(): String = config?.baseUrl ?: "http://localhost:8642"
 
     // ─── Health Check ───
 
@@ -368,7 +368,7 @@ class HermesApiService @Inject constructor(
         instructions: String?,
     ): String = withContext(Dispatchers.IO) {
         val cfg = config ?: getConfig()
-        val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: "http://localhost:8080"
+        val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: "http://localhost:8642"
         val payload = JSONObject().apply {
             put("input", query)
             put("session_id", serverSessionId)
@@ -1434,7 +1434,15 @@ class HermesApiService @Inject constructor(
      * on any failure. */
     suspend fun downloadAttachment(relUrl: String): ByteArray? {
         val baseUrl = config?.baseUrl ?: return null
-        val url = if (relUrl.startsWith("http")) relUrl else baseUrl.trimEnd('/') + relUrl
+        val url = if (relUrl.startsWith("http")) {
+            // Absolute URLs come from message content (server/peer data).
+            // Only fetch same-origin so a crafted bubble can't point the
+            // phone at an arbitrary host.
+            val target = relUrl.toHttpUrlOrNull()
+            val base = baseUrl.toHttpUrlOrNull()
+            if (target == null || base == null || target.host != base.host) return null
+            relUrl
+        } else baseUrl.trimEnd('/') + relUrl
         return withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder().url(url).get().build()

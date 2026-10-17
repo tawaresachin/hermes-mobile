@@ -79,9 +79,13 @@ fun isTrustedServerHost(rawUrl: String): Boolean {
             else -> false
         }
     }
-    // Hostnames: allow (personal tailnet names resolve to CGNAT IPs;
-    // the DNS-rebinding residual is acceptable for this device).
-    return true
+    // Hostnames are trusted only in known-private namespaces. Tailscale
+    // MagicDNS (`*.ts.net`) and mDNS (`*.local`) are the documented paths;
+    // any other hostname over cleartext would ship the Bearer key to a public
+    // host, so require https:// for it. (QR pairing only ever emits a bare IP.)
+    return host.endsWith(".ts.net") || host.endsWith(".local") ||
+        host.endsWith(".internal") || host.endsWith(".lan") ||
+        host.endsWith(".home.arpa")
 }
 
 /** Server-side Hermes update state (Settings → Server → Update card). */
@@ -99,7 +103,7 @@ data class UpdatePanelState(
 )
 
 data class SettingsUiState(
-    val baseUrl: String = "http://localhost:8080",
+    val baseUrl: String = "http://localhost:8642",
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val errorDetail: String? = null,
     val isDarkTheme: Boolean = false,
@@ -655,7 +659,7 @@ class SettingsViewModel @Inject constructor(
     /** Re-test the saved connection (URL may have changed on the network). */
     fun refreshFromBridge() {
         val cfg = repository.getSavedConfig()
-        if (cfg == null || cfg.baseUrl.isBlank() || cfg.baseUrl == "http://localhost:8080") {
+        if (cfg == null || cfg.baseUrl.isBlank() || cfg.baseUrl == "http://localhost:8642") {
             _uiState.update { it.copy(authError = "Enter your server URL first, then refresh") }
             return
         }

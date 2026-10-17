@@ -53,7 +53,7 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC, id ASC")
     suspend fun getMessagesOnce(sessionId: String): List<Message>
 
-    @Query("SELECT * FROM messages WHERE content LIKE :query ORDER BY timestamp DESC")
+    @Query("SELECT * FROM messages WHERE content LIKE :query ESCAPE '\\' ORDER BY timestamp DESC")
     suspend fun searchMessages(query: String): List<Message>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

@@ -13,7 +13,7 @@ android {
     compileSdk = 34
 
     // Release signing: read from local.properties (gitignored) or HERMES_* env.
-    // Absent → falls back to debug signing so CI/other machines still build.
+    // Absent → the release APK is emitted UNSIGNED (no debug-signing fallback).
     val ksProps = Properties().apply {
         val f = rootProject.file("local.properties")
         if (f.exists()) f.inputStream().use { load(it) }
@@ -65,9 +65,11 @@ android {
             )
         }
         debug {
-            // R8 on debug too — the delivered APK is the debug build, and
-            // without minify it ships ~8MB of dead dex (all 2000+ material
-            // icons, unused deps). Same signature, installs over existing.
+            // R8 on debug too: the debug build is what gets sideloaded during
+            // development, and without minify it ships ~8MB of dead dex (all
+            // 2000+ material icons, unused deps). NOTE: debug is signed with the
+            // Android DEBUG key, not the release key — it will not install over
+            // a release-signed install (and vice versa).
             // NOTE: isShrinkResources stays OFF here — with it on, AGP pads
             // the APK with a ~15MB zero hole (zipalign/page-align artifact),
             // making the file BIGGER than before.
