@@ -65,6 +65,9 @@ class RunController @Inject constructor(
         // A run whose status endpoint 404s (gateway restarted, TTL swept):
         // stop polling and settle the bubble from the session transcript.
         private const val STATUS_MISS_LIMIT = 4
+        // Grace after the live turn disappears before "no answer" is believed:
+        // the terminal handler persists the final bubble asynchronously.
+        private const val SETTLE_GRACE_MS = 3_000L
     }
 
     /** A tool call awaiting the user's Approve/Deny decision. */
@@ -125,29 +128,39 @@ class RunController @Inject constructor(
      * invisible next to multi-second LLM turns. */
     suspend fun awaitTurn(sessionId: String, sinceMs: Long, timeoutMs: Long = 300_000L): String? {
         val deadline = System.currentTimeMillis() + timeoutMs
-        // startTurn registers the turn asynchronously — wait for it to appear
-        // (or for admission to fail fast, which also clears quickly).
-        var registered = isBusy(sessionId)
-        while (!registered && System.currentTimeMillis() < deadline) {
+        // startTurn registers the turn asynchronously, and admission can take
+        // as long as the server takes (cold model, busy gateway). Waiting on a
+        // stopwatch alone reported "no answer" for runs that then answered:
+        // wait for the OUTCOME — the live turn appears, or admission fails.
+        while (!isBusy(sessionId) && api.activeRunId(sessionId) == null &&
+            admitErrors[sessionId] == null && System.currentTimeMillis() < deadline
+        ) {
             delay(100)
-            registered = isBusy(sessionId) || api.activeRunId(sessionId) != null
-            // Admit failed: placeholder deleted, no run saved, and the newest
-            // assistant row predates this call -> nothing will ever arrive.
-            if (!registered && System.currentTimeMillis() - sinceMs > 8_000) return null
         }
+        if (admitErrors[sessionId] != null) return null
+        var idleSince = 0L
         while (System.currentTimeMillis() < deadline) {
             if (!isBusy(sessionId) && api.activeRunId(sessionId) == null) {
                 val last = messageDao.getMessagesOnce(sessionId)
                     .lastOrNull { it.role == com.hermes.mobile.data.model.MessageRole.ASSISTANT && !it.isStreaming }
-                return when {
-                    last != null && last.timestamp >= sinceMs -> last.content
-                    else -> null
-                }
+                if (last != null && last.timestamp >= sinceMs) return last.content
+                // finish() drops the live turn BEFORE finalizeTurn persists the
+                // bubble; reading inside that gap is a false "no answer", so
+                // the first idle sighting only starts a grace window.
+                if (idleSince == 0L) idleSince = System.currentTimeMillis()
+                if (System.currentTimeMillis() - idleSince > SETTLE_GRACE_MS) return null
+                delay(150)
+                continue
             }
+            idleSince = 0L
             delay(250)
         }
         return null
     }
+
+    /** The message a session's newest [startTurn] failed admission with, if
+     * any. Lets the caller report the real cause instead of a blank turn. */
+    fun admitErrorFor(sessionId: String): String? = admitErrors[sessionId]
 
     private inline fun updateTurn(sessionId: String, crossinline f: (LiveTurn) -> LiveTurn) {
         _turns.update { cur -> cur[sessionId]?.let { cur + (sessionId to f(it)) } ?: cur }
@@ -179,6 +192,8 @@ class RunController @Inject constructor(
         displayText: String? = null,
     ) {
         scope.launch {
+            // A new attempt invalidates the previous failure for this session.
+            admitErrors.remove(sessionId)
             // 1. Local rows first — instant feedback, survives everything.
             var uid = userMsgId
             if (uid == null) {
@@ -212,7 +227,9 @@ class RunController @Inject constructor(
                     messageDao.deleteMessage(placeholder)
                     messageDao.updateMessageStatus(uid, MessageStatus.FAILED)
                 } catch (e2: kotlinx.coroutines.CancellationException) { throw e2 } catch (_: Exception) { }
-                onAdmitError(e.message ?: "Could not reach the server.")
+                val reason = e.message ?: "Could not reach the server."
+                admitErrors[sessionId] = reason
+                onAdmitError(reason)
                 return@launch
             }
 
@@ -257,6 +274,10 @@ class RunController @Inject constructor(
     // so a HEALTHY source is never cancelled — that is what would orphan
     // the run's queue server-side.
     private val reconnectBudget = ConcurrentHashMap<String, Int>()
+
+    /** Why a session's newest startTurn failed admission (absent = admitted,
+     *  or not attempted yet). Cleared per start, read by [awaitTurn]. */
+    private val admitErrors = ConcurrentHashMap<String, String>()
 
     /** Wire the delivery channels for a session's live turn. Idempotent:
      * a reopen after navigating away must NOT cancel the healthy event

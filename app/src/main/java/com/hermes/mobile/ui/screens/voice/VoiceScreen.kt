@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -495,35 +496,36 @@ private fun ConversationOrb(
             val flow = if (paused) 0f else drift
             val center = Offset(size.width / 2f, size.height / 2f)
             val radius = size.minDimension / 2f
-            val core = radius * 0.56f * swell * (1f + live * 0.10f)
+            val body = radius * 0.68f * swell * (1f + live * 0.09f)
+            val turn = rot * Math.PI / 180.0
 
             // Light bleeding past the rim: the glow is the "live" part.
             drawCircle(
                 brush = Brush.radialGradient(
-                    colors = listOf(tint.copy(alpha = 0.20f * dim), Color.Transparent),
+                    colors = listOf(tint.copy(alpha = 0.22f * dim), Color.Transparent),
                     center = center,
                     radius = radius,
                 ),
                 radius = radius,
                 center = center,
             )
-            // Four lobes, alternating direction, orbiting and breathing out of
+            // Five lobes, alternating direction, orbiting and drifting out of
             // phase. No shader, no asset — just overlapping soft gradients.
-            repeat(4) { i ->
+            repeat(5) { i ->
                 val direction = if (i % 2 == 0) 1.0 else -1.0
                 val angle = Math.toRadians(
-                    rot * direction * (1.0 + 0.22 * i) + i * 90.0 + flow * 18.0
+                    rot * direction * (1.0 + 0.16 * i) + i * 72.0 + flow * 22.0
                 )
-                val orbit = core * (0.30f + 0.07f * i + 0.12f * flow)
+                val orbit = body * (0.20f + 0.05f * i + 0.10f * flow)
                 val blob = Offset(
                     center.x + cos(angle).toFloat() * orbit,
-                    center.y + sin(angle).toFloat() * orbit * 0.86f,
+                    center.y + sin(angle).toFloat() * orbit * 0.88f,
                 )
-                val blobRadius = core * (1.00f - 0.09f * i)
+                val blobRadius = body * (0.85f - 0.07f * i)
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            (if (i % 2 == 1) accent else tint).copy(alpha = 0.40f * dim),
+                            (if (i % 2 == 1) accent else tint).copy(alpha = 0.30f * dim),
                             Color.Transparent,
                         ),
                         center = blob,
@@ -533,34 +535,41 @@ private fun ConversationOrb(
                     center = blob,
                 )
             }
-            // Body: a lit sphere, not a flat disc — the gradient centre sits
-            // above the middle so the light appears to fall from the top left.
-            drawCircle(
+            // The sphere itself: a wobbly silhouette (three harmonics) filled
+            // with ONE gradient that also carries the fresnel rim — the glassy
+            // edge is what makes it read as a lit body rather than a disc.
+            val path = Path()
+            val steps = 96
+            for (i in 0..steps) {
+                val a = i * 2.0 * Math.PI / steps
+                val wobble = 1.0 +
+                    0.045 * sin(3.0 * a + turn) +
+                    0.028 * sin(5.0 * a - 1.6 * turn + flow * 3.0) +
+                    live * 0.07
+                val r = (body * wobble).toFloat()
+                val point = Offset(
+                    center.x + cos(a).toFloat() * r,
+                    center.y + sin(a).toFloat() * r,
+                )
+                if (i == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
+            }
+            path.close()
+            drawPath(
+                path = path,
                 brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0.60f * dim),
-                        tint.copy(alpha = 0.78f * dim),
-                        tint.copy(alpha = 0.32f * dim),
-                        Color.Transparent,
+                    // Light from the upper left; the last two stops are the rim,
+                    // so the highlight hugs the silhouette as it morphs.
+                    colorStops = arrayOf(
+                        0.00f to Color.White.copy(alpha = 0.34f * dim),
+                        0.30f to accent.copy(alpha = 0.50f * dim),
+                        0.62f to tint.copy(alpha = 0.66f * dim),
+                        0.86f to tint.copy(alpha = 0.42f * dim),
+                        0.94f to Color.White.copy(alpha = 0.24f * dim),
+                        1.00f to Color.Transparent,
                     ),
-                    center = Offset(center.x - core * 0.14f, center.y - core * 0.18f),
-                    radius = core * 1.42f,
+                    center = Offset(center.x - body * 0.20f, center.y - body * 0.24f),
+                    radius = body * 1.55f,
                 ),
-                radius = core * 1.42f,
-                center = center,
-            )
-            // Soft specular cap.
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0.34f * dim),
-                        Color.Transparent,
-                    ),
-                    center = Offset(center.x - core * 0.34f, center.y - core * 0.40f),
-                    radius = core * 0.92f,
-                ),
-                radius = core * 0.92f,
-                center = Offset(center.x - core * 0.34f, center.y - core * 0.40f),
             )
         }
     }

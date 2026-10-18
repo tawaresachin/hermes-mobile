@@ -220,11 +220,21 @@ class VoiceViewModel @Inject constructor(
                 when {
                     reply == null -> {
                         dropTurn(turnId)
-                        onError("Assistant did not answer. Check the model/connection and try again.")
+                        // The real cause (401/429/server message) beats the
+                        // generic line whenever admission is what failed.
+                        onError(
+                            repository.runController.admitErrorFor(sid)
+                                ?: "Assistant did not answer. Check the model/connection and try again."
+                        )
                     }
                     reply.startsWith("\u26a0\ufe0f") -> {
                         dropTurn(turnId)
-                        onError("Assistant did not answer. Check the model/connection and try again.")
+                        // The run failed: the reason (provider 402, timeout, …)
+                        // is far more useful than "did not answer".
+                        onError(
+                            reply.removePrefix("\u26a0\ufe0f").trim().take(300)
+                                .ifBlank { "Assistant did not answer. Check the model/connection and try again." }
+                        )
                     }
                     else -> {
                         // A blank final reply may still have streamed text on
@@ -341,7 +351,8 @@ class VoiceViewModel @Inject constructor(
     }
 
     /** Also the failure exit: [reason] becomes the status line. */
-    fun stopConversation(reason: String? = null) {        if (_conversationPhase.value == ConversationPhase.Off) return
+    fun stopConversation(reason: String? = null) {
+        if (_conversationPhase.value == ConversationPhase.Off) return
         relistenJob?.cancel()
         loopJob?.cancel()
         loopJob = null
