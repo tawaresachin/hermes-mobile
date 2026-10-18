@@ -1343,9 +1343,11 @@ fun SettingsScreen(
                         title = "1. On your computer",
                         steps = listOf(
                             "Needs Python 3.10 or newer — check with:  python3 --version",
-                            "Install the plugin:  python3 -m pip install \"git+https://github.com/tawaresachin/hermes-mobile-plugin@v0.0.36\"",
+                            "Install the plugin:  python3 -m pip install \"git+https://github.com/tawaresachin/hermes-mobile-plugin@v0.0.37\"",
                             "Then run:  hermes-mobile-plugin install",
-                            "It sets up the key, phone access and the QR itself",
+                            "It sets up the key, phone access and opens the QR page in your browser",
+                            "QR file:  ~/.hermes/plugins/hermes-mobile-plugin/qr_code.html",
+                            "Show or regenerate it later:  hermes-mobile-plugin qr",
                             "Check it says 'enabled':  hermes plugins list"
                         )
                     )
