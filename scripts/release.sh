@@ -14,7 +14,8 @@
 #
 # What it does: sets version fields, commits, annotated tag v<ver> on the
 # bumped repos, pushes branch+tags, syncs the deployed plugin copy, prints
-# the consistency verdict via check_versions.sh.
+# the consistency verdict via check_versions.sh. The app's signed release is
+# then published by CI on the tag (release.yml) — no signing key here.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -121,11 +122,13 @@ mkdir -p "$APP_REPO/.git/hooks"
 cp "$SCRIPT_DIR/git-hooks/pre-commit" "$APP_REPO/.git/hooks/pre-commit"
 chmod +x "$APP_REPO/.git/hooks/pre-commit"
 
-# ── ship the GitHub Release (signed APK). SKIP_SHIP=1 to defer. ──
-# Only the APK: the plugin repo ships itself from its own CI (auto-tag.yml),
-# and shipping it here too would race that for the same release.
-if [ "${SKIP_SHIP:-0}" != "1" ] && [ -n "$NEW_APP" ]; then
-  ( cd "$APP_REPO" && ./gradlew :app:assembleRelease -q ) &&       "$SCRIPT_DIR/ship_release.sh" app "$NEW_APP" || echo "   !! app release ship failed (fix + rerun scripts/ship_release.sh app $NEW_APP)"
+# ── the app publishes from CI ──
+# The tag push above starts release.yml: it builds + verifies the signed APK,
+# GPG-signs SHA256SUMS and creates the GitHub release. Signing lives there so
+# no key or passphrase (or plaintext password file) sits in a working tree;
+# the key is only in the repo secrets GPG_PRIVATE_KEY / GPG_PASSPHRASE.
+if [ -n "$NEW_APP" ]; then
+  echo "   app release publishes from CI on tag v$NEW_APP (release.yml)"
 fi
 
 if [ -n "$NEW_PLG" ]; then
@@ -135,4 +138,4 @@ if [ -n "$NEW_PLG" ]; then
 else
   "$SCRIPT_DIR/check_versions.sh"
 fi
-echo "==> done: app=${NEW_APP:-$CUR_APP} plugin=${NEW_PLG:-$CUR_PLG} (tags pushed)"
+echo "==> done: app=${NEW_APP:-$CUR_APP} plugin=${NEW_PLG:-$CUR_PLG} (tags pushed${NEW_APP:+; app publishes from CI})"

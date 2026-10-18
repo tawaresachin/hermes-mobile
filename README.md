@@ -105,6 +105,10 @@ App and plugin are separate products with independent versions.
 `vX.Y.Z` on the right repos, pushes, syncs the deployed plugin copy, and verifies the whole
 contract (`scripts/check_versions.sh`, also installed as a pre-commit hook).
 
+The tag push publishes the app automatically: CI builds the release-signed APK, GPG-signs
+`SHA256SUMS`, and creates the GitHub release (`release.yml`). The signing key lives only in the
+repo secrets `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` — never on a developer machine, never in a file.
+
 ```bash
 ./scripts/release.sh 0.0.48           # app only
 ./scripts/release.sh none 0.0.7       # plugin only

@@ -1,9 +1,13 @@
-name: Build & Verify APK
+name: Build & Publish APK
 
 on:
   push:
     tags:
       - 'v*.*.*'
+
+# Publishing the release for the tag needs write access; nothing else does.
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -11,7 +15,10 @@ jobs:
     # the preinstalled SDK/JDK. This is the image the pipeline is verified on.
     runs-on: ubuntu-24.04
     steps:
+      # Full history: notes are generated from the previous tag.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       # JDK 17: the version this build is verified against locally (AGP 8.7.3 / Kotlin 2.1.0).
       - name: Set up JDK 17
@@ -74,13 +81,51 @@ jobs:
           sha256sum ./*.apk > SHA256SUMS
           cat SHA256SUMS
 
-      # CI only VERIFIES. scripts/release.sh is the sole publisher
-      # (assembleRelease -> ship_release.sh: APK + SHA256SUMS + GPG + notes);
-      # two publishers race to overwrite the same release asset name.
-      - name: Archive verified APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: hermes-mobile-release-apk
-          path: |
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/apk/release/SHA256SUMS
+      # Publish from CI, so no GPG key or passphrase lives on a developer
+      # machine. The key is the repo secret GPG_PRIVATE_KEY; the keyring is a
+      # temp dir that dies with the job, and Actions masks both values.
+      - name: Sign SHA256SUMS
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          [ -n "$GPG_PRIVATE_KEY" ] || { echo "::error::GPG_PRIVATE_KEY secret is not set"; exit 1; }
+          [ -n "$GPG_PASSPHRASE" ] || { echo "::error::GPG_PASSPHRASE secret is not set"; exit 1; }
+          OUT=app/build/outputs/apk/release
+          KEY=4623379304AF02835657282605B0890B1CD804A5
+          GNUPGHOME="$(mktemp -d)"
+          export GNUPGHOME
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --local-user "$KEY" --armor --detach-sign -o "$OUT/SHA256SUMS.asc" "$OUT/SHA256SUMS"
+          gpg --batch --verify "$OUT/SHA256SUMS.asc" "$OUT/SHA256SUMS"
+          # Export the public half from the signing key, so the release asset
+          # can never disagree with the signature.
+          gpg --armor --export "$KEY" > "$OUT/hermes-release-public-key.asc"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          OUT=app/build/outputs/apk/release
+          PREV=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | grep -vx "$TAG" | head -1 || true)
+          {
+            if [ -n "$PREV" ]; then printf '## Changes since %s\n\n' "$PREV"; fi
+            git log -n 40 --no-merges --pretty=format:'- %s' "${PREV:+$PREV..}$TAG"
+            printf '\n\nAndroid client for Hermes Agent. One APK runs on every device (Android 8+).\n\n'
+            # shellcheck disable=SC2016  # backticks are markdown, not substitution
+            printf '**Install:** download `Hermes-Mobile-%s.apk`, open it, allow "install from unknown sources" once.\n\n' "$TAG"
+            printf '**Verify:**\n```bash\n'
+            printf 'sha256sum -c SHA256SUMS --ignore-missing\n'
+            printf 'gpg --import hermes-release-public-key.asc\n'
+            printf 'gpg --verify SHA256SUMS.asc SHA256SUMS\n```\n'
+          } > NOTES.md
+          gh release create "$TAG" \
+            "$OUT/Hermes-Mobile-$TAG.apk" "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.asc" \
+            "$OUT/hermes-release-public-key.asc" \
+            --title "$TAG" --notes-file NOTES.md
+          echo "::notice::published $TAG with the signed APK"

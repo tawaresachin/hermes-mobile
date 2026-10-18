@@ -2,6 +2,11 @@
 # Sign + ship release artifacts to GitHub Releases.
 #   scripts/ship_release.sh <app|plugin> <version> [notes...]
 #
+# CI publishes app releases automatically on the tag (release.yml), signing
+# with the repo's GPG_PRIVATE_KEY secret. This script is the manual recovery
+# path for when the workflow could not run; it needs the local GPG key and
+# writes a plaintext passphrase file, so prefer the workflow.
+#
 # Design: the APP ships one universal (per-OS nothing — every Android device
 # takes the same APK) signed APK. The PLUGIN is pure Python (py3-none-any
 # wheel), so ONE wheel + ONE sdist already cover Windows/macOS/Linux/Termux
