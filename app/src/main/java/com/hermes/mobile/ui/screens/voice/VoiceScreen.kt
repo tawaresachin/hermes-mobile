@@ -34,8 +34,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
@@ -54,9 +57,15 @@ import com.hermes.mobile.ui.components.AutoPlayAudio
 import com.hermes.mobile.ui.components.ModelPickerSheet
 import com.hermes.mobile.ui.screens.chat.ApprovalCard
 import com.hermes.mobile.ui.theme.HermesPrimary
+import com.hermes.mobile.ui.theme.VoiceCoreWhite
+import com.hermes.mobile.ui.theme.VoiceNeonBlue
+import com.hermes.mobile.ui.theme.VoiceNeonCyan
+import com.hermes.mobile.ui.theme.VoiceNeonMagenta
+import com.hermes.mobile.ui.theme.VoiceNeonViolet
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -426,56 +435,65 @@ fun VoiceScreen() {
     }
 }
 
-/** The hands-free surface, ported from the reference conversation overlay
- * (`voiceOrb*` styles in opencode-mobile's bundle): a 252dp shell with a 1dp
- * edge over a **clipped** 212dp core holding a mint top blob, a blue bottom
- * blob and a small specular dot. The clip is the edge — a soft glow with a
- * fading rim has no silhouette, which is exactly what was missing. It swells
- * with your voice and doubles as the barge-in button while a reply plays. */
+/** The hands-free surface. This is the neon energy sphere this app already
+ * shipped once — the look behind `SphereGLRenderer` in the v2.x voice screen —
+ * rebuilt in Compose because a 252dp orb needs no GL surface: a dark glass
+ * body, a **luminous rim** (shader: `palette * smoothstep(0.68, 0.99, d) *
+ * 2.2`), wispy dashed filaments inside it, Siri rings sweeping outward and a
+ * white-hot core. The rim is what makes the edge read — a soft glow alone has
+ * no silhouette, which is exactly what was missing. It pulses with your voice
+ * and is the barge-in button while a reply plays.
+ *
+ * shortcut: every layer redraws on each animation frame (~16 gradient draws);
+ * move the static body to drawWithCache or cap the frame clock if battery
+ * ever becomes an issue on this screen. */
 @Composable
 private fun ConversationOrb(
     phase: ConversationPhase,
     level: State<Float>,
     onTap: () -> Unit,
 ) {
-    val accent = orbAccent(phase)
+    val (colorA, colorB) = orbPalette(phase)
     val paused = phase == ConversationPhase.Paused
+    val ringCount = when (phase) {
+        ConversationPhase.Listening -> 4
+        ConversationPhase.Transcribing,
+        ConversationPhase.Thinking,
+        ConversationPhase.Speaking -> 3
+        ConversationPhase.Off,
+        ConversationPhase.Paused -> 2
+    }
+    val ringSpeed = when (phase) {
+        ConversationPhase.Listening -> 1.3f
+        ConversationPhase.Transcribing,
+        ConversationPhase.Thinking -> 0.8f
+        ConversationPhase.Speaking -> 1f
+        ConversationPhase.Off,
+        ConversationPhase.Paused -> 0.5f
+    }
     val transition = rememberInfiniteTransition(label = "orb")
     val spin by transition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            tween(
-                when (phase) {
-                    ConversationPhase.Thinking,
-                    ConversationPhase.Transcribing -> 9_000
-                    ConversationPhase.Speaking -> 14_000
-                    else -> 26_000
-                },
-                easing = LinearEasing
-            )
-        ),
+        animationSpec = infiniteRepeatable(tween(18_000, easing = LinearEasing)),
         label = "orb-spin",
     )
-    val breathe by transition.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.05f,
-        animationSpec = infiniteRepeatable(
-            tween(3_400, easing = FastOutSlowInEasing),
-            RepeatMode.Reverse
-        ),
-        label = "orb-breathe",
-    )
-    // A slow second clock stops the lobes from tracing the same circle, which
-    // is what makes the motion read as fluid rather than mechanical.
-    val drift by transition.animateFloat(
+    // Sweep at the state's own ring speed, so the wrap never stutters (a
+    // fixed period times a fractional speed jumps when the clock resets).
+    val ringT by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            tween(7_300, easing = FastOutSlowInEasing),
-            RepeatMode.Reverse
+            tween((2_600 / ringSpeed).toInt(), easing = LinearEasing)
         ),
-        label = "orb-drift",
+        label = "orb-rings",
+    )
+    // 4s reverse breath, same as the old sphere.
+    val breathe by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.02f,
+        animationSpec = infiniteRepeatable(tween(4_000, easing = LinearEasing), RepeatMode.Reverse),
+        label = "orb-breathe",
     )
     Box(
         modifier = Modifier
@@ -486,14 +504,6 @@ private fun ConversationOrb(
                 scaleY = breathe
             }
             .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.02f))
-            .border(
-                1.dp,
-                // Reference border: blue-tinted at rest, teal while speaking.
-                if (phase == ConversationPhase.Speaking) Color(0xFF4EE0B6).copy(alpha = 0.14f)
-                else Color(0xFF2C8CFF).copy(alpha = 0.19f),
-                CircleShape,
-            )
             .clickable(
                 enabled = phase == ConversationPhase.Speaking || phase == ConversationPhase.Off,
                 onClickLabel = when (phase) {
@@ -509,68 +519,185 @@ private fun ConversationOrb(
         Canvas(Modifier.size(212.dp).align(Alignment.Center)) {
             val live =
                 if (phase == ConversationPhase.Listening) sqrt(level.value.coerceIn(0f, 1f)) else 0f
-            val dim = if (paused) 0.45f else 1f
-            // A paused loop costs nothing: not reading the animated values
-            // stops the canvas invalidating until the phase moves again.
-            val rot = if (paused) 0f else spin
-            val flow = if (paused) 0f else drift
+            // Freeze the clock while paused so the sphere holds still (the
+            // canvas still redraws each frame — see the shortcut note above).
+            val turn = if (paused) 0f else (spin * Math.PI / 180.0).toFloat()
             val d = size.minDimension
-            val u = d / 212f
-            val turn = rot * Math.PI / 180.0
-            // The clip is the edge. Inside it sit the reference's two blobs,
-            // drifting on their own clocks so the sphere still moves.
+            val r = d / 2f
+            val mid = Offset(r, r)
+            // THINKING sweeps violet -> magenta and back (the shader grew
+            // uHueShift with time so the mix cycled instead of clamping).
+            val shift = when (phase) {
+                ConversationPhase.Transcribing,
+                ConversationPhase.Thinking -> (turn / 6.2831853f * 2.7f) % 1f
+                else -> 0f
+            }
+            val ca = lerp(colorA, colorB, shift)
+            val cb = lerp(colorB, colorA, shift)
+            // SPEAKING has no mic, so it uses the shader's synthetic
+            // amplitude: the reply pulses the core instead of freezing it.
+            val vol = when (phase) {
+                ConversationPhase.Listening -> live
+                ConversationPhase.Speaking -> 0.35f + 0.55f * abs(sin(turn * 1.6)).toFloat()
+                else -> 0f
+            }
+            val pulse = when (phase) {
+                ConversationPhase.Listening -> 0.75f + 0.55f * vol
+                ConversationPhase.Transcribing,
+                ConversationPhase.Thinking -> 0.85f + 0.15f * sin(turn * 2.4).toFloat()
+                ConversationPhase.Speaking -> 0.9f + 0.35f * vol
+                ConversationPhase.Off,
+                ConversationPhase.Paused -> 0.45f + 0.35f * (0.5f + 0.5f * sin(turn * 0.8).toFloat())
+            } * (if (paused) 0.5f else 1f)
+
+            // Outer halo. The old sphere used a separate blurred 440dp
+            // Canvas; one wide, soft gradient reads the same.
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        ca.copy(alpha = 0.14f * pulse),
+                        cb.copy(alpha = 0.06f * pulse),
+                        Color.Transparent,
+                    ),
+                    center = mid,
+                    radius = r * 1.12f,
+                ),
+                radius = r * 1.12f,
+                center = mid,
+            )
             clipPath(Path().apply { addOval(Rect(0f, 0f, d, d)) }) {
+                // Dark glass body + haze.
+                drawCircle(color = Color(0xFF05050D), radius = r, center = mid)
                 drawCircle(
-                    color = Color(0xFFDDF7F6),
-                    radius = d / 2f,
-                    center = Offset(d / 2f, d / 2f),
-                )
-                // Top blob: 126dp at top 18 (`voiceOrbBlobTop`), brightening
-                // toward the phase accent as you speak.
-                drawCircle(
-                    color = lerp(Color(0xFFD7F3F0), accent, live * 0.35f)
-                        .copy(alpha = 0.95f * dim),
-                    radius = 63f * u * (1f + live * 0.06f),
-                    center = Offset(
-                        d / 2f + sin(turn * 0.7 + flow * 2.0).toFloat() * 5f * u,
-                        (18f + 63f) * u + cos(turn * 0.5 + flow * 2.0).toFloat() * 4f * u,
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color.Transparent, Color(0xFF0A0E20)),
+                        center = mid,
+                        radius = r,
                     ),
+                    radius = r,
+                    center = mid,
                 )
-                // Bottom blob: 188x122dp at bottom 8 (`voiceOrbBlobBottom`).
-                drawOval(
-                    color = Color(0xFF2C8CFF).copy(alpha = 0.88f * dim),
-                    topLeft = Offset(
-                        d / 2f - 94f * u - sin(turn * 0.4 + flow * 2.0).toFloat() * 6f * u,
-                        (212f - 8f - 122f) * u + sin(turn * 0.6 + flow * 2.0).toFloat() * 3f * u,
-                    ),
-                    size = Size(188f * u, 122f * u),
-                )
-                // Specular dot: 42dp at top 30 / left 36 (`voiceOrbHighlight`).
+                // Wispy plasma ribbons: six dashed cubic curves on a
+                // golden-angle spread, drifting with the spin. This stands in
+                // for the shader's curl-warped noise zero-crossings — a
+                // per-pixel noise field in Compose would cost far more than
+                // it is worth at this size.
+                val toRad = (Math.PI / 180.0).toFloat()
+                fun at(radius: Float, angle: Float) =
+                    Offset(mid.x + cos(angle) * radius, mid.y + sin(angle) * radius)
+                for (i in 0 until 6) {
+                    val a0 = (i * 137.5f + spin * (0.20f + 0.04f * i)) * toRad
+                    val out = r * (0.62f + 0.30f * ((i * 0.618f) % 1f))
+                    val in1 = r * (0.14f + 0.34f * ((i * 0.382f + 0.21f) % 1f))
+                    val in2 = r * (0.14f + 0.34f * ((i * 0.271f + 0.63f) % 1f))
+                    val sweep = 1.5f + 1.1f * ((i * 0.427f) % 1f)
+                    val head = at(out, a0)
+                    val c1 = at(in1, a0 + sweep * 0.30f)
+                    val c2 = at(in2, a0 + sweep * 0.72f)
+                    val tail = at(out * (0.72f + 0.25f * ((i * 0.55f) % 1f)), a0 + sweep)
+                    val wisp = Path().apply {
+                        moveTo(head.x, head.y)
+                        cubicTo(c1.x, c1.y, c2.x, c2.y, tail.x, tail.y)
+                    }
+                    drawPath(
+                        path = wisp,
+                        color = lerp(ca, cb, (i * 0.618f) % 1f)
+                            .copy(alpha = (0.45f + 0.35f * vol) * pulse),
+                        style = Stroke(
+                            width = 1.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(
+                                floatArrayOf(5.dp.toPx(), 9.dp.toPx()),
+                                0f,
+                            ),
+                        ),
+                    )
+                }
+                // Siri rings — the shader's pow(fract(d * rings - t * speed), 14),
+                // softened to u^4 so the sweep is visible while it travels.
+                val ringColor = lerp(cb, Color.White, 0.3f)
+                for (i in 0 until ringCount) {
+                    val u = (i.toFloat() / ringCount + ringT) % 1f
+                    val fade = u * u * u * u * (1f - smoothstep(0.90f, 0.99f, u))
+                    drawCircle(
+                        color = ringColor.copy(
+                            alpha = (fade * (1.1f + vol * 2.4f) * pulse * 0.6f).coerceIn(0f, 1f)
+                        ),
+                        radius = r * (0.12f + 0.86f * u),
+                        center = mid,
+                        style = Stroke(width = 1.4.dp.toPx()),
+                    )
+                }
+                // The luminous rim: a bright band peaking just inside the
+                // silhouette, then a crisp hued edge stroke.
                 drawCircle(
-                    color = Color.White.copy(alpha = 0.36f * dim),
-                    radius = 21f * u,
-                    center = Offset((36f + 21f) * u, (30f + 21f) * u),
+                    brush = Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0.00f to Color.Transparent,
+                            0.70f to Color.Transparent,
+                            0.90f to ca.copy(alpha = 0.22f * pulse),
+                            0.98f to cb.copy(alpha = 0.80f * pulse),
+                            1.00f to Color.Transparent,
+                        ),
+                        center = mid,
+                        radius = r,
+                    ),
+                    radius = r,
+                    center = mid,
+                )
+                // Directional hue, like the shader's mix(colorA, colorB, x).
+                drawCircle(
+                    brush = Brush.linearGradient(
+                        colors = listOf(ca, cb),
+                        start = Offset(0f, r),
+                        end = Offset(d, r),
+                    ),
+                    radius = r * 0.985f,
+                    center = mid,
+                    style = Stroke(width = 1.6.dp.toPx()),
+                    alpha = (0.7f + 0.3f * pulse).coerceIn(0f, 1f),
+                )
+                // White-hot core: mix(palette, white, 0.9) * exp(-d * 5.0),
+                // pushed hotter by volume.
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.95f * pulse),
+                            lerp(ca, Color.White, 0.5f).copy(alpha = 0.30f * pulse),
+                            Color.Transparent,
+                        ),
+                        center = mid,
+                        radius = r * 0.34f,
+                    ),
+                    radius = r * 0.34f,
+                    center = mid,
                 )
             }
         }
     }
 }
 
-/** The phase hue the sphere's top blob warms toward while you speak. */
-private fun orbAccent(phase: ConversationPhase): Color = when (phase) {
-    ConversationPhase.Listening -> Color(0xFF6366F1)
-    ConversationPhase.Transcribing -> Color(0xFF60A5FA)
-    ConversationPhase.Thinking -> Color(0xFFF472B6)
-    ConversationPhase.Speaking -> Color(0xFF38BDF8)
-    ConversationPhase.Paused -> Color(0xFF64748B)
-    ConversationPhase.Off -> Color(0xFF8B5CF6)
+/** GLSL's smoothstep, which the rim math above mirrors. */
+private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
+    val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
+}
+
+/** The neon palette of this app's own v2.x voice sphere (the `VoiceNeon*`
+ * tokens in theme/Color.kt): outer/left, then inner/right, per phase. */
+private fun orbPalette(phase: ConversationPhase): Pair<Color, Color> = when (phase) {
+    ConversationPhase.Listening -> VoiceNeonCyan to VoiceNeonBlue
+    ConversationPhase.Transcribing,
+    ConversationPhase.Thinking -> VoiceNeonViolet to VoiceNeonMagenta
+    ConversationPhase.Speaking -> VoiceNeonBlue to VoiceCoreWhite
+    ConversationPhase.Off,
+    ConversationPhase.Paused -> VoiceNeonCyan to VoiceNeonBlue
 }
 
 private fun conversationStatusText(phase: ConversationPhase, status: String?): String = when (phase) {
     ConversationPhase.Listening -> "Listening… speak any time"
     ConversationPhase.Transcribing -> "Transcribing…"
     ConversationPhase.Thinking -> "Hermes is thinking…"
-    ConversationPhase.Speaking -> "Speaking… tap the circle to interrupt"
+    ConversationPhase.Speaking -> "Speaking… tap the orb to interrupt"
     ConversationPhase.Paused -> status ?: "Paused"
     ConversationPhase.Off -> status ?: "Tap to start — hands-free, and Hermes speaks back."
 }

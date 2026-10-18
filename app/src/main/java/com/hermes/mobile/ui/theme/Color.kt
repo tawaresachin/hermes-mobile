@@ -49,7 +49,7 @@ val InputBarDark        = Color(0xFF17212B)  // Telegram dark input field
 
 // ═══════════════════════════════════════════════════════════
 // Voice sphere — FRIDAY/Siri neon palette
-// (drives SphereGLRenderer uniforms + VoiceScreen chrome)
+// (the conversation orb's palette in VoiceScreen)
 // ═══════════════════════════════════════════════════════════
 val VoiceNeonCyan      = Color(0xFF69E5E5)
 val VoiceNeonBlue      = Color(0xFF3D8BFF)
