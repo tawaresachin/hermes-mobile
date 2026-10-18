@@ -81,6 +81,7 @@ import coil.compose.AsyncImage
 import com.hermes.mobile.data.local.DraftStore
 import com.hermes.mobile.data.model.*
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.data.runs.RunController
 import com.hermes.mobile.ui.markdown.TableParse
 import com.hermes.mobile.ui.preview.FilePreviewSheet
 import com.hermes.mobile.ui.preview.previewKindFor
@@ -690,7 +691,6 @@ class ChatViewModel @Inject constructor(
                             })
                     } ?: emptyList()
                     _pendingApproval.value = turn?.pendingApproval
-                        ?.let { ApprovalUi(it.command, it.description, it.choices) }
                     _turnStatusNote.value = turn?.statusNote
                     // Turn settled (busy → idle for THIS session): drain the
                     // FIFO queue — the next queued message gets its turn now.
@@ -743,10 +743,8 @@ class ChatViewModel @Inject constructor(
 
     /** A tool call waiting for the user's decision (rendered as an inline
      * approval card above the composer). */
-    data class ApprovalUi(val command: String, val description: String, val choices: List<String>)
-
-    private val _pendingApproval = MutableStateFlow<ApprovalUi?>(null)
-    val pendingApproval: StateFlow<ApprovalUi?> = _pendingApproval.asStateFlow()
+    private val _pendingApproval = MutableStateFlow<RunController.ApprovalRequest?>(null)
+    val pendingApproval: StateFlow<RunController.ApprovalRequest?> = _pendingApproval.asStateFlow()
 
     /** Agent lifecycle note from the live run (rate-limit wait, retry
      * countdown) — the header subtitle shows it instead of bare "thinking". */
@@ -3529,7 +3527,7 @@ fun TypingIndicator() {
 // must see what they're approving) + the server's own choice set.
 @Composable
 fun ApprovalCard(
-    approval: ChatViewModel.ApprovalUi,
+    approval: RunController.ApprovalRequest,
     onResolve: (String) -> Unit,
 ) {
     val label = mapOf(
