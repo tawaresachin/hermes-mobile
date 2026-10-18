@@ -53,6 +53,20 @@ if [ -n "$NEW_PLG" ] && [ "$CUR_PLG" != "$NEW_PLG" ] \
   echo "!! refusing plugin downgrade: $CUR_PLG -> $NEW_PLG" >&2; exit 1
 fi
 
+# A release commit carries only the version bump, so anything left
+# uncommitted here would be silently absent from the tag and from the APK
+# built off it. Fail before the bump instead of warning after the push.
+require_clean() {  # <repo> <label>
+  if [ -n "$(gitx "$1" status --porcelain)" ]; then
+    echo "!! $2 has uncommitted changes — commit them first, or the tag" >&2
+    echo "   would point at a commit that does not contain them:" >&2
+    gitx "$1" status --short >&2
+    exit 1
+  fi
+}
+[ -n "$NEW_APP" ] && require_clean "$APP_REPO" hermes-mobile
+[ -n "$NEW_PLG" ] && require_clean "$PLUGIN_REPO" hermes-mobile-plugin
+
 release_repo() {  # <repo> <newver>
   local repo="$1" ver="$2"
   branch="$(gitx "$repo" branch --show-current)"
