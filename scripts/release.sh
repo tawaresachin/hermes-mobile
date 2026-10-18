@@ -98,11 +98,18 @@ if [ -n "$NEW_PLG" ]; then
   V="$NEW_PLG" perl -0777 -i -pe 's/^version = "[0-9.]+"/version = "$ENV{V}"/m' "$PLUGIN_REPO/pyproject.toml"
   gitx "$PLUGIN_REPO" add plugin.yaml src/hermes_mobile_plugin/plugin.yaml pyproject.toml
   gitx "$PLUGIN_REPO" diff --cached --quiet || gitx "$PLUGIN_REPO" commit -q --no-verify -m "release plugin v$NEW_PLG${MSG:+ — $MSG}"
-  # Push the bump and stop. hermes-mobile-plugin's auto-tag.yml owns everything
-  # after this (tag, wheel+sdist, GitHub release, PyPI) and triggers on this
-  # push. Tagging here would make it see an existing tag and skip all of it,
-  # leaving the version tagged with no artifacts and no PyPI upload.
-  gitx "$PLUGIN_REPO" push -q origin "$(gitx "$PLUGIN_REPO" branch --show-current)"
+  if [ "$CUR_PLG" = "$NEW_PLG" ]; then
+    # Same version = docs/tooling only. auto-tag.yml ignores a plugin.yaml that
+    # did not change, so it will never tag this commit; moving the tag here is
+    # the only way back to "tag == HEAD".
+    release_repo "$PLUGIN_REPO" "$NEW_PLG"
+  else
+    # Push the bump and stop. hermes-mobile-plugin's auto-tag.yml owns everything
+    # after this (tag, wheel+sdist, GitHub release, PyPI) and triggers on this
+    # push. Tagging here would make it see an existing tag and skip all of it,
+    # leaving the version tagged with no artifacts and no PyPI upload.
+    gitx "$PLUGIN_REPO" push -q origin "$(gitx "$PLUGIN_REPO" branch --show-current)"
+  fi
 fi
 
 # ── deployed plugin copy (gateway reads the new number on next start) ──
