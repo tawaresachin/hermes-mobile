@@ -335,7 +335,8 @@ class VoiceViewModel @Inject constructor(
         }
         val sid = _selectedSessionId.value
         if (sid != null && repository.runController.isBusy(sid)) {
-            _conversationStatus.value = "Wait for the current reply to finish before starting conversation mode."
+            _conversationStatus.value =
+                "Wait for the current reply to finish — stop it in Chat (/stop) if it is stuck."
             return
         }
         _conversationStatus.value = null

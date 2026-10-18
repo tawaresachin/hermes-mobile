@@ -15,6 +15,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,9 +32,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -421,16 +426,19 @@ fun VoiceScreen() {
     }
 }
 
-/** The hands-free surface: a GPT-live style bubble — a soft, molten sphere
- * with slow counter-rotating lobes, no rim and no icon, that swells with your
- * voice and doubles as the barge-in button while a reply plays. */
+/** The hands-free surface, ported from the reference conversation overlay
+ * (`voiceOrb*` styles in opencode-mobile's bundle): a 252dp shell with a 1dp
+ * edge over a **clipped** 212dp core holding a mint top blob, a blue bottom
+ * blob and a small specular dot. The clip is the edge — a soft glow with a
+ * fading rim has no silhouette, which is exactly what was missing. It swells
+ * with your voice and doubles as the barge-in button while a reply plays. */
 @Composable
 private fun ConversationOrb(
     phase: ConversationPhase,
     level: State<Float>,
     onTap: () -> Unit,
 ) {
-    val (tint, accent) = orbColors(phase)
+    val accent = orbAccent(phase)
     val paused = phase == ConversationPhase.Paused
     val transition = rememberInfiniteTransition(label = "orb")
     val spin by transition.animateFloat(
@@ -471,8 +479,21 @@ private fun ConversationOrb(
     )
     Box(
         modifier = Modifier
-            .size(220.dp)
+            .size(252.dp)
+            .graphicsLayer {
+                if (paused) return@graphicsLayer
+                scaleX = breathe
+                scaleY = breathe
+            }
             .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.02f))
+            .border(
+                1.dp,
+                // Reference border: blue-tinted at rest, teal while speaking.
+                if (phase == ConversationPhase.Speaking) Color(0xFF4EE0B6).copy(alpha = 0.14f)
+                else Color(0xFF2C8CFF).copy(alpha = 0.19f),
+                CircleShape,
+            )
             .clickable(
                 enabled = phase == ConversationPhase.Speaking || phase == ConversationPhase.Off,
                 onClickLabel = when (phase) {
@@ -485,105 +506,64 @@ private fun ConversationOrb(
     ) {
         // Read the level inside draw, not composition: 33 updates/s must
         // invalidate the canvas only, never rebuild the screen.
-        Canvas(Modifier.fillMaxSize()) {
+        Canvas(Modifier.size(212.dp).align(Alignment.Center)) {
             val live =
                 if (phase == ConversationPhase.Listening) sqrt(level.value.coerceIn(0f, 1f)) else 0f
             val dim = if (paused) 0.45f else 1f
             // A paused loop costs nothing: not reading the animated values
             // stops the canvas invalidating until the phase moves again.
             val rot = if (paused) 0f else spin
-            val swell = if (paused) 1f else breathe
             val flow = if (paused) 0f else drift
-            val center = Offset(size.width / 2f, size.height / 2f)
-            val radius = size.minDimension / 2f
-            val body = radius * 0.68f * swell * (1f + live * 0.09f)
+            val d = size.minDimension
+            val u = d / 212f
             val turn = rot * Math.PI / 180.0
-
-            // Light bleeding past the rim: the glow is the "live" part.
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(tint.copy(alpha = 0.22f * dim), Color.Transparent),
-                    center = center,
-                    radius = radius,
-                ),
-                radius = radius,
-                center = center,
-            )
-            // Five lobes, alternating direction, orbiting and drifting out of
-            // phase. No shader, no asset — just overlapping soft gradients.
-            repeat(5) { i ->
-                val direction = if (i % 2 == 0) 1.0 else -1.0
-                val angle = Math.toRadians(
-                    rot * direction * (1.0 + 0.16 * i) + i * 72.0 + flow * 22.0
-                )
-                val orbit = body * (0.20f + 0.05f * i + 0.10f * flow)
-                val blob = Offset(
-                    center.x + cos(angle).toFloat() * orbit,
-                    center.y + sin(angle).toFloat() * orbit * 0.88f,
-                )
-                val blobRadius = body * (0.85f - 0.07f * i)
+            // The clip is the edge. Inside it sit the reference's two blobs,
+            // drifting on their own clocks so the sphere still moves.
+            clipPath(Path().apply { addOval(Rect(0f, 0f, d, d)) }) {
                 drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            (if (i % 2 == 1) accent else tint).copy(alpha = 0.30f * dim),
-                            Color.Transparent,
-                        ),
-                        center = blob,
-                        radius = blobRadius,
+                    color = Color(0xFFDDF7F6),
+                    radius = d / 2f,
+                    center = Offset(d / 2f, d / 2f),
+                )
+                // Top blob: 126dp at top 18 (`voiceOrbBlobTop`), brightening
+                // toward the phase accent as you speak.
+                drawCircle(
+                    color = lerp(Color(0xFFD7F3F0), accent, live * 0.35f)
+                        .copy(alpha = 0.95f * dim),
+                    radius = 63f * u * (1f + live * 0.06f),
+                    center = Offset(
+                        d / 2f + sin(turn * 0.7 + flow * 2.0).toFloat() * 5f * u,
+                        (18f + 63f) * u + cos(turn * 0.5 + flow * 2.0).toFloat() * 4f * u,
                     ),
-                    radius = blobRadius,
-                    center = blob,
+                )
+                // Bottom blob: 188x122dp at bottom 8 (`voiceOrbBlobBottom`).
+                drawOval(
+                    color = Color(0xFF2C8CFF).copy(alpha = 0.88f * dim),
+                    topLeft = Offset(
+                        d / 2f - 94f * u - sin(turn * 0.4 + flow * 2.0).toFloat() * 6f * u,
+                        (212f - 8f - 122f) * u + sin(turn * 0.6 + flow * 2.0).toFloat() * 3f * u,
+                    ),
+                    size = Size(188f * u, 122f * u),
+                )
+                // Specular dot: 42dp at top 30 / left 36 (`voiceOrbHighlight`).
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.36f * dim),
+                    radius = 21f * u,
+                    center = Offset((36f + 21f) * u, (30f + 21f) * u),
                 )
             }
-            // The sphere itself: a wobbly silhouette (three harmonics) filled
-            // with ONE gradient that also carries the fresnel rim — the glassy
-            // edge is what makes it read as a lit body rather than a disc.
-            val path = Path()
-            val steps = 96
-            for (i in 0..steps) {
-                val a = i * 2.0 * Math.PI / steps
-                val wobble = 1.0 +
-                    0.045 * sin(3.0 * a + turn) +
-                    0.028 * sin(5.0 * a - 1.6 * turn + flow * 3.0) +
-                    live * 0.07
-                val r = (body * wobble).toFloat()
-                val point = Offset(
-                    center.x + cos(a).toFloat() * r,
-                    center.y + sin(a).toFloat() * r,
-                )
-                if (i == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
-            }
-            path.close()
-            drawPath(
-                path = path,
-                brush = Brush.radialGradient(
-                    // Light from the upper left; the last two stops are the rim,
-                    // so the highlight hugs the silhouette as it morphs.
-                    colorStops = arrayOf(
-                        0.00f to Color.White.copy(alpha = 0.34f * dim),
-                        0.30f to accent.copy(alpha = 0.50f * dim),
-                        0.62f to tint.copy(alpha = 0.66f * dim),
-                        0.86f to tint.copy(alpha = 0.42f * dim),
-                        0.94f to Color.White.copy(alpha = 0.24f * dim),
-                        1.00f to Color.Transparent,
-                    ),
-                    center = Offset(center.x - body * 0.20f, center.y - body * 0.24f),
-                    radius = body * 1.55f,
-                ),
-            )
         }
     }
 }
 
-/** Gradient pairs: a second hue keeps the sphere from reading as one flat
- * blob (and gives the lobes something to flow between). */
-private fun orbColors(phase: ConversationPhase): Pair<Color, Color> = when (phase) {
-    ConversationPhase.Listening -> Color(0xFF38BDF8) to Color(0xFF6366F1)
-    ConversationPhase.Transcribing -> Color(0xFF22D3EE) to Color(0xFF60A5FA)
-    ConversationPhase.Thinking -> Color(0xFFA78BFA) to Color(0xFFF472B6)
-    ConversationPhase.Speaking -> Color(0xFF34D399) to Color(0xFF38BDF8)
-    ConversationPhase.Paused -> Color(0xFF94A3B8) to Color(0xFF64748B)
-    ConversationPhase.Off -> Color(0xFF5B8DEF) to Color(0xFF8B5CF6)
+/** The phase hue the sphere's top blob warms toward while you speak. */
+private fun orbAccent(phase: ConversationPhase): Color = when (phase) {
+    ConversationPhase.Listening -> Color(0xFF6366F1)
+    ConversationPhase.Transcribing -> Color(0xFF60A5FA)
+    ConversationPhase.Thinking -> Color(0xFFF472B6)
+    ConversationPhase.Speaking -> Color(0xFF38BDF8)
+    ConversationPhase.Paused -> Color(0xFF64748B)
+    ConversationPhase.Off -> Color(0xFF8B5CF6)
 }
 
 private fun conversationStatusText(phase: ConversationPhase, status: String?): String = when (phase) {

@@ -68,6 +68,9 @@ class RunController @Inject constructor(
         // Grace after the live turn disappears before "no answer" is believed:
         // the terminal handler persists the final bubble asynchronously.
         private const val SETTLE_GRACE_MS = 3_000L
+        // A stop the server accepted but never finalized (wedged run) settles
+        // locally after this long; otherwise the session stays busy forever.
+        private const val STOP_SETTLE_GRACE_MS = 6_000L
     }
 
     /** A tool call awaiting the user's Approve/Deny decision. */
@@ -537,7 +540,11 @@ class RunController @Inject constructor(
     // ── Controls (Telegram parity: stop / steer / approve) ──────────────
 
     /** Real stop: POST /v1/runs/{id}/stop. The agent interrupts, the server
-     * persists the partial, the terminal event finalizes the bubble. */
+     * persists the partial, the terminal event finalizes the bubble. A run the
+     * server can no longer settle (wedged provider worker — seen live: status
+     * "running" hours after a non-retryable provider error) never sends that
+     * event, so a refused stop, and an accepted stop that stays silent, both
+     * settle locally here. */
     fun stop(sessionId: String) {
         val turn = _turns.value[sessionId] ?: return
         updateTurn(sessionId) { it.copy(stopping = true) }
@@ -545,6 +552,13 @@ class RunController @Inject constructor(
             if (!api.stopRun(turn.runId)) {
                 // Stop rejected (run already gone): settle locally from the
                 // text that arrived so far — never leave a stuck bubble.
+                finish(sessionId, accumulated(sessionId, turn), 0, 0, failed = null)
+                return@launch
+            }
+            // Accepted: the user asked for this turn to end, so a silent
+            // server settles too rather than holding the session forever.
+            delay(STOP_SETTLE_GRACE_MS)
+            if (_turns.value[sessionId]?.runId == turn.runId) {
                 finish(sessionId, accumulated(sessionId, turn), 0, 0, failed = null)
             }
         }
