@@ -68,8 +68,8 @@ class RunController @Inject constructor(
         // Grace after the live turn disappears before "no answer" is believed:
         // the terminal handler persists the final bubble asynchronously.
         private const val SETTLE_GRACE_MS = 3_000L
-        // A stop the server accepted but never finalized (wedged run) settles
-        // locally after this long; otherwise the session stays busy forever.
+        // A stop the server accepted but never finalized settles locally
+        // after this long; otherwise a dead worker holds the session busy.
         private const val STOP_SETTLE_GRACE_MS = 6_000L
     }
 
@@ -541,10 +541,10 @@ class RunController @Inject constructor(
 
     /** Real stop: POST /v1/runs/{id}/stop. The agent interrupts, the server
      * persists the partial, the terminal event finalizes the bubble. A run the
-     * server can no longer settle (wedged provider worker — seen live: status
-     * "running" hours after a non-retryable provider error) never sends that
-     * event, so a refused stop, and an accepted stop that stays silent, both
-     * settle locally here. */
+     * server can no longer settle — its worker is gone and no terminal event
+     * will ever arrive — would otherwise hold the session busy forever, so a
+     * refused stop, and an accepted stop that stays silent, both settle
+     * locally here. */
     fun stop(sessionId: String) {
         val turn = _turns.value[sessionId] ?: return
         updateTurn(sessionId) { it.copy(stopping = true) }
