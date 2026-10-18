@@ -2,12 +2,10 @@ package com.hermes.mobile.ui.screens.voice
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.util.Base64
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -15,8 +13,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,8 +24,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -39,7 +33,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -52,21 +45,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.hermes.mobile.ui.components.AutoPlayAudio
-import com.hermes.mobile.ui.components.BigMicButton
 import com.hermes.mobile.ui.components.ModelPickerSheet
 import com.hermes.mobile.ui.screens.chat.ApprovalCard
 import com.hermes.mobile.ui.theme.HermesPrimary
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.launch
-import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
-
-private enum class VoicePhase { Idle, Recording, Transcribing, Thinking, Speaking }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,7 +65,6 @@ fun VoiceScreen() {
     val sessions by vm.sessions.collectAsState()
     val selectedSessionId by vm.selectedSessionId.collectAsState()
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
 
     // Conversation mode keeps the whole loop in the ViewModel; the screen
     // only drives the microphone and the player the phase asks for.
@@ -90,12 +76,24 @@ fun VoiceScreen() {
     val ttsDataUrl by vm.ttsDataUrl.collectAsState()
     val conversationOn = convPhase != ConversationPhase.Off
 
-    var phase by remember { mutableStateOf(VoicePhase.Idle) }
-    var lastPressAt by remember { mutableLongStateOf(0L) }
-    var statusMsg by remember { mutableStateOf<String?>(null) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showSessionSheet by remember { mutableStateOf(false) }
-    var releaseRequested by remember { mutableStateOf(false) }
+
+    // The permission prompt answers the tap that asked for it: on grant the
+    // mode starts immediately, so the orb appears instead of a dead button.
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) vm.startConversation()
+        else vm.reportConversationStatus("Microphone permission is needed for conversation mode.")
+    }
+    fun beginConversation() {
+        val granted = ActivityCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) vm.startConversation()
+        else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
 
     val capture = remember {
         VoiceCapture(
@@ -137,130 +135,7 @@ fun VoiceScreen() {
     BackHandler(enabled = ttsDataUrl != null || showModelPicker || showSessionSheet) {
         if (showModelPicker) showModelPicker = false
         else if (showSessionSheet) showSessionSheet = false
-        else {
-            vm.interruptPlayback()
-            if (phase == VoicePhase.Speaking) phase = VoicePhase.Idle
-        }
-    }
-
-    val statusText = when (phase) {
-        VoicePhase.Idle -> "Hold to speak, release to send"
-        VoicePhase.Recording -> "Listening…"
-        VoicePhase.Transcribing -> "Transcribing…"
-        VoicePhase.Thinking -> "Hermes is thinking…"
-        VoicePhase.Speaking -> "Speaking…"
-    }
-    val statusColor = when (phase) {
-        VoicePhase.Idle -> MaterialTheme.colorScheme.onSurfaceVariant
-        VoicePhase.Recording -> Color(0xFFE53935)
-        VoicePhase.Transcribing -> HermesPrimary
-        VoicePhase.Thinking -> HermesPrimary
-        VoicePhase.Speaking -> SuccessTint
-    }
-
-    val hasAudioPermission = ActivityCompat.checkSelfPermission(
-        context, Manifest.permission.RECORD_AUDIO
-    ) == PackageManager.PERMISSION_GRANTED
-
-    fun speakReply(text: String) {
-        if (text.isBlank()) { phase = VoicePhase.Idle; return }
-        phase = VoicePhase.Speaking
-        // The playback payload lives in the ViewModel now, so both voice
-        // paths render through one AutoPlayAudio block.
-        vm.speakReply(text) { msg -> statusMsg = msg; phase = VoicePhase.Idle }
-    }
-
-    fun sendTranscript(text: String) {
-        if (text.isBlank()) {
-            statusMsg = "Couldn't hear anything — try again"
-            phase = VoicePhase.Idle
-            return
-        }
-        statusMsg = null
-        phase = VoicePhase.Thinking
-        vm.sendTranscribed(
-            text,
-            onComplete = { reply -> speakReply(reply) },
-            onError = { msg -> statusMsg = msg; phase = VoicePhase.Idle },
-        )
-    }
-
-    fun startRecording() {
-        if (phase != VoicePhase.Idle) return
-        if (!hasAudioPermission) {
-            val activity = context as? android.app.Activity
-            if (activity != null) {
-                ActivityCompat.requestPermissions(
-                    activity, arrayOf(Manifest.permission.RECORD_AUDIO), 1001
-                )
-            }
-            return
-        }
-        statusMsg = null
-        lastPressAt = System.currentTimeMillis()
-        phase = VoicePhase.Recording
-        scope.launch {
-            val minBuf = AudioRecord.getMinBufferSize(
-                16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-            )
-            val bufSize = if (minBuf > 0) minBuf * 2 else 8192
-            val recorder = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                16000,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufSize
-            )
-            if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-                runCatching { recorder.release() }  // failed init still holds resources
-                phase = VoicePhase.Idle
-                statusMsg = "Microphone unavailable"
-                return@launch
-            }
-            recorder.startRecording()
-            val audioData = ByteArrayOutputStream()
-            val buffer = ByteArray(4096)
-            val endTime = System.currentTimeMillis() + 30000
-            releaseRequested = false
-            val heldMs: Long
-            // Blocking AudioRecord.read on Main stalls the UI for the whole
-            // 30s window (~100-250ms per frame fill); run capture on IO.
-            try {
-                withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    while (!releaseRequested && System.currentTimeMillis() < endTime) {
-                        val read = recorder.read(buffer, 0, buffer.size)
-                        if (read > 0) audioData.write(buffer, 0, read)
-                    }
-                }
-            } finally {
-                // Back-press / scope cancellation must not leave the mic held:
-                // release runs on EVERY exit path, not just the happy one.
-                runCatching { recorder.stop() }
-                runCatching { recorder.release() }
-            }
-            heldMs = System.currentTimeMillis() - lastPressAt
-            if (heldMs < 300 || audioData.size() < 3200) {
-                phase = VoicePhase.Idle
-                statusMsg = "Hold the mic while speaking"
-                return@launch
-            }
-            // Release = send. Transcribe, then immediately run the turn.
-            phase = VoicePhase.Transcribing
-            val wavData = encodeWav(audioData.toByteArray(), 16000, 1, 16)
-            val b64 = Base64.encodeToString(wavData, Base64.NO_WRAP)
-            vm.transcribe(
-                b64,
-                onSuccess = { text -> sendTranscript(text.trim()) },
-                onError = { msg -> statusMsg = msg; phase = VoicePhase.Idle }
-            )
-        }
-    }
-
-    fun stopRecording() {
-        // Finger released: flip the gate so the read-loop exits and runs
-        // encode → transcribe → send. Recording state itself follows the
-        // loop's phase write, so the button never sticks.
-        releaseRequested = true
+        else vm.interruptPlayback()
     }
 
     Column(
@@ -339,9 +214,9 @@ fun VoiceScreen() {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.Bottom
         ) {
-            if (turns.isEmpty() && statusMsg == null) {
+            if (turns.isEmpty() && convStatus == null) {
                 Text(
-                    "Press and hold the mic to speak. Release to send — the answer is spoken back.",
+                    "Tap the circle to start a hands-free conversation — speak any time, the answer is spoken back.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -384,18 +259,10 @@ fun VoiceScreen() {
                 }
                 Spacer(modifier = Modifier.height(12.dp))
             }
-            AnimatedVisibility(visible = statusMsg != null, enter = fadeIn(), exit = fadeOut()) {
-                Text(
-                    text = statusMsg ?: "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                )
-            }
         }
 
-        // Mic + status
+        // Orb + status. The orb is the screen: idle shows it too, and a tap
+        // starts the mode, so there is never a dead mic in the way.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -406,104 +273,60 @@ fun VoiceScreen() {
                 .padding(bottom = 36.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (conversationOn) {
-                ConversationOrb(
-                    phase = convPhase,
-                    level = convLevel,
-                    onTap = { vm.interruptPlayback() },
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = conversationStatusText(convPhase, convStatus),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (convPhase == ConversationPhase.Paused)
-                        MaterialTheme.colorScheme.error else HermesPrimary,
-                    textAlign = TextAlign.Center
-                )
-                // The run's approval is answered right here: leaving for Chat
-                // ends the mode (the mic goes with this screen).
-                pendingApproval?.let { approval ->
-                    Spacer(modifier = Modifier.height(10.dp))
-                    ApprovalCard(
-                        approval = approval,
-                        onResolve = { choice -> vm.resolveApproval(choice) },
-                    )
-                }
+            ConversationOrb(
+                phase = convPhase,
+                level = convLevel,
+                onTap = {
+                    when (convPhase) {
+                        ConversationPhase.Speaking -> vm.interruptPlayback()
+                        ConversationPhase.Off -> beginConversation()
+                        else -> Unit
+                    }
+                },
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = conversationStatusText(convPhase, convStatus),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (convPhase == ConversationPhase.Paused ||
+                    (convPhase == ConversationPhase.Off && convStatus != null)
+                ) MaterialTheme.colorScheme.error else HermesPrimary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+            // The run's approval is answered right here: leaving for Chat
+            // ends the mode (the mic goes with this screen).
+            pendingApproval?.let { approval ->
                 Spacer(modifier = Modifier.height(10.dp))
-                Button(
-                    onClick = { vm.stopConversation() },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                ) {
+                ApprovalCard(
+                    approval = approval,
+                    onResolve = { choice -> vm.resolveApproval(choice) },
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            if (conversationOn) {
+                TextButton(onClick = { vm.stopConversation() }) {
                     Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Stop conversation")
                 }
             } else {
-                Box(
-                    modifier = Modifier.size(140.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    BigMicButton(
-                        isRecording = phase == VoicePhase.Recording,
-                        onRecordingStart = { startRecording() },
-                        onRecordingStop = { stopRecording() }
-                    )
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = statusColor,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = {
-                        if (hasAudioPermission) {
-                            vm.startConversation()
-                        } else {
-                            (context as? android.app.Activity)?.let { activity ->
-                                ActivityCompat.requestPermissions(
-                                    activity, arrayOf(Manifest.permission.RECORD_AUDIO), 1001
-                                )
-                            }
-                        }
-                    },
-                    // Never open a second AudioRecord over a hold-to-talk take.
-                    enabled = phase == VoicePhase.Idle
-                ) {
+                OutlinedButton(onClick = { beginConversation() }) {
                     Icon(Icons.Filled.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Start conversation")
-                }
-                // Why a start was refused (not connected, reply running, …).
-                convStatus?.let { msg ->
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = msg,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        textAlign = TextAlign.Center
-                    )
                 }
             }
         }
     }
 
     // TTS playback — auto-plays the assistant reply, silent UI. The payload
-    // is clearable (barge-in and playback end both clear it), so the mode's
-    // transitions live in the ViewModel while hold-to-talk resets its own
-    // phase here.
+    // is clearable (barge-in and playback end both clear it), so every phase
+    // transition lives in the ViewModel.
     ttsDataUrl?.let { url ->
         AutoPlayAudio(
             dataUrl = url,
-            onFinished = {
-                vm.onPlaybackFinished()
-                if (phase == VoicePhase.Speaking) phase = VoicePhase.Idle
-            }
+            onFinished = { vm.onPlaybackFinished() }
         )
     }
 
@@ -597,11 +420,9 @@ fun VoiceScreen() {
     }
 }
 
-private val SuccessTint = Color(0xFF2E7D32)
-
-/** The hands-free surface: a neon bubble that drifts while it waits, swells
- * with your voice while listening, quickens while Hermes works, and is the
- * barge-in button while a reply plays (tap = stop it and listen again). */
+/** The hands-free surface: a GPT-live style bubble — a soft, molten sphere
+ * with slow counter-rotating lobes, no rim and no icon, that swells with your
+ * voice and doubles as the barge-in button while a reply plays. */
 @Composable
 private fun ConversationOrb(
     phase: ConversationPhase,
@@ -618,9 +439,9 @@ private fun ConversationOrb(
             tween(
                 when (phase) {
                     ConversationPhase.Thinking,
-                    ConversationPhase.Transcribing -> 3_200
-                    ConversationPhase.Speaking -> 6_000
-                    else -> 9_000
+                    ConversationPhase.Transcribing -> 9_000
+                    ConversationPhase.Speaking -> 14_000
+                    else -> 26_000
                 },
                 easing = LinearEasing
             )
@@ -628,68 +449,81 @@ private fun ConversationOrb(
         label = "orb-spin",
     )
     val breathe by transition.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.06f,
+        initialValue = 0.96f,
+        targetValue = 1.05f,
         animationSpec = infiniteRepeatable(
-            tween(
-                when (phase) {
-                    ConversationPhase.Thinking,
-                    ConversationPhase.Transcribing -> 1_200
-                    ConversationPhase.Speaking -> 900
-                    else -> 2_600
-                },
-                easing = FastOutSlowInEasing
-            ),
+            tween(3_400, easing = FastOutSlowInEasing),
             RepeatMode.Reverse
         ),
         label = "orb-breathe",
     )
+    // A slow second clock stops the lobes from tracing the same circle, which
+    // is what makes the motion read as fluid rather than mechanical.
+    val drift by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            tween(7_300, easing = FastOutSlowInEasing),
+            RepeatMode.Reverse
+        ),
+        label = "orb-drift",
+    )
     Box(
         modifier = Modifier
-            .size(176.dp)
+            .size(220.dp)
             .clip(CircleShape)
-            .clickable(enabled = phase == ConversationPhase.Speaking, onClick = onTap),
-        contentAlignment = Alignment.Center
+            .clickable(
+                enabled = phase == ConversationPhase.Speaking || phase == ConversationPhase.Off,
+                onClickLabel = when (phase) {
+                    ConversationPhase.Off -> "Start conversation"
+                    ConversationPhase.Speaking -> "Stop the reply and listen"
+                    else -> null
+                },
+                onClick = onTap,
+            ),
     ) {
         // Read the level inside draw, not composition: 33 updates/s must
         // invalidate the canvas only, never rebuild the screen.
         Canvas(Modifier.fillMaxSize()) {
-            // sqrt: RMS is dominated by loud peaks; without the curve a soft
-            // speaker barely moves the bubble.
             val live =
                 if (phase == ConversationPhase.Listening) sqrt(level.value.coerceIn(0f, 1f)) else 0f
-            val dim = if (paused) 0.5f else 1f
+            val dim = if (paused) 0.45f else 1f
             // A paused loop costs nothing: not reading the animated values
             // stops the canvas invalidating until the phase moves again.
             val rot = if (paused) 0f else spin
             val swell = if (paused) 1f else breathe
+            val flow = if (paused) 0f else drift
             val center = Offset(size.width / 2f, size.height / 2f)
-            val core = size.minDimension * 0.20f * swell * (1f + live * 0.45f)
+            val radius = size.minDimension / 2f
+            val core = radius * 0.56f * swell * (1f + live * 0.10f)
 
-            // Halo first: light bleeding past the rim is what reads as "neon".
+            // Light bleeding past the rim: the glow is the "live" part.
             drawCircle(
                 brush = Brush.radialGradient(
-                    colors = listOf(tint.copy(alpha = 0.30f * dim), Color.Transparent),
+                    colors = listOf(tint.copy(alpha = 0.20f * dim), Color.Transparent),
                     center = center,
-                    radius = core * 3.6f,
+                    radius = radius,
                 ),
-                radius = core * 3.6f,
+                radius = radius,
                 center = center,
             )
-            // Three orbiting blobs at different speeds: the Siri-ish morph,
-            // with no shader and no asset.
-            repeat(3) { i ->
-                val angle = Math.toRadians(rot * (1.0 + i * 0.35) + i * 120.0)
-                val orbit = core * (0.55f + 0.18f * i)
+            // Four lobes, alternating direction, orbiting and breathing out of
+            // phase. No shader, no asset — just overlapping soft gradients.
+            repeat(4) { i ->
+                val direction = if (i % 2 == 0) 1.0 else -1.0
+                val angle = Math.toRadians(
+                    rot * direction * (1.0 + 0.22 * i) + i * 90.0 + flow * 18.0
+                )
+                val orbit = core * (0.30f + 0.07f * i + 0.12f * flow)
                 val blob = Offset(
                     center.x + cos(angle).toFloat() * orbit,
-                    center.y + sin(angle).toFloat() * orbit,
+                    center.y + sin(angle).toFloat() * orbit * 0.86f,
                 )
-                val blobRadius = core * (1.2f - 0.18f * i)
+                val blobRadius = core * (1.00f - 0.09f * i)
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            (if (i == 1) accent else tint).copy(alpha = 0.40f * dim),
+                            (if (i % 2 == 1) accent else tint).copy(alpha = 0.40f * dim),
                             Color.Transparent,
                         ),
                         center = blob,
@@ -699,54 +533,48 @@ private fun ConversationOrb(
                     center = blob,
                 )
             }
-            // Tinted core + bright rim.
+            // Body: a lit sphere, not a flat disc — the gradient centre sits
+            // above the middle so the light appears to fall from the top left.
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        tint.copy(alpha = 0.92f * dim),
-                        tint.copy(alpha = 0.30f * dim),
+                        Color.White.copy(alpha = 0.60f * dim),
+                        tint.copy(alpha = 0.78f * dim),
+                        tint.copy(alpha = 0.32f * dim),
                         Color.Transparent,
                     ),
-                    center = center,
-                    radius = core * 1.5f,
+                    center = Offset(center.x - core * 0.14f, center.y - core * 0.18f),
+                    radius = core * 1.42f,
                 ),
-                radius = core * 1.5f,
+                radius = core * 1.42f,
                 center = center,
             )
+            // Soft specular cap.
             drawCircle(
-                color = tint.copy(alpha = 0.85f * dim),
-                radius = core * 1.18f,
-                center = center,
-                style = Stroke(width = 1.5.dp.toPx()),
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.34f * dim),
+                        Color.Transparent,
+                    ),
+                    center = Offset(center.x - core * 0.34f, center.y - core * 0.40f),
+                    radius = core * 0.92f,
+                ),
+                radius = core * 0.92f,
+                center = Offset(center.x - core * 0.34f, center.y - core * 0.40f),
             )
         }
-        Icon(
-            imageVector = orbIcon(phase),
-            contentDescription = if (phase == ConversationPhase.Speaking) "Stop the reply and listen" else null,
-            // Ink on the bright core; the dimmed paused bubble needs white.
-            tint = if (paused) Color.White.copy(alpha = 0.80f)
-            else Color(0xFF0B1220).copy(alpha = 0.88f),
-            modifier = Modifier.size(38.dp),
-        )
     }
 }
 
-/** Siri-ish gradient pairs: a warm second hue keeps the glow from reading as
- * one flat blob. */
+/** Gradient pairs: a second hue keeps the sphere from reading as one flat
+ * blob (and gives the lobes something to flow between). */
 private fun orbColors(phase: ConversationPhase): Pair<Color, Color> = when (phase) {
     ConversationPhase.Listening -> Color(0xFF38BDF8) to Color(0xFF6366F1)
     ConversationPhase.Transcribing -> Color(0xFF22D3EE) to Color(0xFF60A5FA)
     ConversationPhase.Thinking -> Color(0xFFA78BFA) to Color(0xFFF472B6)
     ConversationPhase.Speaking -> Color(0xFF34D399) to Color(0xFF38BDF8)
     ConversationPhase.Paused -> Color(0xFF94A3B8) to Color(0xFF64748B)
-    ConversationPhase.Off -> HermesPrimary to HermesPrimary
-}
-
-private fun orbIcon(phase: ConversationPhase) = when (phase) {
-    ConversationPhase.Thinking -> Icons.Filled.GraphicEq
-    ConversationPhase.Speaking -> Icons.AutoMirrored.Filled.VolumeUp
-    ConversationPhase.Paused -> Icons.Filled.Pause
-    else -> Icons.Filled.Mic // listening, transcribing, off
+    ConversationPhase.Off -> Color(0xFF5B8DEF) to Color(0xFF8B5CF6)
 }
 
 private fun conversationStatusText(phase: ConversationPhase, status: String?): String = when (phase) {
@@ -755,5 +583,5 @@ private fun conversationStatusText(phase: ConversationPhase, status: String?): S
     ConversationPhase.Thinking -> "Hermes is thinking…"
     ConversationPhase.Speaking -> "Speaking… tap the circle to interrupt"
     ConversationPhase.Paused -> status ?: "Paused"
-    ConversationPhase.Off -> status.orEmpty()
+    ConversationPhase.Off -> status ?: "Tap to start — hands-free, and Hermes speaks back."
 }

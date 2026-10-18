@@ -335,9 +335,13 @@ class VoiceViewModel @Inject constructor(
         watchLoop()
     }
 
+    /** Screen-level note (e.g. a denied mic permission) while the loop is off. */
+    fun reportConversationStatus(message: String) {
+        _conversationStatus.value = message
+    }
+
     /** Also the failure exit: [reason] becomes the status line. */
-    fun stopConversation(reason: String? = null) {
-        if (_conversationPhase.value == ConversationPhase.Off) return
+    fun stopConversation(reason: String? = null) {        if (_conversationPhase.value == ConversationPhase.Off) return
         relistenJob?.cancel()
         loopJob?.cancel()
         loopJob = null
