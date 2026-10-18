@@ -18,7 +18,7 @@
 # them first), gh is authenticated, gpg key imported.
 set -euo pipefail
 KDIR="$HOME/.hermes/keystore"
-GPG_KEYID="4623379304AF02835657282605B0890B1CD804A5"
+GPG_KEYID="ABA60904F3954B774F95A09DAA54710F35652638"
 gitx() { ( cd "$1" && shift && perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' git "$@" ); }
 gpgsign() { perl -e '$SIG{CHLD}="DEFAULT"; exec @ARGV' gpg --batch --yes --pinentry-mode loopback \
   --passphrase "$(cat "$KDIR/gpg-password")" --local-user "$GPG_KEYID" "$@"; }
