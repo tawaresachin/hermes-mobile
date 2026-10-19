@@ -569,15 +569,31 @@ class HermesApiService @Inject constructor(
     suspend fun listSkills(): JSONArray? = withContext(Dispatchers.IO) {
         val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
             ?: return@withContext null
-        try {
-            val request = Request.Builder().url("$baseUrl/v1/skills").get().build()
-            client.newCall(request).execute().use { r ->
-                if (!r.isSuccessful) return@use null
-                val body = r.body?.string() ?: return@use null
-                val o = JSONObject(body)
-                o.optJSONArray("skills") ?: o.optJSONArray("data") ?: o.optJSONArray("items")
+        // Core /v1/skills first; some releases ship a broken one (e.g. 0.22.2
+        // 500s — api_server passes include_editorial to a tool that no longer
+        // accepts it). The plugin's /api/mobile/skills enumerates the same
+        // catalog itself and is the fallback. The parser below accepts both
+        // response shapes (skills|data|items). A definitive 200 (even an
+        // empty array) stops the search; only failures move to the next.
+        val sources = listOf("/v1/skills", "/api/mobile/skills")
+        for (path in sources) {
+            try {
+                val found = client
+                    .newCall(Request.Builder().url("$baseUrl$path").get().build())
+                    .execute().use { r ->
+                        if (!r.isSuccessful) return@use null
+                        val body = r.body?.string() ?: return@use null
+                        val o = JSONObject(body)
+                        o.optJSONArray("skills") ?: o.optJSONArray("data") ?: o.optJSONArray("items")
+                    }
+                if (found != null) return@withContext found
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Unreachable host / transient IO failure — try the next source.
             }
-        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+        }
+        return@withContext null
     }
 
     // ─── Hermes update (plugin: /api/mobile/update/*) ───────────

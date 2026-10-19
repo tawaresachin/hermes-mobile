@@ -126,6 +126,9 @@ data class SettingsUiState(
     val skills: List<Pair<String, String>> = emptyList(),  // name -> description
     val serverListsLoading: Boolean = false,
     val serverListsLoaded: Boolean = false,
+    // True when every source failed AND nothing was ever loaded: the panel
+    // must say "could not load" instead of masquerading it as an empty set.
+    val serverListsError: Boolean = false,
     // Model providers (server-side custom endpoints)
     val providers: List<org.json.JSONObject> = emptyList(),
     val providersLoading: Boolean = false,
@@ -444,6 +447,10 @@ class SettingsViewModel @Inject constructor(
                     } ?: it.skills,
                     serverListsLoading = false,
                     serverListsLoaded = loadedOk || it.serverListsLoaded,
+                    // Fresh failure with no previously loaded data → the empty
+                    // lists are an artifact, not a fact. A reload after a
+                    // successful load keeps showing the stale data.
+                    serverListsError = !(loadedOk || it.serverListsLoaded),
                 )
             }
         }
@@ -2113,56 +2120,63 @@ fun ServerListsPanel(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             }
         }
         if (expanded) {
-            if (uiState.jobs.isEmpty()) {
-                Text("No jobs reported by the server.",
+            if (uiState.serverListsError) {
+                Text("Could not load from the gateway — tap the refresh icon to retry.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(vertical = 6.dp))
-            }
-            uiState.jobs.forEach { job ->
-                val id = job.optString("id")
-                val name = job.optString("name").ifBlank { id }
-                val enabled = job.optBoolean("enabled", true)
-                val state = job.optString("state")
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(name, style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface)
-                        Text(job.optString("schedule_display") +
-                                (if (!enabled || state == "paused") " · paused" else "") +
-                                (job.optString("next_run_at").take(10).let {
-                                    if (it.isNotBlank() && enabled) " · next $it" else "" }),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    TextButton(onClick = { viewModel.runJobNow(id) }) { Text("Run") }
-                    TextButton(onClick = { viewModel.toggleJobPaused(id, !enabled) }) {
-                        Text(if (enabled) "Pause" else "Resume")
-                    }
+            } else {
+                if (uiState.jobs.isEmpty()) {
+                    Text("No jobs reported by the server.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 6.dp))
                 }
-                HorizontalDivider(thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text("Skills (${uiState.skills.size})",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            uiState.skills.forEach { (n, d) ->
-                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    Icon(Icons.Filled.AutoAwesome, contentDescription = null,
-                        tint = HermesPrimary.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(n, style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
-                        if (d.isNotBlank()) Text(d, style = MaterialTheme.typography.labelSmall,
-                            maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                uiState.jobs.forEach { job ->
+                    val id = job.optString("id")
+                    val name = job.optString("name").ifBlank { id }
+                    val enabled = job.optBoolean("enabled", true)
+                    val state = job.optString("state")
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(name, style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface)
+                            Text(job.optString("schedule_display") +
+                                    (if (!enabled || state == "paused") " · paused" else "") +
+                                    (job.optString("next_run_at").take(10).let {
+                                        if (it.isNotBlank() && enabled) " · next $it" else "" }),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        TextButton(onClick = { viewModel.runJobNow(id) }) { Text("Run") }
+                        TextButton(onClick = { viewModel.toggleJobPaused(id, !enabled) }) {
+                            Text(if (enabled) "Pause" else "Resume")
+                        }
+                    }
+                    HorizontalDivider(thickness = 0.5.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text("Skills (${uiState.skills.size})",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                uiState.skills.forEach { (n, d) ->
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Icon(Icons.Filled.AutoAwesome, contentDescription = null,
+                            tint = HermesPrimary.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(n, style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+                            if (d.isNotBlank()) Text(d, style = MaterialTheme.typography.labelSmall,
+                                maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
