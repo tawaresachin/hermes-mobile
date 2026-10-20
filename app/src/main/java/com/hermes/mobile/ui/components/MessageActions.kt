@@ -12,16 +12,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material.icons.automirrored.filled.Forward
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Forward
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Reply
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -80,12 +80,12 @@ fun MessageActionSheet(
                 SheetActionRow(Icons.Filled.CheckCircleOutline, "Select") { onSelect() }
             }
             SheetActionRow(Icons.Filled.ContentCopy, "Copy") { onCopy() }
-            SheetActionRow(Icons.Filled.Reply, "Reply") { onReply() }
+            SheetActionRow(Icons.AutoMirrored.Filled.Reply, "Reply") { onReply() }
             if (isUser && onEdit != null) {
                 SheetActionRow(Icons.Filled.Edit, "Edit") { onEdit() }
             }
             if (onForward != null) {
-                SheetActionRow(Icons.Filled.Forward, "Forward") { onForward() }
+                SheetActionRow(Icons.AutoMirrored.Filled.Forward, "Forward") { onForward() }
             }
             if (!isUser && onRegenerate != null) {
                 SheetActionRow(Icons.Filled.Refresh, "Regenerate") { onRegenerate() }

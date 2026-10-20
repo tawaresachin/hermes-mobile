@@ -1,12 +1,16 @@
 package com.hermes.mobile.ui.screens.voice
 
 import android.Manifest
+import android.content.Context
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.content.pm.PackageManager
 import android.util.Base64
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -15,7 +19,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -33,7 +36,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -455,6 +457,27 @@ private fun ConversationOrb(
 ) {
     val (colorA, colorB) = orbPalette(phase)
     val paused = phase == ConversationPhase.Paused
+    // Respect the system "reduce motion" / "remove animations" toggle (the OS
+    // setting that maps to ANIMATOR_DURATION_SCALE == 0). Observed live via a
+    // ContentObserver so flipping it mid-conversation takes effect without
+    // leaving the screen. `reduceMotion` is a plain State (changes rarely); the
+    // per-frame animation values (spin / ringT / breathe) are read in the draw
+    // scopes below, never here in composition, so a toggle recomposes once
+    // and then only redraws the orb — it does not make the screen recompose.
+    val context = LocalContext.current
+    var reduceMotion by remember { mutableStateOf(readReduceMotion(context)) }
+    DisposableEffect(context) {
+        val uri = Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE)
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                reduceMotion = readReduceMotion(context)
+            }
+        }
+        context.contentResolver.registerContentObserver(uri, false, observer)
+        onDispose { context.contentResolver.unregisterContentObserver(observer) }
+    }
+    // `animate` = motion is allowed: not paused AND not reduce-motion.
+    val animate = !paused && !reduceMotion
     val ringCount = when (phase) {
         ConversationPhase.Listening -> 4
         ConversationPhase.Transcribing,
@@ -495,13 +518,23 @@ private fun ConversationOrb(
         animationSpec = infiniteRepeatable(tween(4_000, easing = LinearEasing), RepeatMode.Reverse),
         label = "orb-breathe",
     )
+    // The per-frame values spin / ringT / breathe are read inside the draw
+    // scopes below (Canvas + graphicsLayer), never here, so animation frames
+    // invalidate the orb's draw only — they never recompose this composable.
     Box(
         modifier = Modifier
             .size(252.dp)
             .graphicsLayer {
-                if (paused) return@graphicsLayer
-                scaleX = breathe
-                scaleY = breathe
+                // Breathe only when motion is allowed; otherwise reset to a neutral
+                // scale so a stale pre-pause value (up to 1.02) doesn't linger.
+                // Read `breathe` in draw scope so it never forces a recomposition.
+                if (animate) {
+                    scaleX = breathe
+                    scaleY = breathe
+                } else {
+                    scaleX = 1f
+                    scaleY = 1f
+                }
             }
             .clip(CircleShape)
             .clickable(
@@ -519,9 +552,15 @@ private fun ConversationOrb(
         Canvas(Modifier.size(212.dp).align(Alignment.Center)) {
             val live =
                 if (phase == ConversationPhase.Listening) sqrt(level.value.coerceIn(0f, 1f)) else 0f
-            // Freeze the clock while paused so the sphere holds still (the
-            // canvas still redraws each frame — see the shortcut note above).
-            val turn = if (paused) 0f else (spin * Math.PI / 180.0).toFloat()
+            // Freeze the clock while paused or reduce-motion (the canvas still
+            // redraws each frame — see the shortcut note above). Read `spin` in
+            // draw scope, never composition.
+            val turn = if (!animate) 0f else (spin * Math.PI / 180.0).toFloat()
+            // Wisp drift + ring sweep keep moving even when paused (the calm
+            // "breathing" look the original had); only a reduce-motion user
+            // freezes them. Read in draw scope so the sweep never recomposes.
+            val wispSpin = if (reduceMotion) 0f else spin
+            val ringNow = if (reduceMotion) 0.5f else ringT
             val d = size.minDimension
             val r = d / 2f
             val mid = Offset(r, r)
@@ -586,7 +625,7 @@ private fun ConversationOrb(
                 fun at(radius: Float, angle: Float) =
                     Offset(mid.x + cos(angle) * radius, mid.y + sin(angle) * radius)
                 for (i in 0 until 6) {
-                    val a0 = (i * 137.5f + spin * (0.20f + 0.04f * i)) * toRad
+                    val a0 = (i * 137.5f + wispSpin * (0.20f + 0.04f * i)) * toRad
                     val out = r * (0.62f + 0.30f * ((i * 0.618f) % 1f))
                     val in1 = r * (0.14f + 0.34f * ((i * 0.382f + 0.21f) % 1f))
                     val in2 = r * (0.14f + 0.34f * ((i * 0.271f + 0.63f) % 1f))
@@ -616,8 +655,11 @@ private fun ConversationOrb(
                 // softened to u^4 so the sweep is visible while it travels.
                 val ringColor = lerp(cb, Color.White, 0.3f)
                 for (i in 0 until ringCount) {
-                    val u = (i.toFloat() / ringCount + ringT) % 1f
-                    val fade = u * u * u * u * (1f - smoothstep(0.90f, 0.99f, u))
+                    val u = (i.toFloat() / ringCount + ringNow) % 1f
+                    // Under reduce-motion the sweep is frozen, so bypass the
+                    // travel-based fade or the fixed u=0.5 position renders
+                    // near-invisible; show a static, visible ring instead.
+                    val fade = if (reduceMotion) 0.4f else u * u * u * u * (1f - smoothstep(0.90f, 0.99f, u))
                     drawCircle(
                         color = ringColor.copy(
                             alpha = (fade * (1.1f + vol * 2.4f) * pulse * 0.6f).coerceIn(0f, 1f)
@@ -700,4 +742,17 @@ private fun conversationStatusText(phase: ConversationPhase, status: String?): S
     ConversationPhase.Speaking -> "Speaking… tap the orb to interrupt"
     ConversationPhase.Paused -> status ?: "Paused"
     ConversationPhase.Off -> status ?: "Tap to start — hands-free, and Hermes speaks back."
+}
+
+/** The OS "reduce motion" / "remove animations" toggle reads as
+ *  `ANIMATOR_DURATION_SCALE == 0`. Treated as reduce-motion when true; fails
+ *  safe (motion stays on) if the value can't be read. */
+private fun readReduceMotion(context: Context): Boolean = try {
+    Settings.Global.getFloat(
+        context.contentResolver,
+        Settings.Global.ANIMATOR_DURATION_SCALE,
+        1f,
+    ) == 0f
+} catch (_: Exception) {
+    false
 }
