@@ -14,6 +14,7 @@ import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.ServerConfig
 import com.hermes.mobile.data.repository.HermesRepository
+import com.hermes.mobile.network.FetchResult
 import com.hermes.mobile.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -63,9 +64,10 @@ data class SettingsUiState(
     val skills: List<Pair<String, String>> = emptyList(),  // name -> description
     val serverListsLoading: Boolean = false,
     val serverListsLoaded: Boolean = false,
-    // True when every source failed AND nothing was ever loaded: the panel
-    // must say "could not load" instead of masquerading it as an empty set.
-    val serverListsError: Boolean = false,
+    // Non-null when nothing was ever loaded and the last attempt failed; the
+    // text carries the HTTP reason (rejected key vs missing route), so the
+    // panel doesn't blame an old plugin for a 401.
+    val serverListsError: String? = null,
     // Model providers (server-side custom endpoints)
     val providers: List<org.json.JSONObject> = emptyList(),
     val providersLoading: Boolean = false,
@@ -370,13 +372,13 @@ class SettingsViewModel @Inject constructor(
     fun loadServerLists() {
         viewModelScope.launch {
             _uiState.update { it.copy(serverListsLoading = true) }
-            val jobs = try { repository.listJobs() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
-            val skills = try { repository.listSkills() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
-            val loadedOk = jobs != null && skills != null
+            val jobs = try { repository.listJobs() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
+            val skills = try { repository.listSkills() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
+            val loadedOk = jobs.body != null && skills.body != null
             _uiState.update {
                 it.copy(
-                    jobs = jobs?.let { arr -> (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i) } } ?: it.jobs,
-                    skills = skills?.let { arr ->
+                    jobs = jobs.body?.let { arr -> (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i) } } ?: it.jobs,
+                    skills = skills.body?.let { arr ->
                         (0 until arr.length()).mapNotNull { i ->
                             arr.optJSONObject(i)?.let { o ->
                                 o.optString("name", "") to o.optString("description", "")
@@ -388,10 +390,28 @@ class SettingsViewModel @Inject constructor(
                     // Fresh failure with no previously loaded data → the empty
                     // lists are an artifact, not a fact. A reload after a
                     // successful load keeps showing the stale data.
-                    serverListsError = !(loadedOk || it.serverListsLoaded),
+                    serverListsError = when {
+                        loadedOk || it.serverListsLoaded -> null
+                        jobs.body == null -> gatewayError(jobs.status, "/api/jobs")
+                        else -> gatewayError(skills.status, "/api/mobile/skills")
+                    },
                 )
             }
         }
+    }
+
+    /** Say what the gateway actually answered. A 404 means the route is not
+     * mounted (old hermes, or the gateway started before the plugin was
+     * deployed) — restarting the gateway mounts it; a 401 means re-pair. */
+    private fun gatewayError(status: Int, route: String): String = when {
+        status == 0 ->
+            "Could not reach the gateway — check the server URL and network."
+        status == 401 || status == 403 ->
+            "Gateway rejected the API key (HTTP $status) — re-pair this device."
+        status == 404 ->
+            "The gateway has no $route route (HTTP 404) — the hermes-mobile plugin isn't loaded; restart the gateway."
+        else ->
+            "The gateway returned HTTP $status for $route."
     }
 
     // ─── Model providers (Settings card) ───
@@ -399,14 +419,15 @@ class SettingsViewModel @Inject constructor(
     fun loadProviders() {
         viewModelScope.launch {
             _uiState.update { it.copy(providersLoading = true, providersError = null) }
-            val o = try { repository.providersList() }
+            val res = try { repository.providersList() }
                 catch (e: kotlinx.coroutines.CancellationException) { throw e }
-                catch (_: Exception) { null }
+                catch (_: Exception) { FetchResult<org.json.JSONObject>(null, 0) }
+            val o = res.body
             _uiState.update {
                 if (o == null || !o.optBoolean("ok", false)) it.copy(
                     providersLoading = false,
                     providersError = o?.optString("error")?.ifBlank { null }
-                        ?: "Server does not expose provider management (plugin too old?)")
+                        ?: gatewayError(res.status, "/api/mobile/providers"))
                 else {
                     val arr = o.optJSONArray("endpoints")
                     val list = ArrayList<org.json.JSONObject>()

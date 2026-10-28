@@ -31,6 +31,11 @@ import javax.inject.Singleton
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/** A fetch's body plus the HTTP status that produced it (0 = never reached
+ * the server), so Settings can say *why* a panel is empty instead of
+ * guessing "plugin too old?". */
+data class FetchResult<T>(val body: T?, val status: Int)
+
 @Singleton
 class HermesApiService @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -551,24 +556,26 @@ class HermesApiService @Inject constructor(
 
     // ─── Cron jobs + skills (server truth for the Settings screens) ───
 
-    suspend fun listJobs(): JSONArray? = withContext(Dispatchers.IO) {
+    suspend fun listJobs(): FetchResult<JSONArray> = withContext(Dispatchers.IO) {
         val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
-            ?: return@withContext null
+            ?: return@withContext FetchResult(null, 0)
         try {
             val request = Request.Builder().url("$baseUrl/api/jobs?include_disabled=true").get().build()
             client.newCall(request).execute().use { r ->
-                if (!r.isSuccessful) return@use null
-                JSONObject(r.body?.string() ?: return@use null).optJSONArray("jobs")
+                val body = if (r.isSuccessful)
+                    runCatching { JSONObject(r.body?.string() ?: "") }.getOrNull()
+                else null
+                FetchResult(body?.optJSONArray("jobs"), r.code)
             }
-        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
     }
 
     suspend fun jobAction(jobId: String, action: String): Boolean =
         runAction("/api/jobs/$jobId/$action", JSONObject())
 
-    suspend fun listSkills(): JSONArray? = withContext(Dispatchers.IO) {
+    suspend fun listSkills(): FetchResult<JSONArray> = withContext(Dispatchers.IO) {
         val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() }
-            ?: return@withContext null
+            ?: return@withContext FetchResult(null, 0)
         // Core /v1/skills first; some releases ship a broken one (e.g. 0.22.2
         // 500s — api_server passes include_editorial to a tool that no longer
         // accepts it). The plugin's /api/mobile/skills enumerates the same
@@ -576,24 +583,31 @@ class HermesApiService @Inject constructor(
         // response shapes (skills|data|items). A definitive 200 (even an
         // empty array) stops the search; only failures move to the next.
         val sources = listOf("/v1/skills", "/api/mobile/skills")
+        var status = 0
         for (path in sources) {
             try {
                 val found = client
                     .newCall(Request.Builder().url("$baseUrl$path").get().build())
                     .execute().use { r ->
-                        if (!r.isSuccessful) return@use null
+                        if (!r.isSuccessful) {
+                            // A rejected key is the real cause even when the
+                            // fallback route is also missing — report auth.
+                            if (r.code in 401..403) return@withContext FetchResult(null, r.code)
+                            status = r.code
+                            return@use null
+                        }
                         val body = r.body?.string() ?: return@use null
                         val o = JSONObject(body)
                         o.optJSONArray("skills") ?: o.optJSONArray("data") ?: o.optJSONArray("items")
                     }
-                if (found != null) return@withContext found
+                if (found != null) return@withContext FetchResult(found, 200)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {
                 // Unreachable host / transient IO failure — try the next source.
             }
         }
-        return@withContext null
+        FetchResult(null, status)
     }
 
     // ─── Hermes update (plugin: /api/mobile/update/*) ───────────
@@ -1194,7 +1208,26 @@ class HermesApiService @Inject constructor(
     // CRUD for OpenAI-compatible custom endpoints on the SERVER (desktop
     // config). Keys: plaintext rides one way (app->server .env via key_env);
     // the server only ever returns redacted previews.
-    suspend fun providersList(): JSONObject? = getJson("/api/mobile/providers")
+    suspend fun providersList(): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+        val cfg = config ?: getConfig()
+        val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext FetchResult(null, 0)
+        try {
+            // Explicit key, like getJson: a pairing must not race the
+            // interceptor's prefs cache.
+            val builder = Request.Builder().url("$baseUrl/api/mobile/providers").get()
+            cfg.apiKey?.takeIf { it.isNotBlank() }
+                ?.let { builder.header("Authorization", "Bearer $it") }
+            client.newCall(builder.build())
+                .execute().use { r ->
+                    FetchResult(
+                        if (r.isSuccessful) runCatching { JSONObject(r.body?.string() ?: "") }.getOrNull()
+                        else null,
+                        r.code
+                    )
+                }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
+    }
     suspend fun providersSave(body: JSONObject): JSONObject? =
         postJson("/api/mobile/providers", body)
     suspend fun providersDelete(id: String): JSONObject? =

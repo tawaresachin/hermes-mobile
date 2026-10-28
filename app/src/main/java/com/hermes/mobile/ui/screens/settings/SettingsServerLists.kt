@@ -56,12 +56,16 @@ fun ServerListsPanel(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             }
         }
         if (expanded) {
-            if (uiState.serverListsError) {
-                Text("Could not load from the gateway — tap the refresh icon to retry.",
+            uiState.serverListsError?.let { msg ->
+                Text(msg,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(vertical = 6.dp))
-            } else {
+            }
+            // A partial success (jobs but no skills, or reverse) still shows
+            // what the gateway did return, under the error line.
+            if (uiState.serverListsError == null ||
+                uiState.jobs.isNotEmpty() || uiState.skills.isNotEmpty()) {
                 if (uiState.jobs.isEmpty()) {
                     Text("No jobs reported by the server.",
                         style = MaterialTheme.typography.bodySmall,

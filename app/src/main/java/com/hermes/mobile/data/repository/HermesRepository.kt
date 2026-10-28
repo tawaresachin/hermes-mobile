@@ -562,9 +562,9 @@ class HermesRepository @Inject constructor(
 
     // ─── Cron jobs + skills (Settings screens, server truth) ───
 
-    suspend fun listJobs(): JSONArray? = apiService.listJobs()
+    suspend fun listJobs() = apiService.listJobs()
     suspend fun jobAction(jobId: String, action: String): Boolean = apiService.jobAction(jobId, action)
-    suspend fun listSkills(): JSONArray? = apiService.listSkills()
+    suspend fun listSkills() = apiService.listSkills()
 
     /** Auto-approve: when ON, a pending tool approval is answered
      * 'session' the moment it arrives (user opted in from Settings). */
