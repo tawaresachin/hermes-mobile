@@ -28,9 +28,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.Session
 import com.hermes.mobile.data.repository.HermesRepository
@@ -230,17 +233,6 @@ class SessionsViewModel @Inject constructor(
         }
     }
 
-    init {
-        // Live badges + full session sync while the tab exists.
-        viewModelScope.launch {
-            while (true) {
-                syncFromServer()
-                refreshServerStatus()
-                kotlinx.coroutines.delay(10_000)
-            }
-        }
-    }
-
     /**
      * Delete a session and emit a snackbar event with an Undo action.
      * The deleted [Session] is kept in memory so it can be restored.
@@ -429,6 +421,20 @@ fun SessionsScreen(
                     }
                     UndoKind.DELETE -> viewModel.restoreLastDeleted()
                 }
+            }
+        }
+    }
+
+    // Live badges + session sync, only while this tab is actually started.
+    // The loop used to live in the ViewModel's init, so it kept polling from
+    // the backstack; STARTED stops it the moment the tab is covered.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                viewModel.syncFromServer()
+                viewModel.refreshServerStatus()
+                kotlinx.coroutines.delay(10_000)
             }
         }
     }

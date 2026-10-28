@@ -420,7 +420,7 @@ class ChatViewModel @Inject constructor(
             }
             "whoami" -> {
                 val j = repository.getJson("/api/system/status")
-                reply("You: Sachin (paired device)\nServer: " +
+                reply("Device: " + android.os.Build.MODEL + " (paired)\nServer: " +
                     (j?.optString("os") ?: "?") + " · python " + (j?.optString("python")?.take(4) ?: "?"))
             }
             "tools" -> {
@@ -1097,11 +1097,17 @@ class ChatViewModel @Inject constructor(
                         put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
                         put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
                     }
-                    val collection = if (message.attachmentType?.startsWith("image") == true)
-                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                    else
-                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                    val uri = context.contentResolver.insert(collection, values)
+                    // MediaStore.Downloads is API 29+; below that the field is
+                    // a class-load failure (an Error, so the catch below can't
+                    // swallow it) — take the cache+FileProvider fallback.
+                    val collection = when {
+                        message.attachmentType?.startsWith("image") == true ->
+                            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                        android.os.Build.VERSION.SDK_INT >= 29 ->
+                            android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                        else -> null
+                    }
+                    val uri = collection?.let { context.contentResolver.insert(it, values) }
                     if (uri != null) {
                         context.contentResolver.openOutputStream(uri)?.use { out ->
                             out.write(bytes)

@@ -470,7 +470,9 @@ fun MessageBubble(
                         // (the old code hid all text when a table existed,
                         // so "Here's the comparison:" and the closing note
                         // silently vanished).
-                        val table = parseTablesOf(bubbleContent)
+                        // Memoized: streaming emits ~20Hz and this re-parse is
+                        // the only unremembered work ahead of StreamingText.
+                        val table = remember(bubbleContent) { parseTablesOf(bubbleContent) }
                         val bubbleText = table?.prose ?: bubbleContent
                         if (bubbleText.isNotBlank()) {
                             if (isStreaming) {

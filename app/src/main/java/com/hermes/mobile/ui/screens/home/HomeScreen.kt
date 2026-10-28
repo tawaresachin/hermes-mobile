@@ -36,10 +36,16 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,6 +57,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -260,6 +267,8 @@ fun HomeScreen(
 
     // Long-press target for the rename dialog
     var renameTarget by remember { mutableStateOf<Session?>(null) }
+    // Menu delete asks first; the swipe gesture is deliberate enough already.
+    var deleteTarget by remember { mutableStateOf<Session?>(null) }
 
     // Re-check connection when returning from Settings
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -342,7 +351,8 @@ fun HomeScreen(
                             session = session,
                             onClick = { onNavigateToChat(session.id) },
                             onDelete = { viewModel.deleteSession(session.id) },
-                            onRename = { renameTarget = session }
+                            onRename = { renameTarget = session },
+                            onMenuDelete = { deleteTarget = session }
                         )
                         // Telegram-style thin divider between rows
                         if (index < uiState.sessions.lastIndex) {
@@ -367,6 +377,26 @@ fun HomeScreen(
                 onRename = { name ->
                     viewModel.renameSession(target.id, name)
                     renameTarget = null
+                }
+            )
+        }
+
+        // Delete confirmation (row overflow menu)
+        deleteTarget?.let { target ->
+            AlertDialog(
+                onDismissRequest = { deleteTarget = null },
+                title = { Text("Delete chat?") },
+                text = {
+                    Text("\"${target.title?.takeIf { it.isNotBlank() } ?: "Untitled Session"}\" and its messages will be removed.")
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.deleteSession(target.id)
+                        deleteTarget = null
+                    }) { Text("Delete") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { deleteTarget = null }) { Text("Cancel") }
                 }
             )
         }
@@ -658,7 +688,8 @@ private fun SwipeableSessionItem(
     session: Session,
     onClick: () -> Unit,
     onDelete: () -> Unit,
-    onRename: () -> Unit
+    onRename: () -> Unit,
+    onMenuDelete: () -> Unit
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { dismissValue ->
@@ -715,7 +746,8 @@ private fun SwipeableSessionItem(
         SessionItem(
             session = session,
             onClick = onClick,
-            onLongClick = onRename
+            onRename = onRename,
+            onMenuDelete = onMenuDelete
         )
     }
 }
@@ -742,8 +774,10 @@ private fun formatRelativeTime(timestamp: Long): String {
 private fun SessionItem(
     session: Session,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onRename: () -> Unit,
+    onMenuDelete: () -> Unit
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     val titleText = remember(session.title) {
         if (session.title.isNullOrBlank()) "Untitled Session" else session.title!!
     }
@@ -761,7 +795,7 @@ private fun SessionItem(
             // trash icon show through the transparent row and sit on top of
             // the trailing timestamp even at rest.
             .background(MaterialTheme.colorScheme.background)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .combinedClickable(onClick = onClick, onLongClick = onRename)
             .padding(horizontal = 8.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -809,5 +843,38 @@ private fun SessionItem(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
+
+        // Discoverable actions: swipe-to-delete has no affordance of its own.
+        Box {
+            IconButton(
+                onClick = { menuOpen = true },
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "Session options",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Rename") },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onRename()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onMenuDelete()
+                    }
+                )
+            }
+        }
     }
 }

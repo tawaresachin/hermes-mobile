@@ -46,17 +46,6 @@
     </issue>
 
     <issue
-        id="NewApi"
-        message="Field requires API level 29 (current min is 26): `android.provider.MediaStore.Downloads#EXTERNAL_CONTENT_URI`"
-        errorLine1="                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI"
-        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/hermes/mobile/ui/screens/chat/ChatScreen.kt"
-            line="1134"
-            column="25"/>
-    </issue>
-
-    <issue
         id="OldTargetApi"
         message="Not targeting the latest versions of Android; compatibility modes apply. Consider testing and updating this version. Consult the `android.os.Build.VERSION_CODES` javadoc for details."
         errorLine1="        targetSdk = 34"
