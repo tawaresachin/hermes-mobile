@@ -87,11 +87,16 @@ release_repo() {  # <repo> <newver>
 
 # ── app bump ──────────────────────────────────────────────────────────
 if [ -n "$NEW_APP" ]; then
-  # versionCode must increase monotonically; 1M/1K/1 lanes support
-  # 999 patches per minor without aliasing (old 100/1 formula made
-  # 0.0.100 == 0.1.0 — Android would reject one of them as a downgrade).
+  # versionCode must increase monotonically; 10K/100/1 lanes support
+  # 99 patches per minor, 99 minors per major (rollover at 100).
+  # Formula: major*10000 + minor*100 + patch
   IFS=. read -r MA MI PA <<< "$NEW_APP"
-  CODE=$(( 10#$MA * 1000000 + 10#$MI * 1000 + 10#$PA ))
+  # Validate 0-99 range for minor and patch (major unbounded)
+  if (( 10#$MI > 99 || 10#$PA > 99 )); then
+    echo "!! version component exceeds 99: minor=$MI patch=$PA (max 99)" >&2
+    exit 1
+  fi
+  CODE=$(( 10#$MA * 10000 + 10#$MI * 100 + 10#$PA ))
   # perl -i, not sed -i: BSD/macOS sed rejects the bare -i form. Values reach
   # perl through the environment so shell and perl quoting cannot collide.
   CODE="$CODE" V="$NEW_APP" perl -i -pe '
