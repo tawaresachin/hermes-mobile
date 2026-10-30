@@ -1571,6 +1571,14 @@ fun ChatScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        // Token usage line (inside the chip, hides when unknown)
+                        if (contextUsed > 0L && contextTotal > 0L) {
+                            Text(
+                                text = "${meterFmt(contextUsed)} / ${meterFmt(contextTotal)} tokens",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = LightFgMuted,
+                            )
+                        }
                     }
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
@@ -1581,34 +1589,14 @@ fun ChatScreen(
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                // Token usage (always visible in header when available)
-                if (contextUsed > 0L && contextTotal > 0L) {
-                    Text(
-                        text = "${meterFmt(contextUsed)} / ${meterFmt(contextTotal)} tokens",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = LightFgMuted,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                // Swarm mode toggle for THIS session — always visible
+                // Swarm mode toggle for THIS session (icon-only, vertically centered —
+                // matches the layout before the 8191f9c "header declutter")
                 val swarmOn by vm.swarmEnabled.collectAsState()
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                        .clickable { vm.setSwarmEnabled(!swarmOn) }
-                ) {
+                IconButton(onClick = { vm.setSwarmEnabled(!swarmOn) }) {
                     Icon(
                         imageVector = Icons.Filled.Hive,
                         contentDescription = if (swarmOn) "Swarm mode ON" else "Swarm mode OFF",
-                        tint = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Swarm",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 // Search
