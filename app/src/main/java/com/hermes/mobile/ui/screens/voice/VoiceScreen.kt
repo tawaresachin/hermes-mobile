@@ -606,10 +606,10 @@ private fun ConversationOrb(
             )
             clipPath(Path().apply { addOval(Rect(0f, 0f, d, d)) }) {
                 // Dark glass body + haze.
-                drawCircle(color = Color(0xFF05050D), radius = r, center = mid)
+                drawCircle(color = VoiceCoreWhite.copy(alpha = 0.02f), radius = r, center = mid)
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(Color.Transparent, Color(0xFF0A0E20)),
+                        colors = listOf(Color.Transparent, VoiceCoreWhite.copy(alpha = 0.08f)),
                         center = mid,
                         radius = r,
                     ),

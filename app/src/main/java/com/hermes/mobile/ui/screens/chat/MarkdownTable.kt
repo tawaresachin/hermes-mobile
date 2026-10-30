@@ -34,7 +34,7 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
             .fillMaxWidth()
             .padding(vertical = 4.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (darkTheme) Color(0xFF2B3A4A) else Color(0xFFEEF2F7)
+            containerColor = if (darkTheme) TableBgDark else TableBgLight
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
@@ -46,13 +46,10 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
                 Row(
                     modifier = Modifier
                         .then(if (wide) Modifier else Modifier.fillMaxWidth())
-                        // Header is row 0 (the separator was stripped at
-                        // parse time — the old code painted row 1, i.e. the
-                        // first DATA row, as a second header).
                         .then(
                             if (rowIdx == 0) Modifier
                                 .background(
-                                    if (darkTheme) Color(0xFF1E2D3D) else Color(0xFFDCE4ED),
+                                    if (darkTheme) TableHeaderBgDark else TableHeaderBgLight,
                                     shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
                                 )
                             else Modifier
@@ -70,9 +67,9 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
                                 style = MaterialTheme.typography.bodySmall.copy(
                                     fontWeight = if (rowIdx == 0) FontWeight.SemiBold else FontWeight.Normal,
                                     color = if (rowIdx == 0)
-                                        (if (darkTheme) Color.White else Color(0xFF1A1A1A))
+                                        (if (darkTheme) TableTextHeaderDark else TableTextHeaderLight)
                                     else
-                                        (if (darkTheme) Color(0xFFB0BEC5) else Color(0xFF425262))
+                                        (if (darkTheme) TableTextBodyDark else TableTextBodyLight)
                                 ),
                                 maxLines = if (wide) 4 else 2,
                                 overflow = TextOverflow.Ellipsis
@@ -81,7 +78,7 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
                         // Vertical divider (except last column)
                         if (colIdx < row.size - 1) {
                             VerticalDivider(
-                                color = if (darkTheme) Color(0xFF3D4F60) else Color(0xFFC4CDD4),
+                                color = if (darkTheme) TableDividerDark else TableDividerLight,
                                 modifier = Modifier.height(24.dp)
                             )
                         }
@@ -91,7 +88,7 @@ fun MarkdownTable(tableRows: List<List<String>>, darkTheme: Boolean) {
                 // the last row.
                 if (rowIdx < tableRows.size - 1) {
                     HorizontalDivider(
-                        color = if (darkTheme) Color(0xFF3D4F60) else Color(0xFFC4CDD4),
+                        color = if (darkTheme) TableDividerDark else TableDividerLight,
                         thickness = 0.5.dp
                     )
                 }

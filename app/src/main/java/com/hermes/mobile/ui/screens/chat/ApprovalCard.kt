@@ -36,7 +36,7 @@ fun ApprovalCard(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
-        border = BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFFE5A100).copy(alpha = 0.55f)),
+        border = BorderStroke(1.dp, ApprovalWarning.copy(alpha = 0.55f)),
     ) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

@@ -13,17 +13,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Forward
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.automirrored.filled.Reply
-import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -78,6 +80,7 @@ fun MessageActionSheet(
 
             if (onSelect != null) {
                 SheetActionRow(Icons.Filled.CheckCircleOutline, "Select") { onSelect() }
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp))
             }
             SheetActionRow(Icons.Filled.ContentCopy, "Copy") { onCopy() }
             SheetActionRow(Icons.AutoMirrored.Filled.Reply, "Reply") { onReply() }
@@ -87,6 +90,7 @@ fun MessageActionSheet(
             if (onForward != null) {
                 SheetActionRow(Icons.AutoMirrored.Filled.Forward, "Forward") { onForward() }
             }
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp))
             if (!isUser && onRegenerate != null) {
                 SheetActionRow(Icons.Filled.Refresh, "Regenerate") { onRegenerate() }
             }

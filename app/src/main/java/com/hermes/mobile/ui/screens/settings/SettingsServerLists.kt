@@ -45,7 +45,7 @@ fun ServerListsPanel(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             } else {
                 if (expanded) {
                     IconButton(onClick = { viewModel.loadServerLists() },
-                        modifier = Modifier.size(32.dp)) {
+                        modifier = Modifier.size(32.dp).minimumInteractiveComponentSize()) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Reload",
                             modifier = Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -808,18 +808,18 @@ private fun StatusBadge(status: String?, source: String?, needsInput: Boolean = 
                 modifier = Modifier
                     .size(8.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFFB44DFF))
+                    .background(StatusWorking)
             )
             "done" -> Icon(
                 imageVector = Icons.Filled.CheckCircleOutline,
                 contentDescription = "done",
-                tint = Color(0xFF34A853),
+                tint = StatusDone,
                 modifier = Modifier.size(14.dp)
             )
             "error" -> Icon(
                 imageVector = Icons.Filled.ErrorOutline,
                 contentDescription = "error",
-                tint = Color(0xFFEA4335),
+                tint = StatusError,
                 modifier = Modifier.size(14.dp)
             )
             else -> {}
@@ -829,13 +829,13 @@ private fun StatusBadge(status: String?, source: String?, needsInput: Boolean = 
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFFDF0D5))
+                    .background(WarningAmber.copy(alpha = 0.15f))
                     .padding(horizontal = 5.dp, vertical = 1.dp)
             ) {
                 Text(
                     text = "needs input",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF9A6A00)
+                    color = WarningAmber
                 )
             }
         }

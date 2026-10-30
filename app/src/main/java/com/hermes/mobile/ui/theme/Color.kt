@@ -33,6 +33,33 @@ val TelegramRed        = Color(0xFFE53935)
 val TelegramGreen      = Color(0xFF43A047)
 val TelegramAmber      = Color(0xFFFB8C00)
 
+// ── Extended semantic (new) ──
+val ReadReceiptBlue    = Color(0xFF4FC3F7)  // read receipt double-check
+val ApprovalWarning    = Color(0xFFE5A100)  // approval card border
+
+// ── Semantic aliases (moved up for forward references) ──
+val ErrorRed      = TelegramRed
+val SuccessGreen  = TelegramGreen
+val WarningAmber  = TelegramAmber
+
+// ── Table tokens ──
+val TableBgLight       = Color(0xFFEEF2F7)
+val TableBgDark        = Color(0xFF2B3A4A)
+val TableHeaderBgLight = Color(0xFFDCE4ED)
+val TableHeaderBgDark  = Color(0xFF1E2D3D)
+val TableTextHeaderLight = Color(0xFF1A1A1A)
+val TableTextHeaderDark  = Color.White
+val TableTextBodyLight   = Color(0xFF425262)
+val TableTextBodyDark    = Color(0xFFB0BEC5)
+val TableDividerLight    = Color(0xFFC4CDD4)
+val TableDividerDark     = Color(0xFF3D4F60)
+
+// ── Session status badges ──
+val StatusWorking      = Color(0xFFB44DFF)  // purple
+val StatusDone         = Color(0xFF34A853)  // green
+val StatusError        = ErrorRed
+val StatusNeedsInput   = WarningAmber
+
 // ── Chat bubbles ──
 val UserBubbleLight    = Color(0xFFE1FFC7)   // classic Telegram green
 val UserBubbleDark     = Color(0xFF2B5278)   // dark blue on dark
@@ -58,9 +85,9 @@ val VoiceNeonMagenta   = Color(0xFFFF4DD2)
 val VoiceNeonRed       = Color(0xFFFF4D4D)
 val VoiceCoreWhite     = Color(0xFFF2F7FF)
 
-// ═══════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
 // BACKWARD-COMPATIBLE ALIASES
-// ═══════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
 
 // Brand
 val HermesPrimary       = TelegramBlue
@@ -71,8 +98,3 @@ val HermesSecondary     = TelegramBlue
 val HermesPrimaryDarkAA = Color(0xFF005FCC)  // AAA-safe for light mode
 val HermesSecondaryDark = Color(0xFF1D4ED8)  // darker blue
 val HermesAccent        = TelegramBlue
-
-// Semantic aliases
-val ErrorRed      = TelegramRed
-val SuccessGreen  = TelegramGreen
-val WarningAmber  = TelegramAmber

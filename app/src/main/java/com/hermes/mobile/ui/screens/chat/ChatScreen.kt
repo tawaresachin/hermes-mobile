@@ -1547,30 +1547,19 @@ fun ChatScreen(
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
+                        // Single status line: streaming note > provider note > model name
                         Text(
-                            // Telegram-style: while the agent is thinking
-                            // (streaming, no token yet) the subtitle becomes
-                            // an animated "thinking…" instead of the model —
-                            // or the live provider note (rate-limit wait,
-                            // retry countdown) so a long backoff never reads
-                            // as a dead chat.
-                            text = if (isStreaming && (streamingContent?.isBlank() == true))
-                                turnStatusNote?.takeIf { it.isNotBlank() } ?: ThinkingSubtitle()
-                            else
-                                selectedModelName,
+                            text = when {
+                                isStreaming && (streamingContent?.isBlank() == true) ->
+                                    turnStatusNote?.takeIf { it.isNotBlank() } ?: ThinkingSubtitle()
+                                selectedModelProvider.isNotBlank() -> "via $selectedModelProvider"
+                                else -> selectedModelName
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = HermesPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        // Token usage line (server truth, hides when unknown)
-                        if (contextUsed > 0L && contextTotal > 0L) {
-                            Text(
-                                text = "${meterFmt(contextUsed)} / ${meterFmt(contextTotal)} tokens",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = LightFgMuted,
-                            )
-                        }
                     }
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
@@ -1581,15 +1570,82 @@ fun ChatScreen(
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                // Swarm mode toggle for THIS session (icon-only, like the
-                // command pill — colored when ON)
-                val swarmOn by vm.swarmEnabled.collectAsState()
-                IconButton(onClick = { vm.setSwarmEnabled(!swarmOn) }) {
-                    Icon(
-                        imageVector = Icons.Filled.Hive,
-                        contentDescription = if (swarmOn) "Swarm mode ON" else "Swarm mode OFF",
-                        tint = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                // Expandable details row: tokens + swarm toggle
+                var detailsExpanded by remember { mutableStateOf(false) }
+                val tokensText = if (contextUsed > 0L && contextTotal > 0L)
+                    "${meterFmt(contextUsed)} / ${meterFmt(contextTotal)} tokens"
+                else null
+                if (tokensText != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 2.dp)
+                            .clickable { detailsExpanded = !detailsExpanded }
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                            .clip(RoundedCornerShape(12.dp))
+                    ) {
+                        AnimatedVisibility(detailsExpanded) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(text = tokensText, style = MaterialTheme.typography.bodySmall, color = LightFgMuted)
+                                Spacer(modifier = Modifier.weight(1f))
+                                val swarmOn by vm.swarmEnabled.collectAsState()
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                        .clickable { vm.setSwarmEnabled(!swarmOn) }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Hive,
+                                        contentDescription = if (swarmOn) "Swarm mode ON" else "Swarm mode OFF",
+                                        tint = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Swarm",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                        // Chevron indicator when collapsed
+                        if (!detailsExpanded) {
+                            Icon(
+                                imageVector = Icons.Filled.ExpandMore,
+                                contentDescription = "Expand details",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp).padding(end = 4.dp)
+                            )
+                        }
+                    }
+                } else {
+                    // No tokens yet — just swarm toggle inline
+                    val swarmOn by vm.swarmEnabled.collectAsState()
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                            .clickable { vm.setSwarmEnabled(!swarmOn) }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Hive,
+                            contentDescription = if (swarmOn) "Swarm mode ON" else "Swarm mode OFF",
+                            tint = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Swarm",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 // Search
                 IconButton(onClick = { showSearch = !showSearch; searchQuery = "" }) {
@@ -2422,14 +2478,14 @@ private fun SelectionActionBar(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f)
             )
-            IconButton(onClick = onSelectAll) {
+            IconButton(onClick = onSelectAll, modifier = Modifier.minimumInteractiveComponentSize()) {
                 Icon(
                     imageVector = if (count == total) Icons.Filled.Deselect else Icons.Filled.SelectAll,
                     contentDescription = "Select all",
                     tint = MaterialTheme.colorScheme.onSurface
                 )
             }
-            IconButton(onClick = onCopy, enabled = count > 0) {
+            IconButton(onClick = onCopy, enabled = count > 0, modifier = Modifier.minimumInteractiveComponentSize()) {
                 Icon(
                     imageVector = Icons.Filled.ContentCopy,
                     contentDescription = "Copy",
@@ -2437,7 +2493,7 @@ private fun SelectionActionBar(
                     else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            IconButton(onClick = onDelete, enabled = count > 0) {
+            IconButton(onClick = onDelete, enabled = count > 0, modifier = Modifier.minimumInteractiveComponentSize()) {
                 Icon(
                     imageVector = Icons.Filled.Delete,
                     contentDescription = "Delete",
@@ -2445,7 +2501,7 @@ private fun SelectionActionBar(
                     else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            IconButton(onClick = onExit) {
+            IconButton(onClick = onExit, modifier = Modifier.minimumInteractiveComponentSize()) {
                 Icon(
                     imageVector = Icons.Filled.Close,
                     contentDescription = "Exit selection",

@@ -167,7 +167,7 @@ fun SettingsScreen(
                     modifier = Modifier.weight(1f)
                 )
                 // E2E setup help — click to see the full pairing guide
-                IconButton(onClick = { showSetupHelp = true }) {
+                IconButton(onClick = { showSetupHelp = true }, modifier = Modifier.minimumInteractiveComponentSize()) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.HelpOutline,
                         contentDescription = "Setup help",
@@ -548,7 +548,7 @@ fun SettingsScreen(
                     // Manual refresh + honest source note.
                     IconButton(
                         onClick = { viewModel.loadUsageStats() },
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(32.dp).minimumInteractiveComponentSize()
                     ) {
                         Icon(
                             Icons.Filled.Refresh,
@@ -899,9 +899,9 @@ private fun ConnectionStatusHeader(
             // Refresh icon immediately after the status text
             if (status != ConnectionStatus.CONNECTING) {
                 IconButton(
-                    onClick = onRefresh,
-                    modifier = Modifier.size(32.dp),
-                ) {
+                                    onClick = onRefresh,
+                                    modifier = Modifier.size(32.dp).minimumInteractiveComponentSize()
+                                ) {
                     Icon(
                         Icons.Filled.Refresh,
                         contentDescription = "Test connection",

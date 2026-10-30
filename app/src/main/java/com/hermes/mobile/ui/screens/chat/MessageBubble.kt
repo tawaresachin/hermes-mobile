@@ -69,7 +69,7 @@ private fun StatusTick(status: MessageStatus, tint: Color) {
         MessageStatus.READ -> Icon(
             imageVector = Icons.Filled.DoneAll,
             contentDescription = "Read",
-            tint = HermesPrimary,
+            tint = ReadReceiptBlue,
             modifier = Modifier.size(14.dp)
         )
         MessageStatus.FAILED -> Icon(
@@ -134,7 +134,7 @@ fun MessageBubble(
         bottomEnd = if (isUser) (if (isLastInGroup) 17.dp else 3.dp) else 17.dp
     )
     val textColor = if (isUser) {
-        if (isDark) Color.White else Color(0xFF000000)
+        if (isDark) Color.White else LightFg
     } else {
         MaterialTheme.colorScheme.onSurface
     }
@@ -318,6 +318,7 @@ fun MessageBubble(
                         .align(Alignment.TopEnd)
                         .padding(top = 3.dp, end = 3.dp)
                         .size(18.dp)
+                        .minimumInteractiveComponentSize()
                 ) {
                     Box(contentAlignment = Alignment.Center,
                         modifier = Modifier.fillMaxSize()) {
@@ -593,33 +594,10 @@ fun MessageBubble(
                             if (isUser && !isStreaming) {
                                 // Delivery status ticks (Telegram style)
                                 Spacer(modifier = Modifier.width(2.dp))
-                                when (message.status) {
-                                    MessageStatus.SENDING -> Icon(
-                                        Icons.Filled.Schedule,
-                                        contentDescription = "Sending",
-                                        modifier = Modifier.size(12.dp),
-                                        tint = Color.White.copy(alpha = 0.5f)
-                                    )
-                                    MessageStatus.SENT -> Icon(
-                                        Icons.Filled.Check,
-                                        contentDescription = "Sent",
-                                        modifier = Modifier.size(12.dp),
-                                        tint = Color.White.copy(alpha = 0.65f)
-                                    )
-                                    MessageStatus.READ -> Icon(
-                                        Icons.Filled.DoneAll,
-                                        contentDescription = "Read",
-                                        modifier = Modifier.size(12.dp),
-                                        tint = Color(0xFF4FC3F7) // Light blue for read
-                                    )
-                                    MessageStatus.FAILED -> Icon(
-                                        Icons.Filled.Refresh,
-                                        contentDescription = "Failed",
-                                        modifier = Modifier.size(12.dp),
-                                        tint = ErrorRed
-                                    )
-                                    else -> {}
-                                }
+                                StatusTick(
+                                    status = message.status ?: MessageStatus.READ,
+                                    tint = if (isUser) Color.White.copy(alpha = 0.65f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                )
                             }
                         }
                     }

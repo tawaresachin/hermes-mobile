@@ -106,19 +106,19 @@ fun ProvidersCard(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                             }
                         } else {
                             IconButton(onClick = { confirmDefault = ep },
-                                modifier = Modifier.size(36.dp)) {
+                                modifier = Modifier.size(36.dp).minimumInteractiveComponentSize()) {
                                 Icon(Icons.Filled.StarOutline, "Set default",
                                     modifier = Modifier.size(18.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                         IconButton(onClick = { editing = ep; showEditor = true },
-                            modifier = Modifier.size(36.dp)) {
+                            modifier = Modifier.size(36.dp).minimumInteractiveComponentSize()) {
                             Icon(Icons.Filled.Edit, "Edit", modifier = Modifier.size(18.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         IconButton(onClick = { confirmDelete = id },
-                            modifier = Modifier.size(36.dp)) {
+                            modifier = Modifier.size(36.dp).minimumInteractiveComponentSize()) {
                             Icon(Icons.Filled.DeleteOutline, "Delete", modifier = Modifier.size(18.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
