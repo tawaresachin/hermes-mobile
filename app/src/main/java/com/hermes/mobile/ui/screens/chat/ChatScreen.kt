@@ -242,10 +242,21 @@ class ChatViewModel @Inject constructor(
     }
 
     /** Apply this session's own saved model (or clear to "" so loadModels
-     * can pick the server default for a session that never chose one). */
-    private fun restoreSessionModel(sessionId: String) {
-        _currentModel.value = repository.savedModelForSession(sessionId) ?: ""
-        _currentProviderSlug.value = repository.savedModelSlugForSession(sessionId)
+     * can pick the server default for a session that never chose one).
+     * If not in local prefs, fetches from server (for Desktop-created sessions). */
+    private suspend fun restoreSessionModel(sessionId: String) {
+        var model = repository.savedModelForSession(sessionId)
+        var slug = repository.savedModelSlugForSession(sessionId)
+        if (model.isNullOrBlank()) {
+            // Session created on Desktop — fetch model from server
+            val resp = try { repository.fetchSessionModel(sessionId) } catch (_: Exception) { null }
+            resp?.current?.takeIf { it.isNotBlank() }?.let { serverModel ->
+                model = serverModel
+                repository.saveModelForSession(sessionId, model, slug)
+            }
+        }
+        _currentModel.value = model ?: ""
+        _currentProviderSlug.value = slug
         _swarmEnabled.value = repository.isSwarmForSession(sessionId)
         _contextTotal.value = 0L
         _contextUsed.value = 0L
@@ -1570,82 +1581,35 @@ fun ChatScreen(
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                // Expandable details row: tokens + swarm toggle
-                var detailsExpanded by remember { mutableStateOf(false) }
-                val tokensText = if (contextUsed > 0L && contextTotal > 0L)
-                    "${meterFmt(contextUsed)} / ${meterFmt(contextTotal)} tokens"
-                else null
-                if (tokensText != null) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 2.dp)
-                            .clickable { detailsExpanded = !detailsExpanded }
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                            .clip(RoundedCornerShape(12.dp))
-                    ) {
-                        AnimatedVisibility(detailsExpanded) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
-                            ) {
-                                Text(text = tokensText, style = MaterialTheme.typography.bodySmall, color = LightFgMuted)
-                                Spacer(modifier = Modifier.weight(1f))
-                                val swarmOn by vm.swarmEnabled.collectAsState()
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                        .clickable { vm.setSwarmEnabled(!swarmOn) }
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Hive,
-                                        contentDescription = if (swarmOn) "Swarm mode ON" else "Swarm mode OFF",
-                                        tint = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Swarm",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                        // Chevron indicator when collapsed
-                        if (!detailsExpanded) {
-                            Icon(
-                                imageVector = Icons.Filled.ExpandMore,
-                                contentDescription = "Expand details",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp).padding(end = 4.dp)
-                            )
-                        }
-                    }
-                } else {
-                    // No tokens yet — just swarm toggle inline
-                    val swarmOn by vm.swarmEnabled.collectAsState()
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                            .clickable { vm.setSwarmEnabled(!swarmOn) }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Hive,
-                            contentDescription = if (swarmOn) "Swarm mode ON" else "Swarm mode OFF",
-                            tint = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Swarm",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                // Token usage (always visible in header when available)
+                if (contextUsed > 0L && contextTotal > 0L) {
+                    Text(
+                        text = "${meterFmt(contextUsed)} / ${meterFmt(contextTotal)} tokens",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LightFgMuted,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                // Swarm mode toggle for THIS session — always visible
+                val swarmOn by vm.swarmEnabled.collectAsState()
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                        .clickable { vm.setSwarmEnabled(!swarmOn) }
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Hive,
+                        contentDescription = if (swarmOn) "Swarm mode ON" else "Swarm mode OFF",
+                        tint = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Swarm",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 // Search
                 IconButton(onClick = { showSearch = !showSearch; searchQuery = "" }) {

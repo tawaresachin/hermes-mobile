@@ -805,6 +805,10 @@ class HermesRepository @Inject constructor(
     fun savedModelSlugForSession(sessionId: String): String =
         apiService.savedModelSlugForSession(sessionId)
 
+    /** Fetch model list with current model for a session (for Desktop sync). */
+    suspend fun fetchSessionModel(sessionId: String): ModelListResponse? =
+        apiService.listModels(sessionId)
+
     fun saveModelForSession(sessionId: String, modelId: String, providerSlug: String) =
         apiService.saveModelForSession(sessionId, modelId, providerSlug)
     fun isSwarmForSession(sessionId: String): Boolean = apiService.isSwarmForSession(sessionId)
