@@ -1,6 +1,7 @@
 package com.hermes.mobile.data.repository
 
 import android.content.Context
+import com.hermes.mobile.DiagLog
 import com.hermes.mobile.data.local.MessageDao
 import com.hermes.mobile.data.local.SessionDao
 import com.hermes.mobile.data.model.*
@@ -91,7 +92,11 @@ class HermesRepository @Inject constructor(
         serverIdOrSelf(sessionId)?.let { sid ->
             try { apiService.setSessionArchived(sid, archived) }
             catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (_: Exception) { /* offline: local flag stands; desktop syncs its own */ }
+            catch (e: Exception) {
+                // Best-effort — offline archive sync must not crash the caller,
+                // but it used to vanish silently.
+                DiagLog.e("REPO", "setSessionArchived failed: $e")
+            }
         }
     }
 
@@ -228,7 +233,11 @@ class HermesRepository @Inject constructor(
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            // Best-effort — a transient sync failure must not block the
+            // 10s poll loop, but it used to vanish silently.
+            DiagLog.e("REPO", "syncAllSessionsFromServer failed: $e")
+        }
     }
 
     /** Full server → phone sync: every Hermes session (Desktop, Telegram,
@@ -384,8 +393,9 @@ class HermesRepository @Inject constructor(
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             // Best-effort — reopening must never fail because of this.
+            DiagLog.e("REPO", "backfillAttachments failed: $e")
         }
     }
 
@@ -460,7 +470,10 @@ class HermesRepository @Inject constructor(
             return true
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // Best-effort — a failed repair must not crash the resume path,
+            // but it used to vanish silently.
+            DiagLog.e("REPO", "applyServerResponse failed: $e")
             return false
         }
     }
@@ -498,7 +511,10 @@ class HermesRepository @Inject constructor(
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // Best-effort — a failed repair must not crash the resume path,
+            // but it used to vanish silently.
+            DiagLog.e("REPO", "pollServerResponse failed: $e")
             return false
         }
     }
@@ -615,8 +631,10 @@ class HermesRepository @Inject constructor(
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
-        } catch (_: Exception) {
-            // Best-effort repair — never crash the resume path.
+        } catch (e: Exception) {
+            // Best-effort repair — never crash the resume path,
+            // but it used to vanish silently.
+            DiagLog.e("REPO", "repairBlankAssistantResponse failed: $e")
         }
     }
 
@@ -749,6 +767,9 @@ class HermesRepository @Inject constructor(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            // Best-effort — health check failure must not crash the caller,
+            // but it used to vanish silently.
+            DiagLog.e("REPO", "checkConnection failed: $e")
             ConnectionStatus.ERROR
         }
     }
@@ -868,7 +889,10 @@ class HermesRepository @Inject constructor(
             val sessionsCount = sessions.size
             val sum = messageDao.countAndTokenSum()
             UsageStats(sessionsCount, sum.cnt, sum.totalTokens)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // Best-effort — usage stats failure must not crash the caller,
+            // but it used to vanish silently.
+            DiagLog.e("REPO", "getUsageStats failed: $e")
             UsageStats(0, 0, 0)
         }
     }

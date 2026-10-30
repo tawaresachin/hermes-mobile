@@ -392,8 +392,8 @@ class SettingsViewModel @Inject constructor(
                     // successful load keeps showing the stale data.
                     serverListsError = when {
                         loadedOk || it.serverListsLoaded -> null
-                        jobs.body == null -> gatewayError(jobs.status, "/api/jobs")
-                        else -> gatewayError(skills.status, "/api/mobile/skills")
+                        jobs.body == null -> gatewayError(jobs.status, "/api/jobs", skills.body != null)
+                        else -> gatewayError(skills.status, "/api/mobile/skills", jobs.body != null)
                     },
                 )
             }
@@ -402,14 +402,22 @@ class SettingsViewModel @Inject constructor(
 
     /** Say what the gateway actually answered. A 404 means the route is not
      * mounted (old hermes, or the gateway started before the plugin was
-     * deployed) — restarting the gateway mounts it; a 401 means re-pair. */
-    private fun gatewayError(status: Int, route: String): String = when {
+     * deployed) — restarting the gateway mounts it; a 401 means re-pair.
+     * When [otherListLoaded] is true the plugin IS loaded (its other route
+     * answered 200), so a 404 on this route means the deployed plugin
+     * predates it — update the plugin, don't restart. A 200 whose body
+     * lacked the expected key is reported as an empty list, not a mystery. */
+    private fun gatewayError(status: Int, route: String, otherListLoaded: Boolean = false): String = when {
         status == 0 ->
             "Could not reach the gateway — check the server URL and network."
         status == 401 || status == 403 ->
             "Gateway rejected the API key (HTTP $status) — re-pair this device."
+        status == 404 && otherListLoaded ->
+            "The gateway has no $route route (HTTP 404) — the deployed plugin is older than this app's plugin routes; update the plugin."
         status == 404 ->
             "The gateway has no $route route (HTTP 404) — the hermes-mobile plugin isn't loaded; restart the gateway."
+        status in 200..299 ->
+            "The gateway answered $route (HTTP $status) with no data — the panel is empty, not broken."
         else ->
             "The gateway returned HTTP $status for $route."
     }

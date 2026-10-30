@@ -214,6 +214,7 @@ class SessionsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 repository.syncAllSessionsFromServer()
+                markSynced()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) { }
@@ -232,6 +233,21 @@ class SessionsViewModel @Inject constructor(
             } catch (_: Exception) { }
         }
     }
+
+    // ── Sync throttle ──
+    // The 10s poll runs in a repeatOnLifecycle(STARTED) loop, so returning
+    // to the tab fires another round immediately. Skip the first round if a
+    // sync finished within the last 10s — otherwise tab-flicking N times
+    // costs N full paginated GETs.
+    private var lastSyncInMs: Long = 0L
+    private val syncIntervalMs = 10_000L
+
+    /** True if a sync finished less than [syncIntervalMs] ago. */
+    fun isSyncDueNow(): Boolean =
+        System.currentTimeMillis() - lastSyncInMs >= syncIntervalMs
+
+    /** Record that a sync round just finished. */
+    fun markSynced() { lastSyncInMs = System.currentTimeMillis() }
 
     /**
      * Delete a session and emit a snackbar event with an Undo action.
@@ -432,6 +448,12 @@ fun SessionsScreen(
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
+                // Skip the first round if a sync finished within the last
+                // 10s — returning to the tab must not cost a full paginated
+                // GET every time (tab-flicking N times = N GETs otherwise).
+                if (!viewModel.isSyncDueNow()) {
+                    kotlinx.coroutines.delay(10_000)
+                }
                 viewModel.syncFromServer()
                 viewModel.refreshServerStatus()
                 kotlinx.coroutines.delay(10_000)

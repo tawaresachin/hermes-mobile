@@ -387,7 +387,7 @@ fun HomeScreen(
                 onDismissRequest = { deleteTarget = null },
                 title = { Text("Delete chat?") },
                 text = {
-                    Text("\"${target.title?.takeIf { it.isNotBlank() } ?: "Untitled Session"}\" and its messages will be removed.")
+                    Text("\"${target.title?.takeIf { it.isNotBlank() } ?: "Untitled Session"}\" and its messages will be removed — locally and on the server.")
                 },
                 confirmButton = {
                     TextButton(onClick = {
@@ -843,6 +843,8 @@ private fun SessionItem(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
+
+        Spacer(modifier = Modifier.width(4.dp))
 
         // Discoverable actions: swipe-to-delete has no affordance of its own.
         Box {
