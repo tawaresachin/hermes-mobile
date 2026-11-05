@@ -121,9 +121,6 @@ import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
 
-// ─── Drawer geometry (right-edge feature drawer overlay) ───
-private const val DRAWER_WIDTH_DP = 280
-
 // ─── UI State ───
 
 data class HomeUiState(
@@ -328,9 +325,28 @@ fun HomeScreen(
                 newChatEnabled = !uiState.isLoading
             )
 
-            // (the feature drawer is rendered as an overlay AFTER the
-            //  content Column — see FeatureDrawer below; it overlaps the
-            //  sessions list instead of pushing it down)
+            // ── Expandable feature panel (full width, opaque, inline):
+            // Voice / Sessions / Terminal as menu rows. Opening it
+            // pushes the sessions list down (no overlay, no scrim —
+            // nothing to cover or dim the screen).
+            FeaturePanel(
+                panelOpen = panelOpen,
+                onVoiceInput = {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                    onNavigateToVoice()
+                },
+                onResumeSession = {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                    onNavigateToSessions()
+                },
+                onTerminal = {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                    onNavigateToTerminal()
+                }
+            )
 
             // ── Error surface (e.g. session creation failure) ──
             uiState.error?.let { err ->
@@ -387,87 +403,6 @@ fun HomeScreen(
                 }
             }
         }
-        }
-
-        // ── Feature drawer overlay: slides in from the right edge,
-        // OVERLAPPING the sessions list (zero layout shift).
-        //
-        // The overlay Boxes are composed ONLY while open (or during the
-        // 200ms close animation, while alpha > 0.01). A closed drawer
-        // must leave NO full-screen node behind: in this Compose
-        // version a full-screen Box with a pointer handler — even a
-        // DISABLED clickable, or an alpha-0 shadowed card — can sit
-        // over the content and swallow every Home tap ("nothing on
-        // Home is clickable"). Composing it away when idle makes
-        // that impossible by construction.
-        // (The overlay Boxes must live here in the outer BoxScope —
-        // matchParentSize / align are BoxScope modifiers.)
-        val slideX by animateDpAsState(
-            targetValue = if (panelOpen) 0.dp else DRAWER_WIDTH_DP.dp,
-            animationSpec = tween(200),
-            label = "drawerX"
-        )
-        val drawerAlpha by animateFloatAsState(
-            targetValue = if (panelOpen) 1f else 0f,
-            animationSpec = tween(200),
-            label = "drawerAlpha"
-        )
-        val scrimAlpha by animateFloatAsState(
-            targetValue = if (panelOpen) 1f else 0f,
-            // Same 200ms as the card so panel and dim never skew
-            // (0.1.8 shipped 150ms against 200ms — mid-animation the
-            // surroundings and the panel were at different opacities).
-            animationSpec = tween(200),
-            label = "scrimAlpha"
-        )
-
-        if (panelOpen || drawerAlpha > 0.01f) {
-            // Scrim: blocks content taps while open, tap anywhere to
-            // dismiss (standard modal-drawer behavior). Always
-            // interactive while composed (the branch above is the gate).
-            // Single alpha source: the background carries the fade —
-            // a second .alpha() on the same node would multiply the
-            // two curves (quadratic, uneven-looking fade).
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(Color.Black.copy(alpha = 0.18f * scrimAlpha))
-                    .clickable {
-                        panelOpen = false
-                        HomeUiStore.setPanelOpen(context, false)
-                    }
-            )
-
-            // The drawer card itself: full height, flush right edge,
-            // slides in horizontally. No drop shadow: a 10dp shadow
-            // painted over the dimmed scrim produced a dark gradient
-            // hugging the panel edge ("texture" inconsistency).
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .fillMaxHeight()
-                    .width(DRAWER_WIDTH_DP.dp)
-                    .offset(x = slideX)
-                    .alpha(drawerAlpha)
-            ) {
-                FeatureDrawerCard(
-                    onVoiceInput = {
-                        panelOpen = false
-                        HomeUiStore.setPanelOpen(context, false)
-                        onNavigateToVoice()
-                    },
-                    onResumeSession = {
-                        panelOpen = false
-                        HomeUiStore.setPanelOpen(context, false)
-                        onNavigateToSessions()
-                    },
-                    onTerminal = {
-                        panelOpen = false
-                        HomeUiStore.setPanelOpen(context, false)
-                        onNavigateToTerminal()
-                    }
-                )
-            }
         }
         }
 
@@ -618,25 +553,45 @@ private fun HomeHeader(
     }
 }
 
-// ─── Feature drawer card (content only; the overlay Boxes live in the
-// HomeScreen's outer BoxScope — see the call site) ───
-// New features = one more FeaturePill row in this Column.
+// ─── Feature panel (full-width, opaque, inline): Voice/Sessions/
+// Terminal as menu rows that expand in place below the header.
+// No overlay, no scrim, no dimming — opening it pushes the sessions
+// list down. New features = one more FeaturePill row in this Column.
 
 @Composable
-private fun FeatureDrawerCard(
+private fun FeaturePanel(
+    panelOpen: Boolean,
     onVoiceInput: () -> Unit,
     onResumeSession: () -> Unit,
     onTerminal: () -> Unit
 ) {
-    // Tonal elevation: M3 modal-drawer content is one container tone
-    // above the page. The 0.1.8/0.1.10 card used the raw background
-    // color, so the panel met the 18%-dimmed scrim with a hard
-    // brightness step — the "inconsistent colour" at the panel edge.
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh
+    // Height animates 0 → 160dp; alpha fades in faster (150ms) so
+    // rows are visible as the panel opens. The rows are ALWAYS
+    // composed (even at height 0) so closing causes no reflow.
+    val panelHeight by animateDpAsState(
+        targetValue = if (panelOpen) 160.dp else 0.dp,
+        animationSpec = tween(200),
+        label = "panelHeight"
+    )
+    val panelAlpha by animateFloatAsState(
+        targetValue = if (panelOpen) 1f else 0f,
+        animationSpec = tween(150),
+        label = "panelAlpha"
+    )
+
+    // Opaque: this sits in the layout over the plain page surface —
+    // nothing is drawn on top of or through it.
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(panelHeight)
+            .clipToBounds()
+            .alpha(panelAlpha)
     ) {
         Column(
-            modifier = Modifier.padding(top = 24.dp, bottom = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, top = 8.dp, end = 20.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             FeaturePill(Icons.Filled.Mic, "Voice", onVoiceInput)
