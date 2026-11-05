@@ -121,6 +121,9 @@ import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
 
+// ─── Drawer geometry (right-edge feature drawer overlay) ───
+private const val DRAWER_WIDTH_DP = 280
+
 // ─── UI State ───
 
 data class HomeUiState(
@@ -325,28 +328,8 @@ fun HomeScreen(
                 newChatEnabled = !uiState.isLoading
             )
 
-            // ── Expandable feature panel (full width, opaque, inline):
-            // Voice / Sessions / Terminal as menu rows. Opening it
-            // pushes the sessions list down (no overlay, no scrim —
-            // nothing to cover or dim the screen).
-            FeaturePanel(
-                panelOpen = panelOpen,
-                onVoiceInput = {
-                    panelOpen = false
-                    HomeUiStore.setPanelOpen(context, false)
-                    onNavigateToVoice()
-                },
-                onResumeSession = {
-                    panelOpen = false
-                    HomeUiStore.setPanelOpen(context, false)
-                    onNavigateToSessions()
-                },
-                onTerminal = {
-                    panelOpen = false
-                    HomeUiStore.setPanelOpen(context, false)
-                    onNavigateToTerminal()
-                }
-            )
+            // (the feature drawer is rendered as an opaque overlay in
+            //  the outer BoxScope — see below)
 
             // ── Error surface (e.g. session creation failure) ──
             uiState.error?.let { err ->
@@ -403,6 +386,54 @@ fun HomeScreen(
                 }
             }
         }
+        }
+
+        // ── Feature drawer overlay: slides in from the right edge,
+        // full height (top to bottom), fully OPAQUE — no scrim, no
+        // shadow, no alpha. The surroundings keep their normal color;
+        // only the panel's own solid surface is added.
+        //
+        // Composed ONLY while open (or mid close-animation, while the
+        // slide hasn't finished). A closed drawer leaves no overlay
+        // node behind, so it can never intercept Home taps.
+        // (Lives in the outer BoxScope: .align is a BoxScope modifier,
+        // and panelOpen/context are declared here.)
+        val slideX by animateDpAsState(
+            targetValue = if (panelOpen) 0.dp else DRAWER_WIDTH_DP.dp,
+            animationSpec = tween(200),
+            label = "drawerX"
+        )
+
+        if (panelOpen || slideX < DRAWER_WIDTH_DP.dp) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .fillMaxHeight()
+                    .width(DRAWER_WIDTH_DP.dp)
+                    .offset(x = slideX)
+            ) {
+                FeatureDrawerCard(
+                    onDismiss = {
+                        panelOpen = false
+                        HomeUiStore.setPanelOpen(context, false)
+                    },
+                    onVoiceInput = {
+                        panelOpen = false
+                        HomeUiStore.setPanelOpen(context, false)
+                        onNavigateToVoice()
+                    },
+                    onResumeSession = {
+                        panelOpen = false
+                        HomeUiStore.setPanelOpen(context, false)
+                        onNavigateToSessions()
+                    },
+                    onTerminal = {
+                        panelOpen = false
+                        HomeUiStore.setPanelOpen(context, false)
+                        onNavigateToTerminal()
+                    }
+                )
+            }
         }
         }
 
@@ -553,47 +584,43 @@ private fun HomeHeader(
     }
 }
 
-// ─── Feature panel (full-width, opaque, inline): Voice/Sessions/
-// Terminal as menu rows that expand in place below the header.
-// No overlay, no scrim, no dimming — opening it pushes the sessions
-// list down. New features = one more FeaturePill row in this Column.
+// ─── Feature drawer card: opaque, full-height, right edge.
+// One solid surface in the page's own background color — no scrim,
+// no dimming, no shadow, no alpha. Slides in horizontally.
+// Dismisses via its own top-right close button (with no scrim there
+// is no "tap outside", and the panel's top edge covers the header's
+// hamburger, so this button is required).
+// New features = one more FeaturePill row in this Column.
 
 @Composable
-private fun FeaturePanel(
-    panelOpen: Boolean,
+private fun FeatureDrawerCard(
+    onDismiss: () -> Unit,
     onVoiceInput: () -> Unit,
     onResumeSession: () -> Unit,
     onTerminal: () -> Unit
 ) {
-    // Height animates 0 → 160dp; alpha fades in faster (150ms) so
-    // rows are visible as the panel opens. The rows are ALWAYS
-    // composed (even at height 0) so closing causes no reflow.
-    val panelHeight by animateDpAsState(
-        targetValue = if (panelOpen) 160.dp else 0.dp,
-        animationSpec = tween(200),
-        label = "panelHeight"
-    )
-    val panelAlpha by animateFloatAsState(
-        targetValue = if (panelOpen) 1f else 0f,
-        animationSpec = tween(150),
-        label = "panelAlpha"
-    )
-
-    // Opaque: this sits in the layout over the plain page surface —
-    // nothing is drawn on top of or through it.
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(panelHeight)
-            .clipToBounds()
-            .alpha(panelAlpha)
+    // Opaque and uniform: exactly the page surface color, 100% alpha.
+    Surface(
+        color = MaterialTheme.colorScheme.background
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 20.dp, top = 8.dp, end = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .fillMaxSize()
+                .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 12.dp)
         ) {
+            // Close button: top-right of the panel itself.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Close menu"
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
             FeaturePill(Icons.Filled.Mic, "Voice", onVoiceInput)
             FeaturePill(Icons.Filled.History, "Sessions", onResumeSession)
             FeaturePill(Icons.Filled.Terminal, "Terminal", onTerminal)
