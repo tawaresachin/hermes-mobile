@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -118,6 +119,11 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
+
+// ─── Drawer geometry (right-edge feature drawer overlay) ───
+private const val DRAWER_WIDTH_DP = 280
+// Sits just below the compact header (tune if the header grows).
+private const val DRAWER_TOP_DP = 100
 
 // ─── UI State ───
 
@@ -322,25 +328,9 @@ fun HomeScreen(
                 newChatEnabled = !uiState.isLoading
             )
 
-            // ── Expandable feature panel (vertical): Voice / Sessions / Terminal ──
-            FeaturePanel(
-                panelOpen = panelOpen,
-                onVoiceInput = {
-                    panelOpen = false
-                    HomeUiStore.setPanelOpen(context, false)
-                    onNavigateToVoice()
-                },
-                onResumeSession = {
-                    panelOpen = false
-                    HomeUiStore.setPanelOpen(context, false)
-                    onNavigateToSessions()
-                },
-                onTerminal = {
-                    panelOpen = false
-                    HomeUiStore.setPanelOpen(context, false)
-                    onNavigateToTerminal()
-                }
-            )
+            // (the feature drawer is rendered as an overlay AFTER the
+            //  content Column — see FeatureDrawer below; it overlaps the
+            //  sessions list instead of pushing it down)
 
             // ── Error surface (e.g. session creation failure) ──
             uiState.error?.let { err ->
@@ -397,6 +387,71 @@ fun HomeScreen(
                 }
             }
         }
+        }
+
+        // ── Feature drawer overlay: slides in from the right edge,
+        // OVERLAPPING the sessions list (zero layout shift); a scrim
+        // below the header blocks content taps while open. (The overlay
+        // Boxes must live here in the outer BoxScope — matchParentSize /
+        // align are BoxScope modifiers.)
+        val slideX by animateDpAsState(
+            targetValue = if (panelOpen) 0.dp else DRAWER_WIDTH_DP.dp,
+            animationSpec = tween(200),
+            label = "drawerX"
+        )
+        val drawerAlpha by animateFloatAsState(
+            targetValue = if (panelOpen) 1f else 0f,
+            animationSpec = tween(200),
+            label = "drawerAlpha"
+        )
+        val scrimAlpha by animateFloatAsState(
+            targetValue = if (panelOpen) 1f else 0f,
+            animationSpec = tween(150),
+            label = "scrimAlpha"
+        )
+
+        // Scrim: blocks content taps while open, tap to dismiss. The
+        // header (above DRAWER_TOP) stays interactive; disabled + fully
+        // transparent when closed.
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(top = DRAWER_TOP_DP.dp)
+                .background(Color.Black.copy(alpha = 0.18f * scrimAlpha))
+                .alpha(scrimAlpha)
+                .clickable(enabled = panelOpen) {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                }
+        )
+
+        // The drawer card itself, anchored top-right.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = DRAWER_TOP_DP.dp)
+                .width(DRAWER_WIDTH_DP.dp)
+                .offset(x = slideX)
+                .alpha(drawerAlpha)
+                .shadow(10.dp, RoundedCornerShape(20.dp))
+        ) {
+            FeatureDrawerCard(
+                onVoiceInput = {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                    onNavigateToVoice()
+                },
+                onResumeSession = {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                    onNavigateToSessions()
+                },
+                onTerminal = {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                    onNavigateToTerminal()
+                }
+            )
         }
         }
 
@@ -547,41 +602,22 @@ private fun HomeHeader(
     }
 }
 
-// ─── Expandable feature panel (vertical): Voice / Sessions / Terminal ───
+// ─── Feature drawer card (content only; the overlay Boxes live in the
+// HomeScreen's outer BoxScope — see the call site) ───
 // New features = one more FeaturePill row in this Column.
 
 @Composable
-private fun FeaturePanel(
-    panelOpen: Boolean,
+private fun FeatureDrawerCard(
     onVoiceInput: () -> Unit,
     onResumeSession: () -> Unit,
     onTerminal: () -> Unit
 ) {
-    // Closed height 0 -> open height (topPad + 3 items + 2 gaps = 12 +
-    // 3*44 + 2*8 = 160dp). The rows stay composed while closed, so the
-    // clip/alpha animation runs from real content (no layout jump or
-    // blank collapse).
-    val panelHeight by animateDpAsState(
-        targetValue = if (panelOpen) 160.dp else 0.dp,
-        animationSpec = tween(200),
-        label = "panelHeight"
-    )
-    val panelAlpha by animateFloatAsState(
-        targetValue = if (panelOpen) 1f else 0f,
-        animationSpec = tween(200),
-        label = "panelAlpha"
-    )
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(panelHeight)
-            .clipToBounds()
-            .alpha(panelAlpha)
+    Surface(
+        shape = RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp),
+        color = MaterialTheme.colorScheme.background
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 12.dp),
+            modifier = Modifier.padding(vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             FeaturePill(Icons.Filled.Mic, "Voice", onVoiceInput)
