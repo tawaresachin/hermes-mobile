@@ -390,10 +390,18 @@ fun HomeScreen(
         }
 
         // ── Feature drawer overlay: slides in from the right edge,
-        // OVERLAPPING the sessions list (zero layout shift); a scrim
-        // below the header blocks content taps while open. (The overlay
-        // Boxes must live here in the outer BoxScope — matchParentSize /
-        // align are BoxScope modifiers.)
+        // OVERLAPPING the sessions list (zero layout shift).
+        //
+        // The overlay Boxes are composed ONLY while open (or during the
+        // 200ms close animation, while alpha > 0.01). A closed drawer
+        // must leave NO full-screen node behind: in this Compose
+        // version a full-screen Box with a pointer handler — even a
+        // DISABLED clickable, or an alpha-0 shadowed card — can sit
+        // over the content and swallow every Home tap ("nothing on
+        // Home is clickable"). Composing it away when idle makes
+        // that impossible by construction.
+        // (The overlay Boxes must live here in the outer BoxScope —
+        // matchParentSize / align are BoxScope modifiers.)
         val slideX by animateDpAsState(
             targetValue = if (panelOpen) 0.dp else DRAWER_WIDTH_DP.dp,
             animationSpec = tween(200),
@@ -410,49 +418,50 @@ fun HomeScreen(
             label = "scrimAlpha"
         )
 
-        // Scrim: blocks content taps while open, tap anywhere to
-        // dismiss (standard modal-drawer behavior). Disabled + fully
-        // transparent when closed, so the sessions list underneath is
-        // always tappable.
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .background(Color.Black.copy(alpha = 0.18f * scrimAlpha))
-                .alpha(scrimAlpha)
-                .clickable(enabled = panelOpen) {
-                    panelOpen = false
-                    HomeUiStore.setPanelOpen(context, false)
-                }
-        )
-
-        // The drawer card itself: full height, flush right edge,
-        // slides in horizontally.
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .fillMaxHeight()
-                .width(DRAWER_WIDTH_DP.dp)
-                .offset(x = slideX)
-                .alpha(drawerAlpha)
-                .shadow(10.dp)
-        ) {
-            FeatureDrawerCard(
-                onVoiceInput = {
-                    panelOpen = false
-                    HomeUiStore.setPanelOpen(context, false)
-                    onNavigateToVoice()
-                },
-                onResumeSession = {
-                    panelOpen = false
-                    HomeUiStore.setPanelOpen(context, false)
-                    onNavigateToSessions()
-                },
-                onTerminal = {
-                    panelOpen = false
-                    HomeUiStore.setPanelOpen(context, false)
-                    onNavigateToTerminal()
-                }
+        if (panelOpen || drawerAlpha > 0.01f) {
+            // Scrim: blocks content taps while open, tap anywhere to
+            // dismiss (standard modal-drawer behavior). Always
+            // interactive while composed (the branch above is the gate).
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(Color.Black.copy(alpha = 0.18f * scrimAlpha))
+                    .alpha(scrimAlpha)
+                    .clickable {
+                        panelOpen = false
+                        HomeUiStore.setPanelOpen(context, false)
+                    }
             )
+
+            // The drawer card itself: full height, flush right edge,
+            // slides in horizontally.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .fillMaxHeight()
+                    .width(DRAWER_WIDTH_DP.dp)
+                    .offset(x = slideX)
+                    .alpha(drawerAlpha)
+                    .shadow(10.dp)
+            ) {
+                FeatureDrawerCard(
+                    onVoiceInput = {
+                        panelOpen = false
+                        HomeUiStore.setPanelOpen(context, false)
+                        onNavigateToVoice()
+                    },
+                    onResumeSession = {
+                        panelOpen = false
+                        HomeUiStore.setPanelOpen(context, false)
+                        onNavigateToSessions()
+                    },
+                    onTerminal = {
+                        panelOpen = false
+                        HomeUiStore.setPanelOpen(context, false)
+                        onNavigateToTerminal()
+                    }
+                )
+            }
         }
         }
 
