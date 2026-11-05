@@ -317,14 +317,14 @@ fun HomeScreen(
                 onTogglePanel = {
                     panelOpen = !panelOpen
                     HomeUiStore.setPanelOpen(context, panelOpen)
-                }
+                },
+                onNewChat = { viewModel.createNewSession(onCreated = onNavigateToChat) },
+                newChatEnabled = !uiState.isLoading
             )
 
-            // ── Quick actions: fixed New-chat pill + expandable feature panel ──
-            QuickActionsRow(
-                isLoading = uiState.isLoading,
+            // ── Expandable feature panel (vertical): Voice / Sessions / Terminal ──
+            FeaturePanel(
                 panelOpen = panelOpen,
-                onNewChat = { viewModel.createNewSession(onCreated = onNavigateToChat) },
                 onVoiceInput = {
                     panelOpen = false
                     HomeUiStore.setPanelOpen(context, false)
@@ -445,11 +445,14 @@ private fun HomeHeader(
     latency: Long,
     onRefresh: () -> Unit,
     panelOpen: Boolean,
-    onTogglePanel: () -> Unit
+    onTogglePanel: () -> Unit,
+    onNewChat: () -> Unit,
+    newChatEnabled: Boolean
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        // Greeting row with the features-menu (hamburger) trigger on the
-        // trailing edge — standard top-right menu mental model.
+        // Greeting row with the actions cluster on the trailing edge:
+        // [ + new chat ] [ hamburger ] — standard top-right menu mental
+        // model; New chat is a distinct plus icon, not a menu item.
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -470,6 +473,14 @@ private fun HomeHeader(
             // M3's IconButton takes no contentDescription; an Icon with a
             // non-null description inside the button merges into the
             // button's accessibility label automatically.
+            IconButton(onClick = onNewChat, enabled = newChatEnabled) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = "New chat",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
             IconButton(onClick = onTogglePanel) {
                 Icon(
                     imageVector = if (panelOpen) Icons.Filled.Close else Icons.Filled.Menu,
@@ -536,97 +547,62 @@ private fun HomeHeader(
     }
 }
 
-// ─── Quick Actions: fixed New-chat pill + expandable feature panel ───
+// ─── Expandable feature panel (vertical): Voice / Sessions / Terminal ───
+// New features = one more FeaturePill row in this Column.
 
 @Composable
-private fun QuickActionsRow(
-    isLoading: Boolean,
+private fun FeaturePanel(
     panelOpen: Boolean,
-    onNewChat: () -> Unit,
     onVoiceInput: () -> Unit,
     onResumeSession: () -> Unit,
     onTerminal: () -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        // New chat — filled primary pill. Single primary action, always
-        // visible; the secondary features live in the panel below.
-        Surface(
-            onClick = onNewChat,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(50),
-            color = HermesPrimary,
-            enabled = !isLoading
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Add,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                    text = "New chat",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
-                    maxLines = 1
-                )
-            }
-        }
-
-        // Expandable feature panel — a secondary pill row that height/clip +
-        // alpha-animates open (200ms). The row stays composed while closed so
-        // the animation runs from real content (no layout jump / blank
-        // collapse). New features = one more entry in this row.
-        val panelHeight by animateDpAsState(
-            targetValue = if (panelOpen) 52.dp else 0.dp,
-            animationSpec = tween(200),
-            label = "panelHeight"
-        )
-        val panelAlpha by animateFloatAsState(
-            targetValue = if (panelOpen) 1f else 0f,
-            animationSpec = tween(200),
-            label = "panelAlpha"
-        )
-        Box(
+    // Closed height 0 -> open height (topPad + 3 items + 2 gaps = 12 +
+    // 3*44 + 2*8 = 160dp). The rows stay composed while closed, so the
+    // clip/alpha animation runs from real content (no layout jump or
+    // blank collapse).
+    val panelHeight by animateDpAsState(
+        targetValue = if (panelOpen) 160.dp else 0.dp,
+        animationSpec = tween(200),
+        label = "panelHeight"
+    )
+    val panelAlpha by animateFloatAsState(
+        targetValue = if (panelOpen) 1f else 0f,
+        animationSpec = tween(200),
+        label = "panelAlpha"
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(panelHeight)
+            .clipToBounds()
+            .alpha(panelAlpha)
+    ) {
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(panelHeight)
-                .clipToBounds()
-                .alpha(panelAlpha)
+                .padding(top = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp)
-                    .height(44.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FeaturePill(Icons.Filled.Mic, "Voice", onVoiceInput, Modifier.weight(1f))
-                FeaturePill(Icons.Filled.History, "Sessions", onResumeSession, Modifier.weight(1f))
-                FeaturePill(Icons.Filled.Terminal, "Terminal", onTerminal, Modifier.weight(1f))
-            }
+            FeaturePill(Icons.Filled.Mic, "Voice", onVoiceInput)
+            FeaturePill(Icons.Filled.History, "Sessions", onResumeSession)
+            FeaturePill(Icons.Filled.Terminal, "Terminal", onTerminal)
         }
     }
 }
 
-/** Secondary (outline) feature pill — 44dp touch target. Caller (in the
- *  RowScope) supplies `Modifier.weight(1f)` via `modifier`. */
+/** Vertical menu item — full width, 44dp touch target, icon + label + chevron. */
 @Composable
 private fun FeaturePill(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    onClick: () -> Unit
 ) {
     Surface(
         onClick = onClick,
-        modifier = modifier,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp),
         shape = RoundedCornerShape(50),
         color = Color.Transparent,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
@@ -634,22 +610,28 @@ private fun FeaturePill(
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(18.dp)
             )
-            Spacer(modifier = Modifier.width(5.dp))
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
                 maxLines = 1
+            )
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.size(16.dp)
             )
         }
     }
