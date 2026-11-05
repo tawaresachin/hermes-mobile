@@ -10,7 +10,11 @@ import android.content.Context
  */
 object HomeUiStore {
     private const val PREFS = "hermes_home_ui"
-    private const val KEY_PANEL_OPEN = "panel_open"
+    // v2 key: ignores any legacy `panel_open` value (0.1.7's open-by-
+    // default could persist a `true` that made 0.1.8's full-screen scrim
+    // launch stuck-open, covering the header and sessions list).
+    // Bump on any release that can leave the drawer in a blocking state.
+    private const val KEY_PANEL_OPEN = "drawer_open_v2"
 
     fun panelOpen(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
