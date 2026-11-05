@@ -414,7 +414,10 @@ fun HomeScreen(
         )
         val scrimAlpha by animateFloatAsState(
             targetValue = if (panelOpen) 1f else 0f,
-            animationSpec = tween(150),
+            // Same 200ms as the card so panel and dim never skew
+            // (0.1.8 shipped 150ms against 200ms — mid-animation the
+            // surroundings and the panel were at different opacities).
+            animationSpec = tween(200),
             label = "scrimAlpha"
         )
 
@@ -422,11 +425,13 @@ fun HomeScreen(
             // Scrim: blocks content taps while open, tap anywhere to
             // dismiss (standard modal-drawer behavior). Always
             // interactive while composed (the branch above is the gate).
+            // Single alpha source: the background carries the fade —
+            // a second .alpha() on the same node would multiply the
+            // two curves (quadratic, uneven-looking fade).
             Box(
                 modifier = Modifier
                     .matchParentSize()
                     .background(Color.Black.copy(alpha = 0.18f * scrimAlpha))
-                    .alpha(scrimAlpha)
                     .clickable {
                         panelOpen = false
                         HomeUiStore.setPanelOpen(context, false)
@@ -434,7 +439,9 @@ fun HomeScreen(
             )
 
             // The drawer card itself: full height, flush right edge,
-            // slides in horizontally.
+            // slides in horizontally. No drop shadow: a 10dp shadow
+            // painted over the dimmed scrim produced a dark gradient
+            // hugging the panel edge ("texture" inconsistency).
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -442,7 +449,6 @@ fun HomeScreen(
                     .width(DRAWER_WIDTH_DP.dp)
                     .offset(x = slideX)
                     .alpha(drawerAlpha)
-                    .shadow(10.dp)
             ) {
                 FeatureDrawerCard(
                     onVoiceInput = {
@@ -622,8 +628,12 @@ private fun FeatureDrawerCard(
     onResumeSession: () -> Unit,
     onTerminal: () -> Unit
 ) {
+    // Tonal elevation: M3 modal-drawer content is one container tone
+    // above the page. The 0.1.8/0.1.10 card used the raw background
+    // color, so the panel met the 18%-dimmed scrim with a hard
+    // brightness step — the "inconsistent colour" at the panel edge.
     Surface(
-        color = MaterialTheme.colorScheme.background
+        color = MaterialTheme.colorScheme.surfaceContainerHigh
     ) {
         Column(
             modifier = Modifier.padding(top = 24.dp, bottom = 12.dp),
