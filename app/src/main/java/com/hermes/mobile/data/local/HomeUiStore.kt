@@ -4,8 +4,9 @@ import android.content.Context
 
 /**
  * UI preferences that are per-device, not server-backed (mirrors the
- * DraftStore pattern). Home panel state survives restarts: open on first
- * launch, then remembered whichever way the user last left it.
+ * DraftStore pattern). Home drawer state survives restarts: CLOSED by
+ * default (the scrim must never cover the sessions list on first
+ * launch), then remembered whichever way the user last left it.
  */
 object HomeUiStore {
     private const val PREFS = "hermes_home_ui"
@@ -13,7 +14,7 @@ object HomeUiStore {
 
     fun panelOpen(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_PANEL_OPEN, true)
+            .getBoolean(KEY_PANEL_OPEN, false)
 
     fun setPanelOpen(context: Context, open: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

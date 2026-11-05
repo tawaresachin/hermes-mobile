@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -122,8 +123,6 @@ import javax.inject.Inject
 
 // ─── Drawer geometry (right-edge feature drawer overlay) ───
 private const val DRAWER_WIDTH_DP = 280
-// Sits just below the compact header (tune if the header grows).
-private const val DRAWER_TOP_DP = 100
 
 // ─── UI State ───
 
@@ -303,8 +302,9 @@ fun HomeScreen(
         Box(modifier = Modifier.fillMaxSize()) {
         HermesWatermark()
         val context = LocalContext.current
-        // Feature panel state: open on first launch (HomeUiStore default),
-        // remembered across restarts; a pill tap auto-collapses it.
+        // Feature drawer state: CLOSED by default (HomeUiStore),
+        // remembered across restarts; an item tap or scrim tap
+        // auto-collapses it.
         var panelOpen by remember { mutableStateOf(HomeUiStore.panelOpen(context)) }
         Column(
             modifier = Modifier
@@ -410,13 +410,13 @@ fun HomeScreen(
             label = "scrimAlpha"
         )
 
-        // Scrim: blocks content taps while open, tap to dismiss. The
-        // header (above DRAWER_TOP) stays interactive; disabled + fully
-        // transparent when closed.
+        // Scrim: blocks content taps while open, tap anywhere to
+        // dismiss (standard modal-drawer behavior). Disabled + fully
+        // transparent when closed, so the sessions list underneath is
+        // always tappable.
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .padding(top = DRAWER_TOP_DP.dp)
                 .background(Color.Black.copy(alpha = 0.18f * scrimAlpha))
                 .alpha(scrimAlpha)
                 .clickable(enabled = panelOpen) {
@@ -425,15 +425,16 @@ fun HomeScreen(
                 }
         )
 
-        // The drawer card itself, anchored top-right.
+        // The drawer card itself: full height, flush right edge,
+        // slides in horizontally.
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = DRAWER_TOP_DP.dp)
+                .fillMaxHeight()
                 .width(DRAWER_WIDTH_DP.dp)
                 .offset(x = slideX)
                 .alpha(drawerAlpha)
-                .shadow(10.dp, RoundedCornerShape(20.dp))
+                .shadow(10.dp)
         ) {
             FeatureDrawerCard(
                 onVoiceInput = {
@@ -613,11 +614,10 @@ private fun FeatureDrawerCard(
     onTerminal: () -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp),
         color = MaterialTheme.colorScheme.background
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 12.dp),
+            modifier = Modifier.padding(top = 24.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             FeaturePill(Icons.Filled.Mic, "Voice", onVoiceInput)
