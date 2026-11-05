@@ -18,3 +18,5 @@
 -dontwarn javax.inject.**
 -dontwarn dagger.**
 -dontwarn androidx.hilt.**
+-dontwarn sun.security.x509.**
+-keep class net.i2p.crypto.eddsa.** { *; }

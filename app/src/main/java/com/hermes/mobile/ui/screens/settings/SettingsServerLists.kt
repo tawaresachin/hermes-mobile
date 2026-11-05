@@ -106,10 +106,10 @@ fun ServerListsPanel(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 uiState.skills.forEach { (n, d) ->
-                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.AutoAwesome, contentDescription = null,
                             tint = HermesPrimary.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(10.dp))
+                        Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(n, style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
@@ -117,6 +117,10 @@ fun ServerListsPanel(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                                 maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                        Switch(
+                            checked = n !in uiState.disabledSkills,
+                            onCheckedChange = { viewModel.toggleSkill(n, it) }
+                        )
                     }
                 }
             }

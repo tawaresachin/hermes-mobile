@@ -62,6 +62,7 @@ data class SettingsUiState(
     // Cron jobs + skills (server truth, loaded on demand)
     val jobs: List<org.json.JSONObject> = emptyList(),
     val skills: List<Pair<String, String>> = emptyList(),  // name -> description
+    val disabledSkills: Set<String> = emptySet(),
     val serverListsLoading: Boolean = false,
     val serverListsLoaded: Boolean = false,
     // Non-null when nothing was ever loaded and the last attempt failed; the
@@ -363,6 +364,19 @@ class SettingsViewModel @Inject constructor(
             }
             _updateState.update {
                 it.copy(applying = false, error = "Server still offline after ~5 min — check it manually")
+            }
+        }
+    }
+
+    /** Pull cron jobs + skills from the server (Settings → Server section).
+     * One-shot on expand; failures leave the lists empty (never crash). */
+    fun toggleSkill(name: String, enabled: Boolean) {
+        viewModelScope.launch {
+            repository.toggleSkill(name, enabled)
+            _uiState.update { st ->
+                val disabled = st.disabledSkills.toMutableSet()
+                if (enabled) disabled.remove(name) else disabled.add(name)
+                st.copy(disabledSkills = disabled)
             }
         }
     }

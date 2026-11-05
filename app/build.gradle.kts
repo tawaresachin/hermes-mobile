@@ -148,6 +148,8 @@ dependencies {
 
     // Network - OkHttp (direct usage — Retrofit/Gson removed: zero references)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // SSH terminal (built-in terminal feature)
+    implementation("com.hierynomus:sshj:0.38.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
 
     // Room Database

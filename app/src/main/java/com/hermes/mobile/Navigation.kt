@@ -24,6 +24,7 @@ import com.hermes.mobile.ui.screens.chat.ChatScreen
 import com.hermes.mobile.ui.screens.home.HomeScreen
 import com.hermes.mobile.ui.screens.sessions.SessionsScreen
 import com.hermes.mobile.ui.screens.settings.SettingsScreen
+import com.hermes.mobile.ui.screens.terminal.TerminalScreen
 import com.hermes.mobile.ui.screens.voice.VoiceScreen
 import com.hermes.mobile.ui.theme.HermesPrimary
 
@@ -55,6 +56,7 @@ sealed class Screen(
     data object Voice : Screen("voice", "Voice", Icons.Filled.Mic)
     data object Sessions : Screen("sessions", "Sessions", Icons.Filled.History)
     data object Settings : Screen("settings", "Settings", Icons.Filled.Settings)
+    data object Terminal : Screen("terminal", "Terminal", Icons.Filled.Terminal)
 }
 
 val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Voice, Screen.Sessions, Screen.Settings)
@@ -210,6 +212,9 @@ fun MainNavigation(
             }
             composable(Screen.Settings.route) {
                 SettingsScreen(paddingValues = scaffoldPadding)
+            }
+            composable(Screen.Terminal.route) {
+                TerminalScreen(paddingValues = scaffoldPadding)
             }
         }
     }

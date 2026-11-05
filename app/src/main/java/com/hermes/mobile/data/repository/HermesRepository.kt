@@ -581,6 +581,7 @@ class HermesRepository @Inject constructor(
     suspend fun listJobs() = apiService.listJobs()
     suspend fun jobAction(jobId: String, action: String): Boolean = apiService.jobAction(jobId, action)
     suspend fun listSkills() = apiService.listSkills()
+    suspend fun toggleSkill(name: String, enabled: Boolean) = apiService.toggleSkill(name, enabled)
 
     /** Auto-approve: when ON, a pending tool approval is answered
      * 'session' the moment it arrives (user opted in from Settings). */

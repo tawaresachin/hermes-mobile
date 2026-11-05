@@ -610,6 +610,16 @@ class HermesApiService @Inject constructor(
         FetchResult(null, status)
     }
 
+    suspend fun toggleSkill(name: String, enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() } ?: return@withContext false
+        try {
+            val body = JSONObject().put("name", name).put("enabled", enabled)
+            val req = Request.Builder().url("$baseUrl/api/skills/toggle")
+                .put(RequestBody.create("application/json".toMediaType(), body.toString())).build()
+            client.newCall(req).execute().use { it.isSuccessful }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { false }
+    }
+
     // ─── Hermes update (plugin: /api/mobile/update/*) ───────────
     /** GET /api/mobile/update/check — report-only; wraps `hermes update --check`. */
     /** GET /api/mobile/update/version — instant installed version + sha
