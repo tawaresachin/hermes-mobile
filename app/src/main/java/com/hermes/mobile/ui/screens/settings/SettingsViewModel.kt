@@ -368,12 +368,16 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Pull cron jobs + skills from the server (Settings → Server section).
-     * One-shot on expand; failures leave the lists empty (never crash). */
+    /** Toggle a skill on the server. The switch is SERVER-truth: the
+     *  local set is updated only AFTER the request succeeds, relative to
+     *  the CURRENT state (a manifest refresh may have landed in flight).
+     *  A rejection (unknown skill, essential skill, unreachable gateway,
+     *  500) applies nothing — the switch stays as the server knows it. */
     fun toggleSkill(name: String, enabled: Boolean) {
         viewModelScope.launch {
-            repository.toggleSkill(name, enabled)
+            val ok = repository.toggleSkill(name, enabled)
             _uiState.update { st ->
+                if (!ok) return@update st
                 val disabled = st.disabledSkills.toMutableSet()
                 if (enabled) disabled.remove(name) else disabled.add(name)
                 st.copy(disabledSkills = disabled)
@@ -389,16 +393,31 @@ class SettingsViewModel @Inject constructor(
             val jobs = try { repository.listJobs() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
             val skills = try { repository.listSkills() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
             val loadedOk = jobs.body != null && skills.body != null
+            // The plugin manifest (≥ 0.0.40) carries per-skill `enabled` —
+            // seed the switches from server truth. Core /v1/skills and older
+            // plugins lack the flag → keep the local state (don't guess).
+            val skillsParsed: Pair<List<Pair<String, String>>, Set<String>?>? =
+                skills.body?.let { arr ->
+                    val names = ArrayList<Pair<String, String>>()
+                    val seedDisabled = LinkedHashSet<String>()
+                    var carriesEnabled = false
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        val name = o.optString("name", "")
+                        if (name.isBlank()) continue
+                        names.add(name to o.optString("description", ""))
+                        if (o.has("enabled")) {
+                            carriesEnabled = true
+                            if (!o.optBoolean("enabled")) seedDisabled.add(name)
+                        }
+                    }
+                    Pair(names, if (carriesEnabled) seedDisabled.toSet() else null)
+                } ?: null
             _uiState.update {
                 it.copy(
                     jobs = jobs.body?.let { arr -> (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i) } } ?: it.jobs,
-                    skills = skills.body?.let { arr ->
-                        (0 until arr.length()).mapNotNull { i ->
-                            arr.optJSONObject(i)?.let { o ->
-                                o.optString("name", "") to o.optString("description", "")
-                            }
-                        }.filter { it.first.isNotBlank() }
-                    } ?: it.skills,
+                    skills = skillsParsed?.first ?: it.skills,
+                    disabledSkills = skillsParsed?.second ?: it.disabledSkills,
                     serverListsLoading = false,
                     serverListsLoaded = loadedOk || it.serverListsLoaded,
                     // Fresh failure with no previously loaded data → the empty

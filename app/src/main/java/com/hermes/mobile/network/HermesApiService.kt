@@ -610,11 +610,15 @@ class HermesApiService @Inject constructor(
         FetchResult(null, status)
     }
 
+    // ─── Skills toggle (plugin: /api/mobile/skills/toggle) ───────────
+    /** Plugin-only route (no core equivalent): flips a skill's enabled
+     *  state in the server's config (skills.disabled). Success = 2xx.
+     *  The plugin returns 404 for unknown skills, 400 for essential ones. */
     suspend fun toggleSkill(name: String, enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
         val baseUrl = (config ?: getConfig())?.baseUrl?.takeIf { it.isNotBlank() } ?: return@withContext false
         try {
             val body = JSONObject().put("name", name).put("enabled", enabled)
-            val req = Request.Builder().url("$baseUrl/api/skills/toggle")
+            val req = Request.Builder().url("$baseUrl/api/mobile/skills/toggle")
                 .put(RequestBody.create("application/json".toMediaType(), body.toString())).build()
             client.newCall(req).execute().use { it.isSuccessful }
         } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { false }

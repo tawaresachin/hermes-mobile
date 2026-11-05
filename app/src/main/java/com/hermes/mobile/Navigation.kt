@@ -59,7 +59,7 @@ sealed class Screen(
     data object Terminal : Screen("terminal", "Terminal", Icons.Filled.Terminal)
 }
 
-val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Voice, Screen.Sessions, Screen.Settings)
+val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Voice, Screen.Sessions, Screen.Terminal, Screen.Settings)
 
 // ═══════════════════════════════════════════════════════════
 // Main Navigation — NavHost + bottom bar
