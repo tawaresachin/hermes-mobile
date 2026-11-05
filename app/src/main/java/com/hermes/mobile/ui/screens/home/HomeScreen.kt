@@ -3,6 +3,7 @@ package com.hermes.mobile.ui.screens.home
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -33,13 +34,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
@@ -69,10 +73,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -88,6 +94,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.Session
+import com.hermes.mobile.data.local.HomeUiStore
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.theme.ErrorRed
@@ -261,6 +268,7 @@ fun HomeScreen(
     onNavigateToChat: (String) -> Unit,
     onNavigateToSessions: () -> Unit,
     onNavigateToVoice: () -> Unit,
+    onNavigateToTerminal: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -288,6 +296,10 @@ fun HomeScreen(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
         HermesWatermark()
+        val context = LocalContext.current
+        // Feature panel state: open on first launch (HomeUiStore default),
+        // remembered across restarts; a pill tap auto-collapses it.
+        var panelOpen by remember { mutableStateOf(HomeUiStore.panelOpen(context)) }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -300,15 +312,34 @@ fun HomeScreen(
                 status = uiState.connectionStatus,
                 serverUrl = uiState.serverBaseUrl,
                 latency = uiState.connectionLatency,
-                onRefresh = { viewModel.refreshConnection() }
+                onRefresh = { viewModel.refreshConnection() },
+                panelOpen = panelOpen,
+                onTogglePanel = {
+                    panelOpen = !panelOpen
+                    HomeUiStore.setPanelOpen(context, panelOpen)
+                }
             )
 
-            // ── Fixed quick actions row ──
+            // ── Quick actions: fixed New-chat pill + expandable feature panel ──
             QuickActionsRow(
                 isLoading = uiState.isLoading,
+                panelOpen = panelOpen,
                 onNewChat = { viewModel.createNewSession(onCreated = onNavigateToChat) },
-                onResumeSession = onNavigateToSessions,
-                onVoiceInput = onNavigateToVoice
+                onVoiceInput = {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                    onNavigateToVoice()
+                },
+                onResumeSession = {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                    onNavigateToSessions()
+                },
+                onTerminal = {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                    onNavigateToTerminal()
+                }
             )
 
             // ── Error surface (e.g. session creation failure) ──
@@ -412,20 +443,42 @@ private fun HomeHeader(
     status: ConnectionStatus,
     serverUrl: String,
     latency: Long,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    panelOpen: Boolean,
+    onTogglePanel: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = "$emoji $greeting",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Text(
-            text = "Hermes Mobile",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        // Greeting row with the features-menu (hamburger) trigger on the
+        // trailing edge — standard top-right menu mental model.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "$emoji $greeting",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = "Hermes Mobile",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // M3's IconButton takes no contentDescription; an Icon with a
+            // non-null description inside the button merges into the
+            // button's accessibility label automatically.
+            IconButton(onClick = onTogglePanel) {
+                Icon(
+                    imageVector = if (panelOpen) Icons.Filled.Close else Icons.Filled.Menu,
+                    contentDescription = if (panelOpen) "Close features menu" else "Open features menu",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -483,23 +536,23 @@ private fun HomeHeader(
     }
 }
 
-// ─── Quick Actions: compact pill row (Telegram-style) ───
+// ─── Quick Actions: fixed New-chat pill + expandable feature panel ───
 
 @Composable
 private fun QuickActionsRow(
     isLoading: Boolean,
+    panelOpen: Boolean,
     onNewChat: () -> Unit,
+    onVoiceInput: () -> Unit,
     onResumeSession: () -> Unit,
-    onVoiceInput: () -> Unit
+    onTerminal: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // New chat — filled primary pill
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // New chat — filled primary pill. Single primary action, always
+        // visible; the secondary features live in the panel below.
         Surface(
             onClick = onNewChat,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(50),
             color = HermesPrimary,
             enabled = !isLoading
@@ -525,65 +578,79 @@ private fun QuickActionsRow(
                 )
             }
         }
-        // Voice — outline pill
-        Surface(
-            onClick = onVoiceInput,
-            modifier = Modifier.weight(1f),
-            shape = RoundedCornerShape(50),
-            color = Color.Transparent,
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp, MaterialTheme.colorScheme.outlineVariant
-            )
+
+        // Expandable feature panel — a secondary pill row that height/clip +
+        // alpha-animates open (200ms). The row stays composed while closed so
+        // the animation runs from real content (no layout jump / blank
+        // collapse). New features = one more entry in this row.
+        val panelHeight by animateDpAsState(
+            targetValue = if (panelOpen) 52.dp else 0.dp,
+            animationSpec = tween(200),
+            label = "panelHeight"
+        )
+        val panelAlpha by animateFloatAsState(
+            targetValue = if (panelOpen) 1f else 0f,
+            animationSpec = tween(200),
+            label = "panelAlpha"
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(panelHeight)
+                .clipToBounds()
+                .alpha(panelAlpha)
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .height(44.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Mic,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                    text = "Voice",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1
-                )
+                FeaturePill(Icons.Filled.Mic, "Voice", onVoiceInput, Modifier.weight(1f))
+                FeaturePill(Icons.Filled.History, "Sessions", onResumeSession, Modifier.weight(1f))
+                FeaturePill(Icons.Filled.Terminal, "Terminal", onTerminal, Modifier.weight(1f))
             }
         }
-        // Sessions — outline pill
-        Surface(
-            onClick = onResumeSession,
-            modifier = Modifier.weight(1f),
-            shape = RoundedCornerShape(50),
-            color = Color.Transparent,
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp, MaterialTheme.colorScheme.outlineVariant
-            )
+    }
+}
+
+/** Secondary (outline) feature pill — 44dp touch target. Caller (in the
+ *  RowScope) supplies `Modifier.weight(1f)` via `modifier`. */
+@Composable
+private fun FeaturePill(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(50),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.History,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                    text = "Sessions",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1
-                )
-            }
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1
+            )
         }
     }
 }

@@ -59,7 +59,7 @@ sealed class Screen(
     data object Terminal : Screen("terminal", "Terminal", Icons.Filled.Terminal)
 }
 
-val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Voice, Screen.Sessions, Screen.Terminal, Screen.Settings)
+val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Settings)
 
 // ═══════════════════════════════════════════════════════════
 // Main Navigation — NavHost + bottom bar
@@ -153,6 +153,19 @@ fun MainNavigation(
                         // itself resumes the latest session).
                         VoiceNav.pendingNewSession = true
                         navController.navigate(Screen.Voice.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                    onNavigateToTerminal = {
+                        // Terminal entry moved off the bottom bar into Home's
+                        // feature panel; the SSH session holder is
+                        // process-level, so saveState/restoreState keep the
+                        // live connection across panel/nav round-trips.
+                        navController.navigate(Screen.Terminal.route) {
                             popUpTo(navController.graph.findStartDestination().id) {
                                 saveState = true
                             }
