@@ -2,8 +2,6 @@
   'use strict';
 
   var Bridge = window.HermesBridge;
-  // UMD wrappers differ per package: xterm exports the class directly,
-  // the addons export a namespace object.
   var TerminalCtor = window.Terminal && window.Terminal.Terminal
     ? window.Terminal.Terminal : window.Terminal;
   var FitCtor = window.FitAddon && window.FitAddon.FitAddon
@@ -12,15 +10,13 @@
     ? window.SearchAddon.SearchAddon : window.SearchAddon;
 
   var term = new TerminalCtor({
-    fontFamily: 'Menlo, Consolas, "Droid Sans Mono", monospace',
+    fontFamily: 'monospace',
     fontSize: 13,
     lineHeight: 1.15,
     scrollback: 10000,
     cursorBlink: true,
     convertEol: false,
-    screenReaderMode: true,
-    // The search addon highlights matches with decorations, which xterm 6
-    // still gates behind the proposed API.
+    screenReaderMode: false,
     allowProposedApi: true,
     minimumContrastRatio: 4.5,
     theme: {
@@ -69,6 +65,7 @@
   var lastCols = 0;
   var lastRows = 0;
   var fitting = false;
+  var readySent = false;
   function refit() {
     if (fitting || !root.clientWidth || !root.clientHeight) return;
     fitting = true;
@@ -83,6 +80,12 @@
       lastRows = term.rows;
       Bridge.resized(term.cols, term.rows);
     }
+    // Send ready only after the first successful fit so Kotlin flushes
+    // queued PTY output into a sized terminal.
+    if (!readySent && term.cols > 0 && term.rows > 0) {
+      readySent = true;
+      setTimeout(function () { Bridge.ready(); }, 0);
+    }
   }
   new ResizeObserver(function () { refit(); }).observe(root);
   window.addEventListener('orientationchange', function () {
@@ -92,8 +95,6 @@
   // ── Input: every keystroke goes straight to the PTY. ──
   term.onData(function (data) { Bridge.input(data); });
 
-  // xterm ignores insertText events (dictation / IME commit paths) in
-  // screen-reader mode; feed those through its input queue so nothing is lost.
   (function installInputPatch() {
     if (!textarea) return;
     var handledKey;
@@ -119,7 +120,6 @@
     });
   })();
 
-  // ── Touch: long-press selects a word, drag extends, swipe scrolls. ──
   (function installTouch() {
     var start;
     var selecting = false;
@@ -211,7 +211,6 @@
     root.addEventListener('touchcancel', end, { capture: true, passive: false });
   })();
 
-  // ── Find: Compose owns the query field, xterm owns match highlighting. ──
   var DECORATIONS = {
     matchBackground: '#623315',
     matchBorder: '#e8a33d',
@@ -232,7 +231,15 @@
   }
 
   window.HermesTerminal = {
-    writeBase64: function (b64) { term.write(bytesFromBase64(b64)); },
+    writeBase64: function (b64) {
+      term.write(bytesFromBase64(b64), function () {
+        var rv = term._core._renderService._renderer.value;
+        if (rv && typeof rv.renderRows === 'function') {
+          try { rv.renderRows(0, term.rows - 1); } catch (_) {}
+        }
+        term.scrollToBottom();
+      });
+    },
     writeText: function (text) { term.write(text); },
     clear: function () { term.reset(); },
     focus: function () { term.focus(); },
@@ -251,6 +258,5 @@
     scrollToBottom: function () { term.scrollToBottom(); }
   };
 
-  Bridge.ready();
   requestAnimationFrame(refit);
 })();
