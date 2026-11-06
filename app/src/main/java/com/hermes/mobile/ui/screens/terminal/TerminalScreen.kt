@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -268,12 +269,15 @@ private fun connectPty(
         ssh.connect(host, port)
         ssh.authPassword(user, pass)
         val session = ssh.startSession()
-        // 120x40 xterm-256color: phone columns default to 80, which
-        // wraps long commands; 0/0 width+height = "server picks".
+        // Device-aware geometry: a phone at 80 cols wraps long
+        // commands early; 0/0 pixel size = "server picks".
         // EMPTY (not null) modes map: SSHJ 0.38's PTYMode.encode
         // iterates modes.entrySet() without a null check — a null
         // modes argument throws NPE and the shell never opens.
-        session.allocatePTY("xterm-256color", 120, 40, 0, 0,
+        // SSHJ 0.38 has no post-allocation resize, so this is the
+        // only size the session will ever have (documented limit).
+        val (cols, rows) = ptyGeometry(context)
+        session.allocatePTY("xterm-256color", cols, rows, 0, 0,
             java.util.Collections.emptyMap())
         val shell = session.startShell()
         val readerDone = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -594,8 +598,12 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                         shape = MaterialTheme.shapes.small,
                         modifier = Modifier.fillMaxWidth()
                     ) {
+                        val tailStyled = remember(tail) {
+                            if (TerminalAnsi.needsParsing(tail)) TerminalAnsi.render(tail)
+                            else AnnotatedString(tail)
+                        }
                         Text(
-                            text = tail,
+                            text = tailStyled,
                             fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 8,
@@ -614,8 +622,20 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                     .fillMaxWidth()
                     .weight(1f, fill = false)
             ) {
+                // SGR/ANSI rendering is memoized on the buffer string:
+                // the 150ms poll only re-parses when new data arrived,
+                // and escape-free output costs one indexOf scan.
+                val styledOutput = remember(output) {
+                    if (output.isBlank()) {
+                        AnnotatedString("(connected)")
+                    } else if (TerminalAnsi.needsParsing(output)) {
+                        TerminalAnsi.render(output)
+                    } else {
+                        AnnotatedString(output)
+                    }
+                }
                 Text(
-                    text = output.ifBlank { "(connected)" },
+                    text = styledOutput,
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier
