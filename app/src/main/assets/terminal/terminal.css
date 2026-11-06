@@ -12,7 +12,7 @@ html, body {
   position: absolute;
   inset: 0;
   box-sizing: border-box;
-  padding: 6px 4px;
+  padding: 0;
 }
 
 #terminal .xterm {

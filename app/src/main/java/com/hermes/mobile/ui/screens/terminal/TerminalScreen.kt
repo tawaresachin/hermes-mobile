@@ -469,6 +469,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 hadSession = true
                 connected = true
                 webState.clear()
+                webState.focus()
                 error = ""
             }
 
@@ -584,7 +585,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
         modifier = Modifier
             .fillMaxSize()
             .padding(paddingValues)
-            .padding(16.dp)
+            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 0.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.Terminal, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
@@ -933,6 +934,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                                 }
                                 SshTerminal.closeAll()
                                 webState.clear()
+                                webState.focus()
                                 val res = withContext(Dispatchers.IO) {
                                     connectPty(host, targetPort, user, pass, context, trust,
                                         keyAuth)
@@ -1027,7 +1029,6 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                     .fillMaxWidth()
                     .weight(1f)
             )
-            Spacer(Modifier.height(8.dp))
             // ── Raw-key row: drive interactive programs (less, vim,
             // sudo -i) that phone keyboards cannot produce. Sent straight
             // to the PTY; the remote shell owns semantics.

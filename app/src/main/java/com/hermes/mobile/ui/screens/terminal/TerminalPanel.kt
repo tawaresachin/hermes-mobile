@@ -89,6 +89,7 @@ class TerminalWebViewState {
         ready = true
         while (pending.isNotEmpty()) dispatch(pending.removeFirst())
         pendingChars = 0
+        webView?.requestFocus()
     }
 
     internal fun setSize(c: Int, r: Int) {
@@ -281,6 +282,8 @@ fun TerminalPanel(
                         ): Boolean = true
                     }
                     state.attach(this)
+                    isFocusable = true
+                    isFocusableInTouchMode = true
                     loadUrl("file:///android_asset/terminal/index.html")
                 }
             },
