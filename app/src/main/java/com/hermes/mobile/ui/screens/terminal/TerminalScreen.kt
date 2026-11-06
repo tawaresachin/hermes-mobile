@@ -9,7 +9,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Terminal
@@ -1092,37 +1095,103 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 }
             }
             Spacer(Modifier.height(8.dp))
-            fun send() {
-                // The PTY echoes input back through the reader; no
-                // local append here (that would double-print).
+            // ── Live command line: type with the on-screen keyboard and
+            // every keystroke is streamed straight to the pty (chars and
+            // backspaces as they happen) — the remote shell owns the
+            // line: its prompt, tab-completion, history. Enter executes.
+            val mono = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
+            val gwLive = gw
+            val sshLive = SshTerminal.session
+            val canType = (gwLive != null && gwLive.isOpen) || sshLive != null
+            fun typeText(s: String) {
+                if (!canType) return
                 val gwClient = gw
                 if (gwClient != null && gwClient.isOpen) {
-                    gwClient.send((input + "\n").toByteArray(Charsets.UTF_8))
+                    gwClient.send(s.toByteArray(Charsets.UTF_8))
+                    return
+                }
+                runCatching {
+                    sshLive?.outputStream?.write(s.toByteArray(Charsets.UTF_8))
+                    sshLive?.outputStream?.flush()
+                }
+            }
+            fun typeBackspace() {
+                val gwClient = gw
+                if (gwClient != null && gwClient.isOpen) { gwClient.send(byteArrayOf(0x7f)); return }
+                sendRaw(intArrayOf(0x7f))
+            }
+            fun clearLineRetype(s: String) {
+                // IME replaced/edited the line mid-flight: kill it the
+                // terminal way (Ctrl-U) and retype the replacement.
+                sendRaw(intArrayOf(0x15))
+                typeText(s)
+            }
+            fun executeLine() {
+                val gwClient = gw
+                if (gwClient != null && gwClient.isOpen) {
+                    gwClient.send(byteArrayOf(0x0A))
                     input = ""
                     return
                 }
-                val s = SshTerminal.session ?: return
-                try {
-                    val out = s.outputStream
-                    out.write((input + "\n").toByteArray(Charsets.UTF_8))
+                runCatching {
+                    val out = sshLive?.outputStream ?: return
+                    out.write(0x0A)
                     out.flush()
-                } catch (_: Exception) {
-                    return
                 }
                 input = ""
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(input, { input = it }, label = { Text("Input") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Go),
-                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                        onGo = { send() }
-                    ),
-                    modifier = Modifier.weight(1f))
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = { send() }) { Text("Send") }
+            // Keystroke diffing: the field shows what's typed (the remote
+            // echoes it too, which is normal for a pty); on append we
+            // forward the new chars, on suffix-delete we forward
+            // backspaces, and on a rewrite (auto-correct, composition)
+            // we Ctrl-U + retype.
+            fun onType(v: String) {
+                if (!canType) { input = v; return }
+                val old = input
+                when {
+                    v.length > old.length && v.startsWith(old) -> typeText(v.substring(old.length))
+                    v.length < old.length && old.endsWith(v) -> {
+                        repeat(old.length - v.length) { typeBackspace() }
+                    }
+                    else -> clearLineRetype(v)
+                }
+                input = v
             }
-            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("❯", style = mono,
+                    color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(6.dp))
+                TextField(
+                    value = input,
+                    onValueChange = { onType(it) },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    textStyle = mono,
+                    placeholder = { Text("type a command — ⏎ runs it",
+                        style = mono,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)) },
+                    shape = RoundedCornerShape(0.dp),
+                    colors = androidx.compose.material3.TextFieldDefaults.colors(
+                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        executeLine()
+                    })
+                )
+            }
+            Spacer(Modifier.height(4.dp))
             Button(onClick = {
                 val gwClient = gw
                 if (gwClient != null) {
