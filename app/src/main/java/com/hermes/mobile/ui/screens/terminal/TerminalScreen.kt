@@ -215,7 +215,11 @@ private fun connectPty(
         val session = ssh.startSession()
         // 120x40 xterm-256color: phone columns default to 80, which
         // wraps long commands; 0/0 width+height = "server picks".
-        session.allocatePTY("xterm-256color", 120, 40, 0, 0, null)
+        // EMPTY (not null) modes map: SSHJ 0.38's PTYMode.encode
+        // iterates modes.entrySet() without a null check — a null
+        // modes argument throws NPE and the shell never opens.
+        session.allocatePTY("xterm-256color", 120, 40, 0, 0,
+            java.util.Collections.emptyMap())
         val shell = session.startShell()
         val readerDone = java.util.concurrent.atomic.AtomicBoolean(false)
         val reader = Thread {
