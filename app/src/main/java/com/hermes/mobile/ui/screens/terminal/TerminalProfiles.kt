@@ -22,11 +22,17 @@ data class TerminalProfile(
     val name: String,
     val host: String,
     val port: Int,
-    val user: String
+    val user: String,
+    /** "pw" (default) or "key" — which auth method the profile uses.
+     *  Optional in stored JSON: pre-key-auth profiles deserialize as "pw". */
+    val authMode: String = "pw"
 ) {
     fun credentialKey(): String = "pw|$host|$port|$user"
 
     companion object {
+        const val AUTH_PASSWORD = "pw"
+        const val AUTH_KEY = "key"
+
         fun nameFor(host: String, port: Int, user: String): String =
             "$user@$host:$port"
     }
@@ -57,7 +63,8 @@ object TerminalProfileStore {
                     name = o.optString("n"),
                     host = o.getString("h"),
                     port = o.getInt("p"),
-                    user = o.getString("u")
+                    user = o.getString("u"),
+                    authMode = o.optString("a", TerminalProfile.AUTH_PASSWORD)
                 )
             }
         } catch (_: Exception) {
@@ -70,24 +77,12 @@ object TerminalProfileStore {
         val list = profiles(context).filterNot {
             it.host == profile.host && it.port == profile.port && it.user == profile.user
         }
-        val arr = JSONArray()
-        for (p in list + profile) {
-            val o = JSONObject()
-            o.put("n", p.name)
-            o.put("h", p.host)
-            o.put("p", p.port)
-            o.put("u", p.user)
-            arr.put(o)
-        }
-        prefs(context).edit().putString(KEY_PROFILES, arr.toString()).apply()
+        writeProfiles(context, list + profile)
         prefs(context).edit().putString(KEY_LAST, profile.credentialKey()).apply()
         if (password != null) storePassword(context, profile, password)
     }
 
-    fun deleteProfile(context: Context, profile: TerminalProfile) {
-        val list = profiles(context).filterNot {
-            it.host == profile.host && it.port == profile.port && it.user == profile.user
-        }
+    private fun writeProfiles(context: Context, list: List<TerminalProfile>) {
         val arr = JSONArray()
         for (p in list) {
             val o = JSONObject()
@@ -95,12 +90,24 @@ object TerminalProfileStore {
             o.put("h", p.host)
             o.put("p", p.port)
             o.put("u", p.user)
+            if (p.authMode != TerminalProfile.AUTH_PASSWORD) o.put("a", p.authMode)
             arr.put(o)
         }
         prefs(context).edit().putString(KEY_PROFILES, arr.toString()).apply()
+    }
+
+    fun deleteProfile(context: Context, profile: TerminalProfile) {
+        val list = profiles(context).filterNot {
+            it.host == profile.host && it.port == profile.port && it.user == profile.user
+        }
+        writeProfiles(context, list)
         // Secret material for the deleted profile goes with it.
-        SecurePrefs.get(context, PREFS).edit()
-            .remove(profile.credentialKey()).apply()
+        val sp = SecurePrefs.get(context, PREFS)
+        sp.edit()
+            .remove(profile.credentialKey())
+            .remove("keybytes|" + profile.credentialKey())
+            .remove("keypass|" + profile.credentialKey())
+            .apply()
     }
 
     fun lastUsedKey(context: Context): String? =
@@ -123,6 +130,69 @@ object TerminalProfileStore {
         } catch (_: Exception) {
             null
         }
+
+    /** Drop an orphaned encrypted password (profile switched to key auth). */
+    fun clearPassword(context: Context, profile: TerminalProfile) {
+        SecurePrefs.get(context, PREFS).edit()
+            .remove(profile.credentialKey())
+            .apply()
+    }
+
+    // ── SSH key auth (encrypted) ──
+    //
+    // The private key material itself is a secret: stored via
+    // SecurePrefs (AES-256-GCM), NOT in the plain profile prefs.
+    // The passphrase protecting the key file goes with it.
+    // Key cap: 1 MiB — OpenSSH/RSA/ECDSA/ed25519 private keys are
+    // at most a few KB; a bigger "key" is not a key.
+    data class KeyAuth(val keyBytes: ByteArray, val passphrase: String?) {
+        override fun equals(other: Any?) = other is KeyAuth &&
+            keyBytes.contentEquals(other.keyBytes) && passphrase == other.passphrase
+        override fun hashCode(): Int = java.util.Arrays.hashCode(keyBytes)
+    }
+
+    /** Cap on persisted key-file bytes (see [saveKeyAuth]). */
+    const val KEY_BYTES_CAP = 1_000_000
+
+    fun saveKeyAuth(context: Context, profile: TerminalProfile, keyBytes: ByteArray, passphrase: String?) {
+        require(keyBytes.size <= KEY_BYTES_CAP) { "key file too large" }
+        // Refuse to persist obviously-non-key content (a dropped APK,
+        // a photo, ...): every supported key format carries a
+        // recognizable header.
+        val head = String(keyBytes.copyOfRange(0, keyBytes.size.coerceAtMost(64)), Charsets.US_ASCII)
+        require(
+            head.startsWith("-----BEGIN") || head.startsWith("PuTTY-Gen-Key")
+        ) { "not a recognized private key file" }
+        val sp = SecurePrefs.get(context, PREFS)
+        sp.edit()
+            .putString("keybytes|" + profile.credentialKey(),
+                java.util.Base64.getEncoder().encodeToString(keyBytes))
+            .apply()
+        if (passphrase.isNullOrBlank()) sp.edit().remove("keypass|" + profile.credentialKey()).apply()
+        else sp.edit().putString("keypass|" + profile.credentialKey(), passphrase).apply()
+    }
+
+    fun storedKeyAuth(context: Context, profile: TerminalProfile): KeyAuth? =
+        try {
+            val sp = SecurePrefs.get(context, PREFS)
+            val b64 = sp.getString("keybytes|" + profile.credentialKey(), null)
+                ?: return null
+            val bytes = java.util.Base64.getDecoder().decode(b64)
+            val pass = sp.getString("keypass|" + profile.credentialKey(), null)
+            KeyAuth(bytes, pass)
+        } catch (_: Exception) {
+            // Corrupt/cleartext-migrated value: treat as absent rather
+            // than crash the screen; the user re-picks the key file.
+            null
+        }
+
+    fun clearKeyAuth(context: Context, profile: TerminalProfile) {
+        val sp = SecurePrefs.get(context, PREFS)
+        sp.edit()
+            .remove("keybytes|" + profile.credentialKey())
+            .remove("keypass|" + profile.credentialKey())
+            .apply()
+    }
 
     // ── crash / disconnect restore tail ──
 

@@ -2,7 +2,11 @@ package com.hermes.mobile.ui.screens.terminal
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -13,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -230,7 +235,8 @@ private fun connectPty(
     user: String,
     pass: String,
     context: Context,
-    trust: TrustPrompt
+    trust: TrustPrompt,
+    keyAuth: TerminalProfileStore.KeyAuth? = null
 ): Pair<Session?, String> {
     val prefs: SharedPreferences =
         context.getSharedPreferences("hermes_known_hosts", Context.MODE_PRIVATE)
@@ -267,7 +273,31 @@ private fun connectPty(
                 emptyList()
         })
         ssh.connect(host, port)
-        ssh.authPassword(user, pass)
+        if (keyAuth != null) {
+            // ── SSH public-key auth ──
+            // SSHJ 0.38 has no in-memory key source: loadKeys() takes a
+            // filesystem path. The key bytes (from SecurePrefs, or picked
+            // via the SAF file picker this session) are staged into the
+            // APP-PRIVATE cache dir, loaded, and deleted in finally —
+            // the file exists for under a second, is never world-
+            // readable (SELinux keeps the app dir process-private), and
+            // is gone before any shell starts.
+            val tmp = java.io.File(context.cacheDir,
+                "hermes_ssh_key_" + System.nanoTime())
+            try {
+                tmp.writeBytes(keyAuth.keyBytes)
+                val provider = if (keyAuth.passphrase.isNullOrBlank()) {
+                    ssh.loadKeys(tmp.absolutePath)
+                } else {
+                    ssh.loadKeys(tmp.absolutePath, keyAuth.passphrase)
+                }
+                ssh.authPublickey(user, provider)
+            } finally {
+                tmp.delete()
+            }
+        } else {
+            ssh.authPassword(user, pass)
+        }
         val session = ssh.startSession()
         // Device-aware geometry: a phone at 80 cols wraps long
         // commands early; 0/0 pixel size = "server picks".
@@ -340,6 +370,41 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     var lastPort by remember { mutableStateOf(22) }
     var lastUser by remember { mutableStateOf("") }
     var hadSession by remember { mutableStateOf(false) }
+
+    // ── Auth method: password or public key ──
+    var authMode by remember { mutableStateOf(TerminalProfile.AUTH_PASSWORD) }
+    // Picked this session via SAF; not persisted (persistence goes
+    // through Save-profile into SecurePrefs).
+    var pickedKey by remember {
+        mutableStateOf<Pair<String, ByteArray>?>(null)
+    }
+    var keyPass by remember { mutableStateOf("") }
+    // Key summary for a profile whose key lives in SecurePrefs.
+    var storedKeySummary by remember { mutableStateOf("") }
+
+    // SAF document picker: one key file, read into memory immediately
+    // (the content URI may die with the picker; we never re-open it).
+    val openKeyDoc = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        try {
+            val bytes = context.contentResolver.openInputStream(uri)!!.use { it.readBytes() }
+            if (bytes.size > TerminalProfileStore.KEY_BYTES_CAP) {
+                notice = "Key file too large (max 1 MiB)."
+                return@rememberLauncherForActivityResult
+            }
+            val head = String(bytes.copyOfRange(0, bytes.size.coerceAtMost(64)), Charsets.US_ASCII)
+            if (head.startsWith("-----BEGIN") || head.startsWith("PuTTY-Gen-Key")) {
+                pickedKey = (uri.lastPathSegment ?: "key") to bytes
+                storedKeySummary = ""
+            } else {
+                notice = "Not a recognized private key file."
+            }
+        } catch (_: Exception) {
+            notice = "Could not read the key file."
+        }
+    }
     // Re-attach to a live session (tab switch / rotation):
     var connected by remember { mutableStateOf(SshTerminal.alive) }
     var output by remember {
@@ -392,6 +457,11 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 host = lastHost, port = lastPort, user = lastUser
             )
             pass = TerminalProfileStore.storedPassword(context, prof) ?: pass
+            val lostKauth = TerminalProfileStore.storedKeyAuth(context, prof)
+            keyPass = lostKauth?.passphrase ?: keyPass
+            storedKeySummary =
+                if (lostKauth != null) "Stored key (${lostKauth.keyBytes.size} bytes)"
+                else storedKeySummary
             hadSession = true
             error = "Connection lost — tap Connect to re-establish."
             TerminalProfileStore.saveRestore(context, lastHost, lastPort, lastUser, SshTerminal.snapshot())
@@ -447,7 +517,16 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                             host = p.host
                             port = p.port.toString()
                             user = p.user
+                            authMode = p.authMode
                             pass = TerminalProfileStore.storedPassword(context, p) ?: ""
+                            val kauth =
+                                if (p.authMode == TerminalProfile.AUTH_KEY)
+                                    TerminalProfileStore.storedKeyAuth(context, p) else null
+                            keyPass = kauth?.passphrase ?: ""
+                            storedKeySummary =
+                                if (kauth != null) "Stored key (${kauth.keyBytes.size} bytes)"
+                                else ""
+                            pickedKey = null
                             notice = ""
                         },
                         onDelete = { p ->
@@ -478,11 +557,89 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 OutlinedTextField(user, { user = it }, label = { Text("Username") },
                     singleLine = true, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(pass, { pass = it }, label = { Text("Password") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth())
+                // ── Auth method: password / public key ──
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (authMode == TerminalProfile.AUTH_PASSWORD)
+                                    MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                            .border(
+                                1.dp,
+                                if (authMode == TerminalProfile.AUTH_PASSWORD)
+                                    MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant
+                            )
+                            .clickable { authMode = TerminalProfile.AUTH_PASSWORD },
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Password", style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(horizontal = 8.dp))
+                    }
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (authMode == TerminalProfile.AUTH_KEY)
+                                    MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                            .border(
+                                1.dp,
+                                if (authMode == TerminalProfile.AUTH_KEY)
+                                    MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant
+                            )
+                            .clickable { authMode = TerminalProfile.AUTH_KEY },
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Key", style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(horizontal = 8.dp))
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                if (authMode == TerminalProfile.AUTH_PASSWORD) {
+                    OutlinedTextField(pass, { pass = it }, label = { Text("Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth())
+                } else {
+                    val picked = pickedKey
+                    val keyAvailable =
+                        picked != null || storedKeySummary.isNotEmpty()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { openKeyDoc.launch(arrayOf("application/octet-stream")) },
+                            modifier = Modifier.weight(1f)) {
+                            Text(if (picked?.first != null) "Key: ${picked.first}" else "Pick key file")
+                        }
+                    }
+                    if (storedKeySummary.isNotEmpty() && picked == null) {
+                        Text(storedKeySummary, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedTextField(keyPass, { keyPass = it },
+                        label = { Text("Key passphrase (if encrypted)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth())
+                    if (!keyAvailable) {
+                        Text("Pick the private key file (or save it to a profile first).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error)
+                    }
+                }
 
                 val portNum = port.trim().toIntOrNull()
                 val resolvedPort = portNum ?: 22            // empty → 22
@@ -498,16 +655,52 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedButton(
                         onClick = {
-                            val name = TerminalProfile.nameFor(
-                                host, resolvedPort, user
+                            val profile = TerminalProfile(
+                                name = TerminalProfile.nameFor(host, resolvedPort, user),
+                                host = host, port = resolvedPort, user = user,
+                                authMode = authMode
                             )
                             TerminalProfileStore.saveProfile(
                                 context,
-                                TerminalProfile(name, host, resolvedPort, user),
-                                if (pass.isBlank()) null else pass
+                                profile,
+                                if (authMode == TerminalProfile.AUTH_PASSWORD)
+                                    (if (pass.isBlank()) null else pass) else null
                             )
-                            notice = if (pass.isBlank()) "Profile saved."
-                                    else "Profile saved — password encrypted."
+                            if (authMode == TerminalProfile.AUTH_PASSWORD) {
+                                // Switched to (or stayed on) password auth:
+                                // any key material for these coordinates
+                                // goes with the mode, not after it.
+                                TerminalProfileStore.clearKeyAuth(context, profile)
+                            }
+                            var msg = if (authMode == TerminalProfile.AUTH_PASSWORD)
+                                (if (pass.isBlank()) "Profile saved."
+                                else "Profile saved — password encrypted.")
+                                else "Profile saved."
+                            if (authMode == TerminalProfile.AUTH_KEY) {
+                                // Orphan cleanup, symmetric with the
+                                // pw-branch's clearKeyAuth: switching a
+                                // profile to key auth removes its stored
+                                // password, not just shadows it.
+                                TerminalProfileStore.clearPassword(context, profile)
+                                val key = pickedKey?.second
+                                    ?: TerminalProfileStore.storedKeyAuth(context, profile)
+                                        ?.keyBytes
+                                if (key != null) {
+                                    try {
+                                        TerminalProfileStore.saveKeyAuth(
+                                            context, profile, key,
+                                            keyPass.ifBlank {
+                                                TerminalProfileStore.storedKeyAuth(context, profile)
+                                                    ?.passphrase
+                                            }
+                                        )
+                                        msg += " Key encrypted."
+                                    } catch (e: IllegalArgumentException) {
+                                        msg = "Profile saved, but key not stored: ${e.message}."
+                                    }
+                                }
+                            }
+                            notice = msg
                             // Bump so the chip row appears / updates.
                             ++profileVersion
                         },
@@ -536,10 +729,41 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                                     error = "Port out of range (1–65535)."
                                     return@launch
                                 }
+                                // Key auth: a freshly picked file wins;
+                                // otherwise fall back to the encrypted key
+                                // stored for these exact coordinates.
+                                val keyAuth = if (authMode == TerminalProfile.AUTH_KEY) {
+                                    pickedKey?.second?.let {
+                                        TerminalProfileStore.KeyAuth(
+                                            it, keyPass.ifBlank { null }
+                                        )
+                                    } ?: run {
+                                        val prof = TerminalProfile(
+                                            TerminalProfile.nameFor(host, targetPort, user),
+                                            host, targetPort, user,
+                                            TerminalProfile.AUTH_KEY
+                                        )
+                                        val stored =
+                                            TerminalProfileStore.storedKeyAuth(context, prof)
+                                        if (stored != null) {
+                                            keyPass = stored.passphrase ?: ""
+                                            storedKeySummary =
+                                                "Stored key (${stored.keyBytes.size} bytes)"
+                                        }
+                                        stored
+                                    }
+                                } else {
+                                    null
+                                }
+                                if (authMode == TerminalProfile.AUTH_KEY && keyAuth == null) {
+                                    error = "No key available — pick the key file first."
+                                    return@launch
+                                }
                                 SshTerminal.closeAll()
                                 output = ""
                                 val res = withContext(Dispatchers.IO) {
-                                    connectPty(host, targetPort, user, pass, context, trust)
+                                    connectPty(host, targetPort, user, pass, context, trust,
+                                        keyAuth)
                                 }
                                 if (res.first != null) {
                                     lastHost = host
