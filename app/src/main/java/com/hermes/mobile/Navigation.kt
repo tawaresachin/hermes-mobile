@@ -104,7 +104,10 @@ fun MainNavigation(
 
     Scaffold(
         bottomBar = {
-            if (!isImeVisible) {
+            // Terminal owns the whole screen (its own find/copy toolbar
+            // sits at the bottom); the app's bottom nav would only steal
+            // vertical space and overlap the WebView.
+            if (!isImeVisible && currentDestination?.route != Screen.Terminal.route) {
                 HermesBottomNavigationBar(
                     screens = bottomNavScreens,
                     currentDestination = currentDestination,
