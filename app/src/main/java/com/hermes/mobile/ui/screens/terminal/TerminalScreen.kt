@@ -2,6 +2,7 @@ package com.hermes.mobile.ui.screens.terminal
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -44,6 +45,57 @@ import net.schmizz.sshj.transport.verification.HostKeyVerifier
 // UI polls it. The ring is capped so a runaway command
 // (`cat /dev/zero`, `yes`) cannot OOM the process.
 // ═══════════════════════════════════════════════════════════
+// ─── Saved-profile chip row: tap = fill form, long-press = delete ───
+@androidx.compose.foundation.ExperimentalFoundationApi
+@Composable
+private fun FlowChipRow(
+    profiles: List<TerminalProfile>,
+    onPick: (TerminalProfile) -> Unit,
+    onDelete: (TerminalProfile) -> Unit
+) {
+    var pendingDelete by remember { mutableStateOf<TerminalProfile?>(null) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // Cap visible chips: a huge profile list must not turn the form
+        // into an endless chip wall — one row, most recent 4.
+        profiles.takeLast(4).forEach { p ->
+            AssistChip(
+                onClick = { onPick(p) },
+                label = { Text(p.name, maxLines = 1) },
+                // M3 AssistChip has no long-press parameter: combine
+                // click + long-press on one detector so the two stay
+                // mutually exclusive gestures (a raw pointerInput would
+                // also swallow the chip's own onClick).
+                modifier = Modifier
+                    .weight(1f)
+                    .combinedClickable(
+                        onClick = { onPick(p) },
+                        onLongClick = { pendingDelete = p }
+                    )
+            )
+        }
+    }
+    val target = pendingDelete
+    if (target != null) {
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete profile?") },
+            text = { Text("\"${target.name}\" — its encrypted password is removed too.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete(target)
+                    pendingDelete = null
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
 object SshTerminal {
     private const val OUTPUT_CAP_CHARS = 32_000
     private const val OUTPUT_TRIM_THRESHOLD = 64_000
@@ -173,6 +225,7 @@ private fun fingerprintOf(key: PublicKey): String =
  */
 private fun connectPty(
     host: String,
+    port: Int,
     user: String,
     pass: String,
     context: Context,
@@ -190,6 +243,8 @@ private fun connectPty(
         ssh.addHostKeyVerifier(object : HostKeyVerifier {
             override fun verify(host: String, port: Int, publicKey: PublicKey): Boolean {
                 val fp = fingerprintOf(publicKey)
+                // OpenSSH known_hosts host identity: port-aware, so
+                // 10.0.0.5:2222 and 10.0.0.5:22 are separate entries.
                 val id = if (port == 22) host else "[$host]:$port"
                 val saved = prefs.getString("host:$id", null)
                 if (saved != null) {
@@ -210,7 +265,7 @@ private fun connectPty(
                 // normally (the standard "no known_hosts entry" behavior).
                 emptyList()
         })
-        ssh.connect(host, 22)
+        ssh.connect(host, port)
         ssh.authPassword(user, pass)
         val session = ssh.startSession()
         // 120x40 xterm-256color: phone columns default to 80, which
@@ -258,13 +313,29 @@ private fun connectPty(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var host by remember { mutableStateOf("") }
-    var user by remember { mutableStateOf("") }
+    // Crash/disconnect restore: prefill from the last recorded session
+    // (tail text included below the form, labeled as restored history).
+    // Held in state (not a plain remember) so the in-session saves can
+    // refresh it instead of showing a stale tail.
+    var restored by remember {
+        mutableStateOf(if (!SshTerminal.alive) TerminalProfileStore.restoreRecord(context) else null)
+    }
+    var host by remember { mutableStateOf(restored?.host ?: "") }
+    var port by remember { mutableStateOf(restored?.port?.toString() ?: "22") }
+    var user by remember { mutableStateOf(restored?.user ?: "") }
     var pass by remember { mutableStateOf("") }
+    // Neutral, non-error feedback ("profile saved", "profile removed").
+    var notice by remember { mutableStateOf("") }
+    // The live session's coordinates, for re-establishing after a drop.
+    var lastHost by remember { mutableStateOf("") }
+    var lastPort by remember { mutableStateOf(22) }
+    var lastUser by remember { mutableStateOf("") }
+    var hadSession by remember { mutableStateOf(false) }
     // Re-attach to a live session (tab switch / rotation):
     var connected by remember { mutableStateOf(SshTerminal.alive) }
     var output by remember {
@@ -304,11 +375,42 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             }
         }
         // The connection died underneath us (network drop / remote close):
-        // fall back to the form with the reason visible, not a dead
-        // "connected" panel that swallows every Send. An intentional
-        // Disconnect sets closedByUser — that is not "lost".
+        // prefill the re-connect form so Connect becomes a one-tap
+        // re-establish, and persist the tail. An intentional Disconnect
+        // sets closedByUser — that is handled by its button, not here.
         connected = false
-        if (!SshTerminal.closedByUser) error = "Connection lost"
+        if (!SshTerminal.closedByUser) {
+            host = lastHost
+            port = lastPort.toString()
+            user = lastUser
+            val prof = TerminalProfile(
+                name = TerminalProfile.nameFor(lastHost, lastPort, lastUser),
+                host = lastHost, port = lastPort, user = lastUser
+            )
+            pass = TerminalProfileStore.storedPassword(context, prof) ?: pass
+            hadSession = true
+            error = "Connection lost — tap Connect to re-establish."
+            TerminalProfileStore.saveRestore(context, lastHost, lastPort, lastUser, SshTerminal.snapshot())
+            restored = TerminalProfileStore.restoreRecord(context)
+        }
+    }
+
+    // Debounced crash-restore tail: a process death between the
+    // disconnect/loss saves would otherwise leave no record. A 2s
+    // throttle keeps SharedPreferences writes off the hot path.
+    var lastTailSave by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(connected) {
+        while (SshTerminal.alive) {
+            delay(2_000)
+            if (!SshTerminal.alive) break
+            val now = System.currentTimeMillis()
+            if (now - lastTailSave > 2_000) {
+                lastTailSave = now
+                TerminalProfileStore.saveRestore(
+                    context, lastHost, lastPort, lastUser, SshTerminal.snapshot()
+                )
+            }
+        }
     }
 
     Column(
@@ -316,7 +418,6 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             .fillMaxSize()
             .padding(paddingValues)
             .padding(16.dp)
-            .verticalScroll(rememberScrollState())
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.Terminal, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
@@ -325,63 +426,193 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
         }
         Spacer(Modifier.height(12.dp))
         if (!connected) {
-            OutlinedTextField(host, { host = it }, label = { Text("Host") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(user, { user = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(pass, { pass = it }, label = { Text("Password") },
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    if (!SshTerminal.reserveConnect()) {
-                        // A connect is still settling in the background
-                        // (cancelled coroutine + sshj call on the IO pool).
-                        error = "A connection attempt is still in progress — " +
-                            "wait for it to finish, or try again shortly."
-                        return@Button
-                    }
-                    running = true
-                    error = ""
-                    scope.launch {
-                        try {
-                            SshTerminal.closeAll()
-                            output = ""
-                            val res = withContext(Dispatchers.IO) {
-                                connectPty(host, user, pass, context, trust)
-                            }
-                            if (res.first != null) {
-                                connected = true
-                            } else {
-                                error = res.second
-                            }
-                        } finally {
-                            // Runs on cancellation too (tab switch): the guard
-                            // clears so a later tap isn't refused forever.
-                            SshTerminal.releaseConnect()
-                            running = false
-                        }
-                    }
-                },
-                enabled = !running && host.isNotBlank() && user.isNotBlank(),
-                modifier = Modifier.fillMaxWidth()
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState())
             ) {
-                if (running) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                else Text("Connect")
-            }
-            if (error.isNotBlank()) {
+                // ── Saved profiles: tap = fill form, long-press = delete ──
+                val profileVersionVar = remember { mutableIntStateOf(0) }
+                var profileVersion by profileVersionVar
+                val profileList = remember(profileVersion) {
+                    TerminalProfileStore.profiles(context)
+                }
+                if (profileList.isNotEmpty()) {
+                    FlowChipRow(profiles = profileList,
+                        onPick = { p ->
+                            host = p.host
+                            port = p.port.toString()
+                            user = p.user
+                            pass = TerminalProfileStore.storedPassword(context, p) ?: ""
+                            notice = ""
+                        },
+                        onDelete = { p ->
+                            TerminalProfileStore.deleteProfile(context, p)
+                            notice = "Profile removed."
+                            // Bump so the remember{} above re-reads storage.
+                            ++profileVersion
+                        })
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                Row {
+                    OutlinedTextField(
+                        host, { host = it }, label = { Text("Host") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedTextField(
+                        port, { port = it.filter(Char::isDigit) },
+                        label = { Text("Port") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(84.dp)
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    text = error,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                OutlinedTextField(user, { user = it }, label = { Text("Username") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(pass, { pass = it }, label = { Text("Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth())
+
+                val portNum = port.trim().toIntOrNull()
+                val resolvedPort = portNum ?: 22            // empty → 22
+                val portValid = resolvedPort in 1..65535
+                if (portNum != null && !portValid) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Port must be 1–65535.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(
+                        onClick = {
+                            val name = TerminalProfile.nameFor(
+                                host, resolvedPort, user
+                            )
+                            TerminalProfileStore.saveProfile(
+                                context,
+                                TerminalProfile(name, host, resolvedPort, user),
+                                if (pass.isBlank()) null else pass
+                            )
+                            notice = if (pass.isBlank()) "Profile saved."
+                                    else "Profile saved — password encrypted."
+                            // Bump so the chip row appears / updates.
+                            ++profileVersion
+                        },
+                        enabled = host.isNotBlank() && user.isNotBlank()
+                    ) {
+                        Text("Save profile")
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        if (!SshTerminal.reserveConnect()) {
+                            // A connect is still settling in the background
+                            // (cancelled coroutine + sshj call on the IO pool).
+                            error = "A connection attempt is still in progress — " +
+                                "wait for it to finish, or try again shortly."
+                            return@Button
+                        }
+                        running = true
+                        error = ""
+                        scope.launch {
+                            try {
+                                val targetPort = port.toIntOrNull() ?: 22
+                                if (targetPort !in 1..65535) {
+                                    error = "Port out of range (1–65535)."
+                                    return@launch
+                                }
+                                SshTerminal.closeAll()
+                                output = ""
+                                val res = withContext(Dispatchers.IO) {
+                                    connectPty(host, targetPort, user, pass, context, trust)
+                                }
+                                if (res.first != null) {
+                                    lastHost = host
+                                    lastPort = targetPort
+                                    lastUser = user
+                                    hadSession = true
+                                    connected = true
+                                    // New session: the restored-tail record
+                                    // belongs to the dead session.
+                                    TerminalProfileStore.clearRestore(context)
+                                    restored = null
+                                } else {
+                                    error = res.second
+                                }
+                            } finally {
+                                // Runs on cancellation too (tab switch): the guard
+                                // clears so a later tap isn't refused forever.
+                                SshTerminal.releaseConnect()
+                                running = false
+                            }
+                        }
+                    },
+                    enabled = !running && host.isNotBlank() && user.isNotBlank() && portValid,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (running) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    else Text(if (hadSession) "Reconnect" else "Connect")
+                }
+                if (error.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                if (notice.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = notice,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                // Restored tail from a previous session (crash / relaunch):
+                // shown for context, clearly labeled, never re-fed to a
+                // shell — it is display-only history.
+                val tail = restored?.tail
+                if (!tail.isNullOrBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("(restored tail from last session)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = tail,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 8,
+                            modifier = Modifier
+                                .padding(8.dp)
+                                .verticalScroll(rememberScrollState())
+                        )
+                    }
+                }
             }
         } else {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = MaterialTheme.shapes.small,
-                modifier = Modifier.fillMaxWidth().height(300.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
             ) {
                 Text(
                     text = output.ifBlank { "(connected)" },
@@ -401,6 +632,38 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                     prevMax - outputScroll.value.toFloat() < 200f
                 if (atBottom) outputScroll.scrollTo(outputScroll.maxValue)
                 prevMax = outputScroll.maxValue.toFloat()
+            }
+            Spacer(Modifier.height(8.dp))
+            // ── Raw-key row: drive interactive programs (less, vim,
+            // sudo -i) that need bytes the text field can't produce.
+            // Sent straight to the PTY; the remote shell owns semantics.
+            fun sendRaw(bytes: IntArray) {
+                val s = SshTerminal.session ?: return
+                try {
+                    s.outputStream.write(bytes.map { it.toByte() }.toByteArray())
+                    s.outputStream.flush()
+                } catch (_: Exception) {
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                TextButton(onClick = { sendRaw(intArrayOf(0x03)) }, modifier = Modifier.weight(1f)) {
+                    Text("Ctrl-C", style = MaterialTheme.typography.labelSmall)
+                }
+                TextButton(onClick = { sendRaw(intArrayOf(0x1b)) }, modifier = Modifier.weight(1f)) {
+                    Text("Esc", style = MaterialTheme.typography.labelSmall)
+                }
+                TextButton(onClick = { sendRaw(intArrayOf(0x09)) }, modifier = Modifier.weight(1f)) {
+                    Text("Tab", style = MaterialTheme.typography.labelSmall)
+                }
+                TextButton(onClick = { sendRaw(intArrayOf(0x1b, 0x5b, 0x41)) }, modifier = Modifier.weight(1f)) {
+                    Text("Up", style = MaterialTheme.typography.labelSmall)
+                }
+                TextButton(onClick = { sendRaw(intArrayOf(0x1b, 0x5b, 0x42)) }, modifier = Modifier.weight(1f)) {
+                    Text("Down", style = MaterialTheme.typography.labelSmall)
+                }
             }
             Spacer(Modifier.height(8.dp))
             fun send() {
@@ -429,8 +692,12 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             }
             Spacer(Modifier.height(8.dp))
             Button(onClick = {
+                // Save the tail BEFORE closeAll wipes the buffer.
+                TerminalProfileStore.saveRestore(context, lastHost, lastPort, lastUser, SshTerminal.snapshot())
+                restored = TerminalProfileStore.restoreRecord(context)
                 SshTerminal.closeAll()
                 connected = false
+                hadSession = false
                 output = ""
                 input = ""
                 error = ""
