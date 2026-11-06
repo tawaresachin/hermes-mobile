@@ -621,40 +621,52 @@ private fun FeatureDrawerCard(
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
-            FeaturePill(Icons.Filled.Mic, "Voice", onVoiceInput)
-            FeaturePill(Icons.Filled.History, "Sessions", onResumeSession)
-            FeaturePill(Icons.Filled.Terminal, "Terminal", onTerminal)
+            // Telegram-style glass tints: each row its own accent
+            // (translucent over the opaque panel surface).
+            FeaturePill(Icons.Filled.Mic, "Voice", onVoiceInput,
+                accent = Color(0xFF1A73E8))
+            Spacer(modifier = Modifier.height(10.dp))
+            FeaturePill(Icons.Filled.History, "Sessions", onResumeSession,
+                accent = Color(0xFF0F9D58))
+            Spacer(modifier = Modifier.height(10.dp))
+            FeaturePill(Icons.Filled.Terminal, "Terminal", onTerminal,
+                accent = Color(0xFFE8710A))
         }
     }
 }
 
-/** Vertical menu item — full width, 44dp touch target, icon + label + chevron. */
+/** Vertical menu item — full width, 44dp touch target, icon + label +
+ * chevron. Telegram-style glass: the accent tints the row background
+ * (translucent) and the icon, over the opaque panel surface. */
 @Composable
 private fun FeaturePill(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    accent: Color
 ) {
     Surface(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .height(44.dp),
-        shape = RoundedCornerShape(50),
-        color = Color.Transparent,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            .height(48.dp),
+        shape = RoundedCornerShape(16.dp),
+        // Glass: translucent accent over the opaque panel — the
+        // panel's solid background is what keeps the result uniform.
+        color = accent.copy(alpha = 0.16f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f))
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = accent,
                 modifier = Modifier.size(18.dp)
             )
             Text(
@@ -667,7 +679,7 @@ private fun FeaturePill(
             Icon(
                 imageVector = Icons.Filled.ChevronRight,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                tint = accent.copy(alpha = 0.6f),
                 modifier = Modifier.size(16.dp)
             )
         }
