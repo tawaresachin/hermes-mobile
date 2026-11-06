@@ -18,7 +18,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -37,6 +39,7 @@ import java.util.concurrent.TimeUnit
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.connection.channel.direct.Session
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
+import com.hermes.mobile.network.HermesApiService
 
 // ═══════════════════════════════════════════════════════════
 // Process-level session holder.
@@ -413,6 +416,91 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     var input by remember { mutableStateOf("") }
     var running by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+
+    // ── Batch 4: gateway-side PTY bridge ──
+    // connSource: "ssh" (device-side SSH, batches 1-3) or "gateway"
+    // (plugin /api/mobile/pty/ws — a shell ON the gateway host).
+    var connSource by remember { mutableStateOf("ssh") }
+    var gw by remember { mutableStateOf<GatewayPtyClient?>(null) }
+    val conf = LocalConfiguration.current
+    val density = LocalDensity.current.density
+
+    // Gateway connect: no host/port/user form — the credentials come
+    // from the configured server (Settings). One live shell per
+    // process; output streams to [output] on the main looper.
+    fun connectGateway() {
+        val creds = HermesApiService.staticPtyCredentials(context)
+        if (creds == null || creds.first.isBlank()) {
+            error = "Set the server connection in Settings first."
+            return
+        }
+        val (base, key) = creds
+        gw?.close()                            // defensive: no orphan session
+        val (cols, rows) = ptyGeometry(context)
+        val client = GatewayPtyClient(base, key)
+        gw = client
+        running = true
+        client.connect(cols, rows, object : GatewayPtyClient.Callback {
+            override fun onOpen() {
+                running = false
+                SshTerminal.closeAll()          // one source at a time
+                lastHost = ""
+                lastPort = 0
+                lastUser = ""
+                hadSession = true
+                connected = true
+                output = ""
+                input = ""
+                error = ""
+            }
+
+            override fun onOut(bytes: ByteArray) {
+                if (!client.isOpen) return      // closed under us
+                if (gw != client) return        // superseded: frames die here
+                val s = String(bytes, Charsets.UTF_8)
+                output = (output + s).let {
+                    if (it.length > 32_000) it.takeLast(32_000) else it
+                }
+            }
+
+            override fun onExit(code: Int) {
+                // Ownership guard: a late close/exit frame from a REPLACED
+                // client (user reconnected fast) must not clobber the
+                // session that now owns the [gw] slot.
+                if (gw != client) return
+                if (connected) {
+                    output += "\n[shell exited: $code]\n"
+                }
+                gw = null
+                connected = false
+                running = false
+            }
+
+            override fun onErr(message: String) {
+                if (gw != client) return
+                gw = null
+                connected = false
+                running = false
+                error = message
+            }
+        })
+    }
+
+    // Live resize: rotation / fold change re-sizes the gateway PTY in
+    // place (TIOCGWINSZ on the server) — no reconnect. SSH has no
+    // post-allocation resize (SSHJ 0.38), so this is gateway-only.
+    LaunchedEffect(conf) {
+        val c = gw
+        if (c != null && c.isOpen) {
+            val (cols, rows) = ptyGeometry(
+                context,
+                (conf.screenWidthDp * density).toInt(),
+                (conf.screenHeightDp * density).toInt()
+            )
+            c.resize(cols, rows)
+        }
+    }
+
     val trust = remember { TrustPrompt() }
     val outputScroll = rememberScrollState()
     // Previous known bottom of the output box — the auto-follow gap is
@@ -435,6 +523,11 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     // The reader thread appends off-UI; poll the holder while connected.
     LaunchedEffect(connected) {
         if (!connected) return@LaunchedEffect
+        // Gateway sessions stream straight to [output] on the main
+        // looper (no SshTerminal, no poll); a source switch mid-
+        // screen must not let the SSH loss-branch narrate a gateway
+        // drop as "Connection lost".
+        if (gw != null) return@LaunchedEffect
         var lastLen = -1
         while (SshTerminal.alive) {
             delay(150)
@@ -496,7 +589,10 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.Terminal, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(8.dp))
-            Text("Terminal (SSH/PTY)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (connected && gw != null) "Terminal (Gateway)" else "Terminal (SSH/PTY)",
+                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold
+            )
         }
         Spacer(Modifier.height(12.dp))
         if (!connected) {
@@ -505,6 +601,80 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                     .weight(1f, fill = false)
                     .verticalScroll(rememberScrollState())
             ) {
+                // ── Batch 4: connection source — device-side SSH, or the
+                // gateway's own shell over the authenticated API bridge.
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (connSource == "ssh")
+                                    MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                            .border(
+                                1.dp,
+                                if (connSource == "ssh")
+                                    MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant
+                            )
+                            .clickable { connSource = "ssh" },
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("SSH", style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(horizontal = 8.dp))
+                    }
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (connSource == "gateway")
+                                    MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                            .border(
+                                1.dp,
+                                if (connSource == "gateway")
+                                    MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant
+                            )
+                            .clickable { connSource = "gateway" },
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Gateway", style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(horizontal = 8.dp))
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                // Shared by the form's port field AND the Connect button's
+                // enable rule (which lives outside the source-conditional
+                // blocks below).
+                val portNum = port.trim().toIntOrNull()
+                val resolvedPort = portNum ?: 22            // empty → 22
+                val portValid = resolvedPort in 1..65535
+                if (connSource == "gateway") {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            "Opens a shell on the gateway host over the " +
+                                "authenticated API (same server as your chat " +
+                                "settings). No SSH needed. Resize happens live " +
+                                "— rotate to change size.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                } else {
                 // ── Saved profiles: tap = fill form, long-press = delete ──
                 val profileVersionVar = remember { mutableIntStateOf(0) }
                 var profileVersion by profileVersionVar
@@ -641,9 +811,6 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                     }
                 }
 
-                val portNum = port.trim().toIntOrNull()
-                val resolvedPort = portNum ?: 22            // empty → 22
-                val portValid = resolvedPort in 1..65535
                 if (portNum != null && !portValid) {
                     Spacer(Modifier.height(4.dp))
                     Text("Port must be 1–65535.",
@@ -709,10 +876,15 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                         Text("Save profile")
                     }
                 }
+                } // end ssh form (gateway shows only the info card above)
 
                 Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = {
+                        if (connSource == "gateway") {
+                            connectGateway()
+                            return@Button
+                        }
                         if (!SshTerminal.reserveConnect()) {
                             // A connect is still settling in the background
                             // (cancelled coroutine + sshj call on the IO pool).
@@ -786,7 +958,9 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                             }
                         }
                     },
-                    enabled = !running && host.isNotBlank() && user.isNotBlank() && portValid,
+                    enabled = !running &&
+                        (if (connSource == "gateway") true
+                         else host.isNotBlank() && user.isNotBlank() && portValid),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     if (running) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -808,11 +982,13 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
-                // Restored tail from a previous session (crash / relaunch):
-                // shown for context, clearly labeled, never re-fed to a
-                // shell — it is display-only history.
-                val tail = restored?.tail
-                if (!tail.isNullOrBlank()) {
+                // Restored tail from a previous SSH session (crash /
+                // relaunch): shown for context, clearly labeled, never
+                // re-fed to a shell — it is display-only history. SSH
+                // only: gateway shells leave no restore record.
+                if (connSource == "ssh") {
+                    val tail = restored?.tail
+                    if (!tail.isNullOrBlank()) {
                     Spacer(Modifier.height(12.dp))
                     Text("(restored tail from last session)",
                         style = MaterialTheme.typography.labelSmall,
@@ -835,6 +1011,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                                 .padding(8.dp)
                                 .verticalScroll(rememberScrollState())
                         )
+                    }
                     }
                 }
             }
@@ -882,6 +1059,11 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             // sudo -i) that need bytes the text field can't produce.
             // Sent straight to the PTY; the remote shell owns semantics.
             fun sendRaw(bytes: IntArray) {
+                val gwClient = gw
+                if (gwClient != null && gwClient.isOpen) {
+                    gwClient.send(bytes.map { it.toByte() }.toByteArray())
+                    return
+                }
                 val s = SshTerminal.session ?: return
                 try {
                     s.outputStream.write(bytes.map { it.toByte() }.toByteArray())
@@ -913,6 +1095,12 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             fun send() {
                 // The PTY echoes input back through the reader; no
                 // local append here (that would double-print).
+                val gwClient = gw
+                if (gwClient != null && gwClient.isOpen) {
+                    gwClient.send((input + "\n").toByteArray(Charsets.UTF_8))
+                    input = ""
+                    return
+                }
                 val s = SshTerminal.session ?: return
                 try {
                     val out = s.outputStream
@@ -936,6 +1124,19 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             }
             Spacer(Modifier.height(8.dp))
             Button(onClick = {
+                val gwClient = gw
+                if (gwClient != null) {
+                    // Gateway session: no SSH tail to persist; just end it.
+                    gw = null
+                    gwClient.close()
+                    SshTerminal.closeAll()
+                    connected = false
+                    hadSession = true
+                    output = ""
+                    input = ""
+                    error = ""
+                    return@Button
+                }
                 // Save the tail BEFORE closeAll wipes the buffer.
                 TerminalProfileStore.saveRestore(context, lastHost, lastPort, lastUser, SshTerminal.snapshot())
                 restored = TerminalProfileStore.restoreRecord(context)

@@ -286,3 +286,17 @@ fun ptyGeometry(context: Context): Pair<Int, Int> {
     val rows = ((hDp - 320f) / 18f).toInt().coerceIn(24, 60)
     return cols to rows
 }
+
+/**
+ * Same estimate as [ptyGeometry] but driven by an actual viewport
+ * (pixels), for the gateway bridge's LIVE resize on rotation /
+ * fold: the plugin re-sends TIOCSWINSZ, no reconnect needed.
+ */
+fun ptyGeometry(context: Context, wPx: Int, hPx: Int): Pair<Int, Int> {
+    val dm = context.resources.displayMetrics
+    val wDp = wPx / dm.density
+    val hDp = hPx / dm.density
+    val cols = (wDp / 9f).toInt().coerceIn(40, 160)
+    val rows = ((hDp - 320f) / 18f).toInt().coerceIn(24, 60)
+    return cols to rows
+}

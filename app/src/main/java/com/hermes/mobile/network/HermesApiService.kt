@@ -43,8 +43,27 @@ class HermesApiService @Inject constructor(
 ) {
     companion object {
         const val MIN_PLUGIN_PROTOCOL: Int = 1
-        const val PLUGIN_RELEASES_URL: String =
+        const val PLUGIN_RELEASES_URL =
             "https://github.com/tawaresachin/hermes-mobile-plugin/releases/latest"
+
+        /**
+         * Batch 4: the gateway PTY bridge reads the connection
+         * credentials without a DI instance (the terminal screen is a
+         * plain composable). Same layout as [getConfig], straight
+         * from the stores — baseUrl plain prefs, apiKey in the
+         * SecurePrefs AES store. null when no server is configured.
+         */
+        fun staticPtyCredentials(context: Context): Pair<String, String>? {
+            val base = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_BASE_URL, null) ?: return null
+            val key = try {
+                com.hermes.mobile.security.SecurePrefs.get(context, SECURE_PREFS_NAME)
+                    .getString(KEY_API_KEY, "") ?: ""
+            } catch (_: Exception) {
+                ""
+            }
+            return base to key
+        }
 
         private const val PREFS_NAME = "hermes_config"
         // SECURITY: the secure store MUST use a DIFFERENT file name than
