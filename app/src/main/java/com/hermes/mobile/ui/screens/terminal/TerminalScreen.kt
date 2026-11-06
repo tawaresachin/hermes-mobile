@@ -9,10 +9,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Terminal
@@ -21,9 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -120,6 +115,9 @@ object SshTerminal {
     // Disconnect must not be narrated as one.
     @Volatile var closedByUser: Boolean = false
     @Volatile var length: Int = 0
+    // Bumped when the head is dropped or the buffer is cleared: the UI's
+    // delta baseline is stale, so it must rewrite the screen from scratch.
+    @Volatile var trimmed: Long = 0
     // Serializes connect attempts across re-entries: a Connect whose
     // coroutine was cancelled by a tab switch still holds a live
     // sshj call on the IO pool; a second tap must not start another
@@ -138,6 +136,7 @@ object SshTerminal {
             // Amortized: trim only when the buffer passes the threshold.
             if (output.length > OUTPUT_TRIM_THRESHOLD) {
                 output.delete(0, output.length - OUTPUT_CAP_CHARS)
+                trimmed++
             }
             length = output.length
         }
@@ -162,6 +161,7 @@ object SshTerminal {
         synchronized(lock) {
             output.setLength(0)
             length = 0
+            trimmed++
         }
         try { s?.close() } catch (_: Exception) {}
         try { c?.disconnect() } catch (_: Exception) {}
@@ -318,12 +318,15 @@ private fun connectPty(
         val shell = session.startShell()
         val readerDone = java.util.concurrent.atomic.AtomicBoolean(false)
         val reader = Thread {
-            val buf = ByteArray(4096)
+            val buf = CharArray(4096)
             try {
+                // InputStreamReader keeps a partial multi-byte UTF-8
+                // sequence across reads; String(bytes) would replace it.
+                val stream = java.io.InputStreamReader(shell.inputStream, Charsets.UTF_8)
                 while (true) {
-                    val n = shell.inputStream.read(buf)
+                    val n = stream.read(buf)
                     if (n < 0) break
-                    SshTerminal.append(String(buf, 0, n, Charsets.UTF_8))
+                    SshTerminal.append(String(buf, 0, n))
                 }
             } catch (_: Exception) {
             } finally {
@@ -413,10 +416,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     }
     // Re-attach to a live session (tab switch / rotation):
     var connected by remember { mutableStateOf(SshTerminal.alive) }
-    var output by remember {
-        mutableStateOf(if (SshTerminal.alive) SshTerminal.snapshot() else "")
-    }
-    var input by remember { mutableStateOf("") }
+    val webState = remember { TerminalWebViewState() }
     var running by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
 
@@ -425,12 +425,26 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     // (plugin /api/mobile/pty/ws — a shell ON the gateway host).
     var connSource by remember { mutableStateOf("ssh") }
     var gw by remember { mutableStateOf<GatewayPtyClient?>(null) }
-    val conf = LocalConfiguration.current
-    val density = LocalDensity.current.density
+
+    // Every byte the keyboard produces goes to whichever PTY owns the
+    // screen. Gateway output is already raw; SSH is a text stream.
+    fun sendInputBytes(bytes: ByteArray) {
+        val gwClient = gw
+        if (gwClient != null && gwClient.isOpen) {
+            gwClient.send(bytes)
+            return
+        }
+        val s = SshTerminal.session ?: return
+        try {
+            s.outputStream.write(bytes)
+            s.outputStream.flush()
+        } catch (_: Exception) {
+        }
+    }
 
     // Gateway connect: no host/port/user form — the credentials come
     // from the configured server (Settings). One live shell per
-    // process; output streams to [output] on the main looper.
+    // process; output streams straight into the terminal WebView.
     fun connectGateway() {
         val creds = HermesApiService.staticPtyCredentials(context)
         if (creds == null || creds.first.isBlank()) {
@@ -439,7 +453,9 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
         }
         val (base, key) = creds
         gw?.close()                            // defensive: no orphan session
-        val (cols, rows) = ptyGeometry(context)
+        // The WebView reports real cols/rows once laid out; before that
+        // (fresh launch) use the device estimate.
+        val (cols, rows) = webState.geometry() ?: ptyGeometry(context)
         val client = GatewayPtyClient(base, key)
         gw = client
         running = true
@@ -452,18 +468,15 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 lastUser = ""
                 hadSession = true
                 connected = true
-                output = ""
-                input = ""
+                webState.clear()
                 error = ""
             }
 
             override fun onOut(bytes: ByteArray) {
                 if (!client.isOpen) return      // closed under us
                 if (gw != client) return        // superseded: frames die here
-                val s = String(bytes, Charsets.UTF_8)
-                output = (output + s).let {
-                    if (it.length > 32_000) it.takeLast(32_000) else it
-                }
+                // Raw bytes: xterm decodes UTF-8 across frame boundaries.
+                webState.writeBytes(bytes)
             }
 
             override fun onExit(code: Int) {
@@ -471,12 +484,10 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 // client (user reconnected fast) must not clobber the
                 // session that now owns the [gw] slot.
                 if (gw != client) return
-                if (connected) {
-                    output += "\n[shell exited: $code]\n"
-                }
                 gw = null
                 connected = false
                 running = false
+                error = "Shell exited ($code)."
             }
 
             override fun onErr(message: String) {
@@ -489,27 +500,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
         })
     }
 
-    // Live resize: rotation / fold change re-sizes the gateway PTY in
-    // place (TIOCGWINSZ on the server) — no reconnect. SSH has no
-    // post-allocation resize (SSHJ 0.38), so this is gateway-only.
-    LaunchedEffect(conf) {
-        val c = gw
-        if (c != null && c.isOpen) {
-            val (cols, rows) = ptyGeometry(
-                context,
-                (conf.screenWidthDp * density).toInt(),
-                (conf.screenHeightDp * density).toInt()
-            )
-            c.resize(cols, rows)
-        }
-    }
-
     val trust = remember { TrustPrompt() }
-    val outputScroll = rememberScrollState()
-    // Previous known bottom of the output box — the auto-follow gap is
-    // measured against it, because by the time this effect runs
-    // [outputScroll.maxValue] has ALREADY grown with the new content.
-    var prevMax by remember { mutableStateOf(0f) }
 
     // A Connect that was in flight when the composition was disposed
     // (tab switch / rotation) cancelled its coroutine; the guard and
@@ -518,26 +509,32 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     // session now owns the screen.
     LaunchedEffect(Unit) { if (running && !SshTerminal.alive) running = false }
 
-    // Fresh attach (tab switch / reconnect): the remembered scroll
-    // position may sit past the new content's bottom; start at the top
-    // so bottom-follow works from the first tick.
-    LaunchedEffect(connected) { if (connected) { outputScroll.scrollTo(0); prevMax = 0f } }
-
     // The reader thread appends off-UI; poll the holder while connected.
     LaunchedEffect(connected) {
         if (!connected) return@LaunchedEffect
-        // Gateway sessions stream straight to [output] on the main
+        // Gateway sessions stream straight into the WebView on the main
         // looper (no SshTerminal, no poll); a source switch mid-
         // screen must not let the SSH loss-branch narrate a gateway
         // drop as "Connection lost".
         if (gw != null) return@LaunchedEffect
-        var lastLen = -1
+        var lastLen = 0
+        var lastTrim = -1L
         while (SshTerminal.alive) {
-            delay(150)
-            if (SshTerminal.length != lastLen) {
-                lastLen = SshTerminal.length
-                output = SshTerminal.snapshot()
+            val snap = SshTerminal.snapshot()
+            val trim = SshTerminal.trimmed
+            if (snap.length != lastLen || trim != lastTrim) {
+                if (trim != lastTrim || snap.length < lastLen) {
+                    // The ring trimmed its head; a VT cannot diff that,
+                    // so restart the screen from the retained tail.
+                    webState.clear()
+                    webState.writeText(snap)
+                } else {
+                    webState.writeText(snap.substring(lastLen))
+                }
+                lastLen = snap.length
+                lastTrim = trim
             }
+            delay(150)
         }
         // The connection died underneath us (network drop / remote close):
         // prefill the re-connect form so Connect becomes a one-tap
@@ -935,7 +932,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                                     return@launch
                                 }
                                 SshTerminal.closeAll()
-                                output = ""
+                                webState.clear()
                                 val res = withContext(Dispatchers.IO) {
                                     connectPty(host, targetPort, user, pass, context, trust,
                                         keyAuth)
@@ -1019,60 +1016,24 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 }
             }
         } else {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shape = MaterialTheme.shapes.small,
+            // Real VT surface: xterm.js owns the screen grid, scrollback,
+            // alternate screen and selection. The panel carries find/copy;
+            // typing goes straight to the PTY.
+            TerminalPanel(
+                state = webState,
+                sendInput = { sendInputBytes(it) },
+                onResize = { cols, rows -> gw?.takeIf { it.isOpen }?.resize(cols, rows) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f, fill = false)
-            ) {
-                // SGR/ANSI rendering is memoized on the buffer string:
-                // the 150ms poll only re-parses when new data arrived,
-                // and escape-free output costs one indexOf scan.
-                val styledOutput = remember(output) {
-                    if (output.isBlank()) {
-                        AnnotatedString("(connected)")
-                    } else if (TerminalAnsi.needsParsing(output)) {
-                        TerminalAnsi.render(output)
-                    } else {
-                        AnnotatedString(output)
-                    }
-                }
-                Text(
-                    text = styledOutput,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(outputScroll)
-                        .padding(8.dp)
-                )
-            }
-            // Console behavior: follow the bottom on new data — but don't
-            // yank the user who scrolled up to read older output (value > 0
-            // far from the bottom). Scrolling back to the bottom resumes.
-            LaunchedEffect(output) {
-                val atBottom = outputScroll.value == 0 ||
-                    prevMax - outputScroll.value.toFloat() < 200f
-                if (atBottom) outputScroll.scrollTo(outputScroll.maxValue)
-                prevMax = outputScroll.maxValue.toFloat()
-            }
+                    .weight(1f)
+            )
             Spacer(Modifier.height(8.dp))
             // ── Raw-key row: drive interactive programs (less, vim,
-            // sudo -i) that need bytes the text field can't produce.
-            // Sent straight to the PTY; the remote shell owns semantics.
+            // sudo -i) that phone keyboards cannot produce. Sent straight
+            // to the PTY; the remote shell owns semantics.
             fun sendRaw(bytes: IntArray) {
-                val gwClient = gw
-                if (gwClient != null && gwClient.isOpen) {
-                    gwClient.send(bytes.map { it.toByte() }.toByteArray())
-                    return
-                }
-                val s = SshTerminal.session ?: return
-                try {
-                    s.outputStream.write(bytes.map { it.toByte() }.toByteArray())
-                    s.outputStream.flush()
-                } catch (_: Exception) {
-                }
+                sendInputBytes(bytes.map { it.toByte() }.toByteArray())
+                webState.focus()
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1094,103 +1055,6 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                     Text("Down", style = MaterialTheme.typography.labelSmall)
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            // ── Live command line: type with the on-screen keyboard and
-            // every keystroke is streamed straight to the pty (chars and
-            // backspaces as they happen) — the remote shell owns the
-            // line: its prompt, tab-completion, history. Enter executes.
-            val mono = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
-            val gwLive = gw
-            val sshLive = SshTerminal.session
-            val canType = (gwLive != null && gwLive.isOpen) || sshLive != null
-            fun typeText(s: String) {
-                if (!canType) return
-                val gwClient = gw
-                if (gwClient != null && gwClient.isOpen) {
-                    gwClient.send(s.toByteArray(Charsets.UTF_8))
-                    return
-                }
-                runCatching {
-                    sshLive?.outputStream?.write(s.toByteArray(Charsets.UTF_8))
-                    sshLive?.outputStream?.flush()
-                }
-            }
-            fun typeBackspace() {
-                val gwClient = gw
-                if (gwClient != null && gwClient.isOpen) { gwClient.send(byteArrayOf(0x7f)); return }
-                sendRaw(intArrayOf(0x7f))
-            }
-            fun clearLineRetype(s: String) {
-                // IME replaced/edited the line mid-flight: kill it the
-                // terminal way (Ctrl-U) and retype the replacement.
-                sendRaw(intArrayOf(0x15))
-                typeText(s)
-            }
-            fun executeLine() {
-                val gwClient = gw
-                if (gwClient != null && gwClient.isOpen) {
-                    gwClient.send(byteArrayOf(0x0A))
-                    input = ""
-                    return
-                }
-                runCatching {
-                    val out = sshLive?.outputStream ?: return
-                    out.write(0x0A)
-                    out.flush()
-                }
-                input = ""
-            }
-            // Keystroke diffing: the field shows what's typed (the remote
-            // echoes it too, which is normal for a pty); on append we
-            // forward the new chars, on suffix-delete we forward
-            // backspaces, and on a rewrite (auto-correct, composition)
-            // we Ctrl-U + retype.
-            fun onType(v: String) {
-                if (!canType) { input = v; return }
-                val old = input
-                when {
-                    v.length > old.length && v.startsWith(old) -> typeText(v.substring(old.length))
-                    v.length < old.length && old.endsWith(v) -> {
-                        repeat(old.length - v.length) { typeBackspace() }
-                    }
-                    else -> clearLineRetype(v)
-                }
-                input = v
-            }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("❯", style = mono,
-                    color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(6.dp))
-                TextField(
-                    value = input,
-                    onValueChange = { onType(it) },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    textStyle = mono,
-                    placeholder = { Text("type a command — ⏎ runs it",
-                        style = mono,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)) },
-                    shape = RoundedCornerShape(0.dp),
-                    colors = androidx.compose.material3.TextFieldDefaults.colors(
-                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        cursorColor = MaterialTheme.colorScheme.primary,
-                        focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
-                        unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent
-                    ),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = {
-                        executeLine()
-                    })
-                )
-            }
             Spacer(Modifier.height(4.dp))
             Button(onClick = {
                 val gwClient = gw
@@ -1201,8 +1065,6 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                     SshTerminal.closeAll()
                     connected = false
                     hadSession = true
-                    output = ""
-                    input = ""
                     error = ""
                     return@Button
                 }
@@ -1212,8 +1074,6 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 SshTerminal.closeAll()
                 connected = false
                 hadSession = false
-                output = ""
-                input = ""
                 error = ""
             }, modifier = Modifier.fillMaxWidth()) { Text("Disconnect") }
         }

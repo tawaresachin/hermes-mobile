@@ -20,3 +20,10 @@
 -dontwarn androidx.hilt.**
 -dontwarn sun.security.x509.**
 -keep class net.i2p.crypto.eddsa.** { *; }
+
+# xterm.js calls these by name through addJavascriptInterface; R8 must not
+# rename or strip them.
+-keep class com.hermes.mobile.ui.screens.terminal.TerminalBridge { *; }
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}

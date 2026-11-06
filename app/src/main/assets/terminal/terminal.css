@@ -1,0 +1,27 @@
+/* The terminal owns scrolling; the WebView document must not scroll or zoom. */
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #14161a;
+  -webkit-text-size-adjust: 100%;
+  touch-action: none;
+}
+
+#terminal {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  padding: 6px 4px;
+}
+
+#terminal .xterm {
+  height: 100%;
+}
+
+.xterm .xterm-viewport {
+  scrollbar-width: none;
+}
+.xterm .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
