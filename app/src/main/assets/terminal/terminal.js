@@ -2,6 +2,8 @@
   'use strict';
 
   var Bridge = window.HermesBridge;
+  // UMD wrappers differ per package: xterm exports the class directly,
+  // the addons export a namespace object.
   var TerminalCtor = window.Terminal && window.Terminal.Terminal
     ? window.Terminal.Terminal : window.Terminal;
   var FitCtor = window.FitAddon && window.FitAddon.FitAddon
@@ -17,6 +19,8 @@
     cursorBlink: true,
     convertEol: false,
     screenReaderMode: false,
+    // The search addon highlights matches with decorations, which xterm 6
+    // still gates behind the proposed API.
     allowProposedApi: true,
     minimumContrastRatio: 4.5,
     theme: {
@@ -61,18 +65,22 @@
     textarea.spellcheck = false;
   }
 
-  // ── Fit: keyboard, rotation, split-screen. The PTY follows on resize. ──
+  // ── Fit: keyboard, rotation, split-screen. The PTY follows on resize.
+  // Kotlin calls fit() from onSizeChanged as well, because a WebView that
+  // reports its size late never fires the observer and xterm would keep
+  // whatever row count it measured first (the "one line" bug).
   var lastCols = 0;
   var lastRows = 0;
   var fitting = false;
-  var readySent = false;
   function refit() {
-    if (fitting || !root.clientWidth || !root.clientHeight) return;
+    if (fitting || !root.clientWidth || !root.clientHeight) return false;
     fitting = true;
+    var ok = false;
     try {
       fit.fit();
+      ok = term.cols > 0 && term.rows > 0;
     } catch (_) {
-      // Layout not measurable yet; the next observer tick retries.
+      // Layout not measurable yet; a retry below picks it up.
     }
     fitting = false;
     if (term.cols !== lastCols || term.rows !== lastRows) {
@@ -80,21 +88,25 @@
       lastRows = term.rows;
       Bridge.resized(term.cols, term.rows);
     }
-    // Send ready only after the first successful fit so Kotlin flushes
-    // queued PTY output into a sized terminal.
-    if (!readySent && term.cols > 0 && term.rows > 0) {
-      readySent = true;
-      setTimeout(function () { Bridge.ready(); }, 0);
-    }
+    return ok;
   }
   new ResizeObserver(function () { refit(); }).observe(root);
   window.addEventListener('orientationchange', function () {
     setTimeout(refit, 100);
   });
+  // A shell can start before the WebView has its final size; refit until
+  // the reported geometry stops changing.
+  var retries = 0;
+  (function retryFit() {
+    if (refit() || retries++ > 20) return;
+    setTimeout(retryFit, 200);
+  })();
 
   // ── Input: every keystroke goes straight to the PTY. ──
   term.onData(function (data) { Bridge.input(data); });
 
+  // xterm ignores insertText events (dictation / IME commit paths); feed
+  // those through its input queue so nothing is lost.
   (function installInputPatch() {
     if (!textarea) return;
     var handledKey;
@@ -231,15 +243,7 @@
   }
 
   window.HermesTerminal = {
-    writeBase64: function (b64) {
-      term.write(bytesFromBase64(b64), function () {
-        var rv = term._core._renderService._renderer.value;
-        if (rv && typeof rv.renderRows === 'function') {
-          try { rv.renderRows(0, term.rows - 1); } catch (_) {}
-        }
-        term.scrollToBottom();
-      });
-    },
+    writeBase64: function (b64) { term.write(bytesFromBase64(b64)); },
     writeText: function (text) { term.write(text); },
     clear: function () { term.reset(); },
     focus: function () { term.focus(); },
@@ -258,5 +262,8 @@
     scrollToBottom: function () { term.scrollToBottom(); }
   };
 
-  requestAnimationFrame(refit);
+  // Ready is unconditional: queued PTY output must not depend on the
+  // WebView having reported a usable size yet.
+  Bridge.ready();
+  refit();
 })();

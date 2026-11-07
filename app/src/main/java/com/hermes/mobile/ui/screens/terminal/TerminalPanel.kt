@@ -90,6 +90,16 @@ class TerminalWebViewState {
         while (pending.isNotEmpty()) dispatch(pending.removeFirst())
         pendingChars = 0
         webView?.requestFocus()
+        fit()
+    }
+
+    /**
+     * Re-measure the grid. Driven from the WebView's own layout callback:
+     * a WebView whose size settles without a resize tick leaves xterm at
+     * whatever row count it measured first (the "one line" bug).
+     */
+    fun fit() {
+        if (ready) js("window.HermesTerminal.fit()")
     }
 
     internal fun setSize(c: Int, r: Int) {
@@ -258,7 +268,12 @@ fun TerminalPanel(
                 .fillMaxWidth()
                 .weight(1f),
             factory = { ctx ->
-                WebView(ctx).apply {
+                object : WebView(ctx) {
+                    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+                        super.onSizeChanged(w, h, oldw, oldh)
+                        state.fit()
+                    }
+                }.apply {
                     settings.javaScriptEnabled = true
                     // Local bundle only: no network, no content:// or
                     // cross-file access, and every navigation is refused.
@@ -287,7 +302,7 @@ fun TerminalPanel(
                     loadUrl("file:///android_asset/terminal/index.html")
                 }
             },
-            update = { state.attach(it) }
+            update = { state.attach(it); state.fit() }
         )
 
         if (findOpen) {

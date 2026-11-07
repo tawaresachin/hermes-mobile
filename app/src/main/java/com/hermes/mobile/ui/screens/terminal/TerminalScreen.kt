@@ -419,6 +419,9 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     val webState = remember { TerminalWebViewState() }
     var running by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    // Grid the VT actually allocated; shown in the title so a wrong size
+    // is visible at a glance instead of looking like "missing output".
+    var termGeom by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     // ── Batch 4: gateway-side PTY bridge ──
     // connSource: "ssh" (device-side SSH, batches 1-3) or "gateway"
@@ -591,7 +594,10 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             Icon(Icons.Filled.Terminal, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(8.dp))
             Text(
-                if (connected && gw != null) "Terminal (Gateway)" else "Terminal (SSH/PTY)",
+                buildString {
+                    append(if (connected && gw != null) "Terminal (Gateway)" else "Terminal (SSH/PTY)")
+                    termGeom?.let { append("  ${it.second}\u00d7${it.first}") }
+                },
                 style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold
             )
         }
@@ -1024,7 +1030,10 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             TerminalPanel(
                 state = webState,
                 sendInput = { sendInputBytes(it) },
-                onResize = { cols, rows -> gw?.takeIf { it.isOpen }?.resize(cols, rows) },
+                onResize = { cols, rows ->
+                    termGeom = cols to rows
+                    gw?.takeIf { it.isOpen }?.resize(cols, rows)
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
