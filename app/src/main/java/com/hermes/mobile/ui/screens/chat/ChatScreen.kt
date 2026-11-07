@@ -55,6 +55,8 @@ import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.data.runs.RunController
 import com.hermes.mobile.ui.preview.FilePreviewSheet
 import com.hermes.mobile.ui.preview.previewKindFor
+import com.hermes.mobile.ui.screens.voice.VoiceCapture
+import com.hermes.mobile.ui.screens.voice.encodeWav
 import com.hermes.mobile.ui.components.AttachSheet
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.components.MessageActionSheet
@@ -65,6 +67,8 @@ import com.hermes.mobile.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
 // ═══════════════════════════════════════════════════════════════
@@ -88,12 +92,17 @@ enum class ToolCallStatus { RUNNING, COMPLETED, FAILED }
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val repository: HermesRepository,
+    private val audioRepo: com.hermes.mobile.data.repository.RepositoryAudio,
     savedStateHandle: SavedStateHandle,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
 
     /** For the file-preview sheet (composable-level needs the download fn). */
     fun repository(): HermesRepository = repository
+
+    /** Gateway STT for hands-free fallback on devices with no speech service. */
+    suspend fun transcribeVoice(base64Wav: String): String =
+        audioRepo.transcribeFromBase64(base64Wav)
 
     // ── Session state ──
     private val _sessionId = MutableStateFlow<String?>(null)
@@ -1481,6 +1490,7 @@ fun ChatScreen(
                 handsFree = true
                 startHandsFreeDictation(
                     context = context,
+                    transcribe = { b64 -> vm.transcribeVoice(b64) },
                     onPartial = { text -> inputText = text },
                     onFinal = { text ->
                         if (text.isNotBlank()) {
@@ -1499,6 +1509,7 @@ fun ChatScreen(
                 // Permission granted — use Android SpeechRecognizer inline
                 startVoiceDictation(
                     context = context,
+                    transcribe = { b64 -> vm.transcribeVoice(b64) },
                     onFinalText = { text ->
                         if (text.isNotBlank()) {
                             inputText = text
@@ -2176,6 +2187,7 @@ fun ChatScreen(
                     ) == PackageManager.PERMISSION_GRANTED) {
                     startVoiceDictation(
                         context = context,
+                        transcribe = { b64 -> vm.transcribeVoice(b64) },
                         onFinalText = { text ->
                             if (text.isNotBlank()) {
                                 inputText = text
@@ -2201,6 +2213,7 @@ fun ChatScreen(
                     handsFree = true
                     startHandsFreeDictation(
                         context = context,
+                        transcribe = { b64 -> vm.transcribeVoice(b64) },
                         onPartial = { text -> inputText = text },
                         onFinal = { text ->
                             if (text.isNotBlank()) {
@@ -2393,13 +2406,38 @@ private fun stopActiveDictation() {
     }
 }
 
+private fun speechIntent(partialResults: Boolean) =
+    android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(
+            android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+            android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+        )
+        putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+        if (partialResults) {
+            putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        } else {
+            putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
+    }
+
+private fun speechErrorText(error: Int): String = when (error) {
+    android.speech.SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected"
+    android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech"
+    android.speech.SpeechRecognizer.ERROR_NETWORK -> "Network error"
+    android.speech.SpeechRecognizer.ERROR_CLIENT -> "Client error"
+    android.speech.SpeechRecognizer.ERROR_AUDIO -> "Microphone error"
+    android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission denied"
+    else -> "Voice error ($error)"
+}
+
 private fun startVoiceDictation(
     context: android.content.Context,
+    transcribe: suspend (String) -> String,
     onFinalText: (String) -> Unit,
     onError: (String) -> Unit
 ) {
     if (!android.speech.SpeechRecognizer.isRecognitionAvailable(context)) {
-        onError("Speech recognition not available on this device")
+        startFallbackDictation(transcribe, onFinalText, onError, stopAfterFirst = true)
         return
     }
     // Re-entry / double-tap guard: kill any previous recognizer first.
@@ -2411,14 +2449,7 @@ private fun startVoiceDictation(
             return
         }
         activeDictationRecognizer = recognizer
-        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(
-                android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
-            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-            putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        }
+        val intent = speechIntent(partialResults = false)
         recognizer.setRecognitionListener(object : android.speech.RecognitionListener {
             override fun onReadyForSpeech(params: android.os.Bundle?) {}
             override fun onBeginningOfSpeech() {}
@@ -2426,15 +2457,8 @@ private fun startVoiceDictation(
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
             override fun onError(error: Int) {
-                val msg = when (error) {
-                    android.speech.SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected"
-                    android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech"
-                    android.speech.SpeechRecognizer.ERROR_NETWORK -> "Network error"
-                    android.speech.SpeechRecognizer.ERROR_CLIENT -> "Client error"
-                    else -> "Voice error ($error)"
-                }
                 stopActiveDictation()
-                onError(msg)
+                onError(speechErrorText(error))
             }
             override fun onResults(results: android.os.Bundle?) {
                 val matches = results?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
@@ -2469,11 +2493,26 @@ private val handsFreeHandler = android.os.Handler(android.os.Looper.getMainLoope
 // restart loops instead of spinning forever.
 private var handsFreeErrors = 0
 private const val HANDS_FREE_MAX_ERRORS = 6
+// One-shot fallback with no speech must not hold the mic forever.
+private const val FALLBACK_ONESHOT_TIMEOUT_MS = 15_000L
+
+// Fallback transport for devices with no speech service: the proven VAD
+// capture from conversation mode plus gateway STT. No partials, but the
+// feature still works wherever the app itself does.
+private var handsFreeCapture: VoiceCapture? = null
+private val handsFreeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+// Serializes fallback transcriptions so utterances cannot arrive out of order,
+// and invalidates in-flight ones when the mic is toggled off.
+private val fallbackMutex = Mutex()
+private val handsFreeGeneration = java.util.concurrent.atomic.AtomicInteger()
 
 private fun stopHandsFreeDictation() {
     handsFreeActive = false
     handsFreeErrors = 0
+    handsFreeGeneration.incrementAndGet()
     handsFreeHandler.removeCallbacksAndMessages(null)
+    handsFreeCapture?.release()
+    handsFreeCapture = null
     handsFreeRecognizer?.let { r ->
         try {
             r.destroy()
@@ -2487,12 +2526,13 @@ private fun stopHandsFreeDictation() {
 
 private fun startHandsFreeDictation(
     context: android.content.Context,
+    transcribe: suspend (String) -> String,
     onPartial: (String) -> Unit,
     onFinal: (String) -> Unit,
     onError: (String) -> Unit
 ) {
     if (!android.speech.SpeechRecognizer.isRecognitionAvailable(context)) {
-        onError("Speech recognition not available on this device")
+        startFallbackDictation(transcribe, onFinal, onError)
         return
     }
     // One recognizer at a time: kill the one-shot dictation first.
@@ -2508,14 +2548,7 @@ private fun startHandsFreeDictation(
             return
         }
         handsFreeRecognizer = recognizer
-        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(
-                android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
-            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-            putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        }
+        val intent = speechIntent(partialResults = true)
         val restart = Runnable {
             if (!handsFreeActive) return@Runnable
             try {
@@ -2564,13 +2597,7 @@ private fun startHandsFreeDictation(
                 handsFreeErrors++
                 if (handsFreeErrors > HANDS_FREE_MAX_ERRORS) {
                     handsFreeActive = false
-                    onError(
-                        when (error) {
-                            android.speech.SpeechRecognizer.ERROR_NETWORK -> "Network error"
-                            android.speech.SpeechRecognizer.ERROR_AUDIO -> "Microphone error"
-                            else -> "Voice error ($error)"
-                        }
-                    )
+                    onError(speechErrorText(error))
                 } else {
                     handsFreeHandler.postDelayed(restart, 400)
                 }
@@ -2582,6 +2609,60 @@ private fun startHandsFreeDictation(
     } catch (e: Exception) {
         handsFreeActive = false
         onError("Voice error: ${e.message}")
+    }
+}
+
+// Devices without a speech service: VAD capture + gateway STT. No partials,
+// but voice input works anywhere the app itself does. [stopAfterFirst] gives
+// the one-shot mic the same fallback (stop once the first utterance is in).
+private fun startFallbackDictation(
+    transcribe: suspend (String) -> String,
+    onFinal: (String) -> Unit,
+    onError: (String) -> Unit,
+    stopAfterFirst: Boolean = false,
+) {
+    stopActiveDictation()
+    stopHandsFreeDictation()
+    handsFreeActive = true
+    val generation = handsFreeGeneration.get()
+    val capture = VoiceCapture(
+        onUtterance = { pcm ->
+            if (handsFreeActive) {
+                val wav = encodeWav(pcm, VoiceCapture.SAMPLE_RATE, 1, 16)
+                val base64 = android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP)
+                handsFreeScope.launch {
+                    val text = try {
+                        fallbackMutex.withLock { transcribe(base64) }.trim()
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (handsFreeActive && generation == handsFreeGeneration.get()) {
+                            stopHandsFreeDictation()
+                            onError(e.message ?: "Transcription failed")
+                        }
+                        return@launch
+                    }
+                    if (handsFreeActive && generation == handsFreeGeneration.get() && text.isNotBlank()) {
+                        onFinal(text)
+                        if (stopAfterFirst) stopHandsFreeDictation()
+                    }
+                }
+            }
+        },
+        onError = { msg ->
+            if (handsFreeActive && generation == handsFreeGeneration.get()) {
+                stopHandsFreeDictation()
+                onError(msg)
+            }
+        },
+        onLevel = {},
+    )
+    handsFreeCapture = capture
+    capture.start()
+    if (stopAfterFirst) {
+        handsFreeHandler.postDelayed({
+            if (generation == handsFreeGeneration.get()) stopHandsFreeDictation()
+        }, FALLBACK_ONESHOT_TIMEOUT_MS)
     }
 }
 
