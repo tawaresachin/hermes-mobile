@@ -23,7 +23,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -43,6 +48,8 @@ fun InputBar(
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onVoice: () -> Unit,
+    handsFree: Boolean = false,
+    onToggleHandsFree: () -> Unit = {},
     onEmoji: (String) -> Unit,
     onAttach: () -> Unit,
     pendingAttachments: List<PendingAttachment>,
@@ -162,7 +169,7 @@ fun InputBar(
                             .heightIn(min = 36.dp, max = 120.dp),
                         placeholder = {
                             Text(
-                                text = "Message",
+                                text = if (handsFree) "Listening…" else "Message",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                             )
@@ -197,7 +204,24 @@ fun InputBar(
                         )
                     }
 
-                    // ── 4. Mic / Send (alternate in the same slot — like Telegram) ──
+                    // ── 4. Hands-free voice toggle (waveform, keeps listening) ──
+                    IconButton(
+                        onClick = onToggleHandsFree,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .semantics {
+                                contentDescription =
+                                    if (handsFree) "Stop hands-free voice" else "Hands-free voice"
+                            },
+                        enabled = enabled
+                    ) {
+                        WaveformIcon(
+                            active = handsFree,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    // ── 5. Mic / Send (alternate in the same slot — like Telegram) ──
                     // Empty input → mic; text/attachment present → send replaces it.
                     if (hasContent) {
                         FilledIconButton(
@@ -333,6 +357,62 @@ fun InputBar(
                     }
                 }
             }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Waveform icon — 7 rounded bars, purple→magenta, animated while
+// hands-free listening is active.
+// ═══════════════════════════════════════════════════════════════
+
+@Composable
+private fun WaveformIcon(
+    active: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val phase = if (active) {
+        val transition = rememberInfiniteTransition(label = "waveform")
+        val value by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = (2f * Math.PI).toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 900, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "waveformPhase"
+        )
+        value
+    } else {
+        0f
+    }
+
+    // Always the violet→magenta mark from the design; only the bars move
+    // when listening is active.
+    val brush = Brush.horizontalGradient(listOf(VoiceNeonViolet, VoiceNeonMagenta))
+
+    Canvas(modifier) {
+        val barCount = 7
+        // Bar width == gap, so 7 bars + 6 gaps = 13 units.
+        val unit = size.width / (barCount * 2f - 1f)
+        val centerY = size.height / 2f
+        for (i in 0 until barCount) {
+            val base = when (i) {
+                0, 6 -> 0.30f
+                1, 5 -> 0.55f
+                2, 4 -> 0.80f
+                else -> 1f
+            }
+            val wobble = if (active) 0.55f + 0.45f * kotlin.math.sin(phase + i * 0.9f) else 1f
+            val half = size.height * base * wobble / 2f
+            val x = i * 2f * unit + unit / 2f
+            drawLine(
+                brush = brush,
+                start = Offset(x, centerY - half),
+                end = Offset(x, centerY + half),
+                strokeWidth = unit,
+                cap = StrokeCap.Round
+            )
         }
     }
 }

@@ -1289,6 +1289,7 @@ fun ChatScreen(
     DisposableEffect(Unit) {
         onDispose {
             stopActiveDictation()
+            stopHandsFreeDictation()
             // Stop the 5s response poller when leaving the chat.
             vm.stopResponsePolling()
         }
@@ -1348,6 +1349,9 @@ fun ChatScreen(
     }
 
     var inputText by remember { mutableStateOf("") }
+    // Hands-free voice: continuous recognizer, auto-sends each utterance.
+    var handsFree by remember { mutableStateOf(false) }
+    var pendingHandsFree by remember { mutableStateOf(false) }
     var pendingAttachments by remember { mutableStateOf<List<PendingAttachment>>(emptyList()) }
     fun addPendingAttachment(a: PendingAttachment) { pendingAttachments = pendingAttachments + a }
     fun clearPendingAttachments() { pendingAttachments = emptyList() }
@@ -1470,19 +1474,41 @@ fun ChatScreen(
     val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
+        val wasHandsFree = pendingHandsFree
+        pendingHandsFree = false
         if (granted) {
-            // Permission granted — use Android SpeechRecognizer inline
-            startVoiceDictation(
-                context = context,
-                onFinalText = { text ->
-                    if (text.isNotBlank()) {
-                        inputText = text
-                        vm.sendMessage(text.trim())
+            if (wasHandsFree) {
+                handsFree = true
+                startHandsFreeDictation(
+                    context = context,
+                    onPartial = { text -> inputText = text },
+                    onFinal = { text ->
+                        if (text.isNotBlank()) {
+                            vm.sendMessage(text.trim(), replyTo = pendingReply)
+                            pendingReply = null
+                            sessionIdState?.let { DraftStore.clear(it) }
+                        }
                         inputText = ""
+                    },
+                    onError = { msg ->
+                        handsFree = false
+                        vm.setError("Voice: $msg")
                     }
-                },
-                onError = { msg -> vm.setError("Voice: $msg") }
-            )
+                )
+            } else {
+                // Permission granted — use Android SpeechRecognizer inline
+                startVoiceDictation(
+                    context = context,
+                    onFinalText = { text ->
+                        if (text.isNotBlank()) {
+                            inputText = text
+                            vm.sendMessage(text.trim())
+                            inputText = ""
+                        }
+                    },
+                    onError = { msg -> vm.setError("Voice: $msg") }
+                )
+            }
         } else {
             vm.setError("Microphone permission denied")
         }
@@ -2143,6 +2169,8 @@ fun ChatScreen(
             },
             onVoice = {
                 // Request mic permission, then start inline voice dictation
+                stopHandsFreeDictation()
+                handsFree = false
                 if (ContextCompat.checkSelfPermission(
                         context, Manifest.permission.RECORD_AUDIO
                     ) == PackageManager.PERMISSION_GRANTED) {
@@ -2159,6 +2187,36 @@ fun ChatScreen(
                         onError = { msg -> vm.setError("Voice: $msg") }
                     )
                 } else {
+                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            },
+            handsFree = handsFree,
+            onToggleHandsFree = {
+                if (handsFree) {
+                    stopHandsFreeDictation()
+                    handsFree = false
+                } else if (ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED) {
+                    handsFree = true
+                    startHandsFreeDictation(
+                        context = context,
+                        onPartial = { text -> inputText = text },
+                        onFinal = { text ->
+                            if (text.isNotBlank()) {
+                                vm.sendMessage(text.trim(), replyTo = pendingReply)
+                                pendingReply = null
+                                sessionIdState?.let { DraftStore.clear(it) }
+                            }
+                            inputText = ""
+                        },
+                        onError = { msg ->
+                            handsFree = false
+                            vm.setError("Voice: $msg")
+                        }
+                    )
+                } else {
+                    pendingHandsFree = true
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
             },
@@ -2392,6 +2450,137 @@ private fun startVoiceDictation(
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (e: Exception) {
+        onError("Voice error: ${e.message}")
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Hands-free voice — continuous recognizer that restarts itself after
+// every utterance, streams partials into the composer, and auto-sends
+// each final result until the user toggles it off.
+// ═══════════════════════════════════════════════════════════════
+
+@Volatile
+private var handsFreeActive = false
+private var handsFreeRecognizer: android.speech.SpeechRecognizer? = null
+private val handsFreeHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+// Consecutive failures without a single result; caps background/offline
+// restart loops instead of spinning forever.
+private var handsFreeErrors = 0
+private const val HANDS_FREE_MAX_ERRORS = 6
+
+private fun stopHandsFreeDictation() {
+    handsFreeActive = false
+    handsFreeErrors = 0
+    handsFreeHandler.removeCallbacksAndMessages(null)
+    handsFreeRecognizer?.let { r ->
+        try {
+            r.destroy()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
+    }
+    handsFreeRecognizer = null
+}
+
+private fun startHandsFreeDictation(
+    context: android.content.Context,
+    onPartial: (String) -> Unit,
+    onFinal: (String) -> Unit,
+    onError: (String) -> Unit
+) {
+    if (!android.speech.SpeechRecognizer.isRecognitionAvailable(context)) {
+        onError("Speech recognition not available on this device")
+        return
+    }
+    // One recognizer at a time: kill the one-shot dictation first.
+    stopActiveDictation()
+    stopHandsFreeDictation()
+    handsFreeActive = true
+    handsFreeErrors = 0
+    try {
+        val recognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(context)
+        if (recognizer == null) {
+            handsFreeActive = false
+            onError("Speech recognition service unavailable")
+            return
+        }
+        handsFreeRecognizer = recognizer
+        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+            putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        }
+        val restart = Runnable {
+            if (!handsFreeActive) return@Runnable
+            try {
+                recognizer.startListening(intent)
+            } catch (_: Exception) {
+            }
+        }
+        recognizer.setRecognitionListener(object : android.speech.RecognitionListener {
+            override fun onReadyForSpeech(params: android.os.Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
+            override fun onPartialResults(partialResults: android.os.Bundle?) {
+                if (!handsFreeActive) return
+                handsFreeErrors = 0
+                partialResults
+                    ?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let(onPartial)
+            }
+            override fun onResults(results: android.os.Bundle?) {
+                if (!handsFreeActive) return
+                handsFreeErrors = 0
+                val text = results
+                    ?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                    .orEmpty()
+                if (text.isNotBlank()) onFinal(text)
+                // Restart for the next utterance; a short delay avoids the
+                // ERROR_CLIENT that some services raise on instant restarts.
+                handsFreeHandler.postDelayed(restart, 300)
+            }
+            override fun onError(error: Int) {
+                if (!handsFreeActive) return
+                if (error == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                    handsFreeActive = false
+                    onError("Microphone permission denied")
+                    return
+                }
+                // Silence, busy, client and network failures are all normal
+                // between utterances on some devices — restart, but give up
+                // after repeated failures so a dead service cannot spin.
+                handsFreeErrors++
+                if (handsFreeErrors > HANDS_FREE_MAX_ERRORS) {
+                    handsFreeActive = false
+                    onError(
+                        when (error) {
+                            android.speech.SpeechRecognizer.ERROR_NETWORK -> "Network error"
+                            android.speech.SpeechRecognizer.ERROR_AUDIO -> "Microphone error"
+                            else -> "Voice error ($error)"
+                        }
+                    )
+                } else {
+                    handsFreeHandler.postDelayed(restart, 400)
+                }
+            }
+        })
+        recognizer.startListening(intent)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        handsFreeActive = false
         onError("Voice error: ${e.message}")
     }
 }
