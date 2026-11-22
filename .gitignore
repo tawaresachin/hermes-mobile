@@ -27,3 +27,17 @@ hermes-bridge-registry/
 
 # OS
 .DS_Store
+
+# Local Craft Anything / QA harness artifacts (not part of the app)
+craft.json
+feed.json
+inbox/
+capture/
+craft-anything-repo/
+investigation.cany/
+usage.json
+dsh-subagent-opencode/
+qa_evidence/
+qa_evidence_*/
+craft_anything_qa_audit_report.md
+craft_anything_remediation_verification.md
