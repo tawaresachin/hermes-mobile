@@ -1,28 +1,29 @@
 package com.hermes.mobile.ui.screens.settings
 
 import android.net.Uri
-import java.net.URI
 import java.util.Locale
-import androidx.compose.foundation.*
-import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.ServerConfig
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.network.FetchResult
-import com.hermes.mobile.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import javax.inject.Inject
 
 /** Server-side Hermes update state (Settings → Server → Update card). */
@@ -39,6 +40,101 @@ data class UpdatePanelState(
     val installedVersion: String = "",
 )
 
+// Immutable view models: JSON is parsed off Main and never held in UiState
+// (ME-9 / PE-3). JSONObject has unstable identity and repainted every row.
+@Immutable
+data class CapabilityItem(
+    val name: String,
+    val description: String,
+    val detail: String,
+    val enabled: Boolean? = null,
+    val category: String = "",
+    val essential: Boolean = false,
+)
+
+enum class CapabilitySectionStatus { IDLE, LOADED, FAILED }
+
+@Immutable
+data class CapabilitySectionState(
+    val status: CapabilitySectionStatus = CapabilitySectionStatus.IDLE,
+    val items: List<CapabilityItem> = emptyList(),
+    val error: String? = null,
+)
+
+@Immutable
+data class CapabilitiesState(
+    val serverKey: String = "",
+    val loading: Boolean = false,
+    val plugins: CapabilitySectionState = CapabilitySectionState(),
+    val mcpServers: CapabilitySectionState = CapabilitySectionState(),
+    val projects: CapabilitySectionState = CapabilitySectionState(),
+    val skills: CapabilitySectionState = CapabilitySectionState(),
+) {
+    /** True only when every section answered successfully (empty is fine). */
+    val loaded: Boolean
+        get() = plugins.status == CapabilitySectionStatus.LOADED &&
+            mcpServers.status == CapabilitySectionStatus.LOADED &&
+            projects.status == CapabilitySectionStatus.LOADED &&
+            skills.status == CapabilitySectionStatus.LOADED
+}
+
+@Immutable
+data class AgentProfile(
+    val name: String,
+    val displayName: String,
+    val description: String,
+    val model: String,
+    val provider: String,
+    val skillCount: Int,
+    val hasEnv: Boolean,
+    val isDefault: Boolean,
+)
+
+/** Pure mappers — no Android, no coroutines; unit-tested directly. */
+internal fun parseCapabilityItems(body: JSONObject?, key: String): List<CapabilityItem> {
+    val arr = body?.takeIf { it.optBoolean("ok", false) }?.optJSONArray(key) ?: return emptyList()
+    return (0 until arr.length()).mapNotNull { i ->
+        val item = arr.optJSONObject(i) ?: return@mapNotNull null
+        val name = item.optString("name").ifBlank { return@mapNotNull null }
+        CapabilityItem(
+            name = name,
+            description = item.optString("description").ifBlank { item.optString("command") },
+            detail = item.optString("version")
+                .ifBlank { item.optString("transport") }
+                .ifBlank { item.optString("path") },
+            enabled = if (item.has("enabled")) item.optBoolean("enabled") else null,
+            category = item.optString("category"),
+            essential = item.optBoolean("essential", false),
+        )
+    }
+}
+
+private fun toAgentProfile(p: JSONObject): AgentProfile? {
+    val name = p.optString("name").ifBlank { return null }
+    return AgentProfile(
+        name = name,
+        displayName = p.optString("display_name").ifBlank { name },
+        description = p.optString("description"),
+        model = p.optString("model"),
+        provider = p.optString("provider"),
+        skillCount = p.optInt("skill_count"),
+        hasEnv = p.optBoolean("has_env"),
+        isDefault = p.optBoolean("is_default"),
+    )
+}
+
+internal fun parseAgentProfiles(body: JSONObject?): List<AgentProfile> {
+    val arr = body?.takeIf { it.optBoolean("ok", false) }?.optJSONArray("profiles")
+        ?: return emptyList()
+    return (0 until arr.length()).mapNotNull { i ->
+        arr.optJSONObject(i)?.let(::toAgentProfile)
+    }
+}
+
+internal fun parseActiveAgentProfile(body: JSONObject?): AgentProfile? {
+    val p = body?.takeIf { it.optBoolean("ok", false) }?.optJSONObject("profile") ?: return null
+    return toAgentProfile(p)
+}
 
 data class SettingsUiState(
     val baseUrl: String = "http://localhost:8642",
@@ -90,6 +186,13 @@ data class SettingsUiState(
     // app into the user's account
     // Bridge API key (from hermes://connect payload) — persisted for refresh
     val apiKey: String = "",
+    // Server-scoped cards: typed, immutable, cleared on logout/re-pairing (MM-2)
+    val profiles: List<AgentProfile> = emptyList(),
+    val profilesLoading: Boolean = false,
+    val profilesLoaded: Boolean = false,
+    val profilesError: String? = null,
+    val activeProfile: AgentProfile? = null,
+    val capabilities: CapabilitiesState = CapabilitiesState(),
 )
 
 @HiltViewModel
@@ -105,6 +208,43 @@ class SettingsViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
+
+    // Single-flight + generation guards: a stale response from a previous
+    // expand/reload/server must never overwrite the current one (ME-8).
+    private var capabilitiesJob: Job? = null
+    private var capabilitiesGeneration = 0
+    private var profilesJob: Job? = null
+    private var profilesGeneration = 0
+
+    /** Forget everything that belongs to the previous server (MM-2). */
+    private fun clearServerScopedState() {
+        capabilitiesGeneration++
+        capabilitiesJob?.cancel()
+        capabilitiesJob = null
+        profilesGeneration++
+        profilesJob?.cancel()
+        profilesJob = null
+        _uiState.update {
+            it.copy(
+                profiles = emptyList(),
+                activeProfile = null,
+                profilesLoading = false,
+                profilesLoaded = false,
+                profilesError = null,
+                capabilities = CapabilitiesState(),
+                jobs = emptyList(),
+                skills = emptyList(),
+                disabledSkills = emptySet(),
+                serverListsLoading = false,
+                serverListsLoaded = false,
+                serverListsError = null,
+                providers = emptyList(),
+                providersLoading = false,
+                providersLoaded = false,
+                providersError = null,
+            )
+        }
+    }
 
     // Diag-log upload result: null = idle, else status text ("Uploading…",
     // "Uploaded ✓", or failure). The share sheet opens after the attempt
@@ -245,6 +385,7 @@ class SettingsViewModel @Inject constructor(
     /** Log out = forget the pairing (URL + API key + tokens). */
     fun logout() {
         repository.clearSavedConnection()
+        clearServerScopedState()
         _uiState.update {
             it.copy(baseUrl = "", apiKey = "", setupToken = "",
                     isLoggedIn = false, connectionStatus = com.hermes.mobile.data.model.ConnectionStatus.DISCONNECTED)
@@ -381,6 +522,27 @@ class SettingsViewModel @Inject constructor(
                 val disabled = st.disabledSkills.toMutableSet()
                 if (enabled) disabled.remove(name) else disabled.add(name)
                 st.copy(disabledSkills = disabled)
+            }
+        }
+    }
+
+    /** Toggle a skill from the Capabilities inspector. Replaces one immutable
+     *  row — no JSONObject copy/round-trip on Main (ME-9). */
+    fun toggleCapabilitySkill(name: String, enabled: Boolean) {
+        viewModelScope.launch {
+            val ok = repository.toggleSkill(name, enabled)
+            if (!ok) return@launch
+            _uiState.update { st ->
+                val skills = st.capabilities.skills
+                st.copy(
+                    capabilities = st.capabilities.copy(
+                        skills = skills.copy(
+                            items = skills.items.map {
+                                if (it.name == name) it.copy(enabled = enabled) else it
+                            }
+                        )
+                    )
+                )
             }
         }
     }
@@ -568,6 +730,272 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(providersError = msg) }
     }
 
+    // ─── Agent Profiles (Settings card) ───
+
+    fun profilesErrorNow(msg: String) { _uiState.update { it.copy(profilesError = msg) } }
+
+    /** Cancel an in-flight profile load when the card collapses (ME-8). */
+    fun cancelProfilesLoad() {
+        profilesGeneration++
+        profilesJob?.cancel()
+        profilesJob = null
+        _uiState.update { it.copy(profilesLoading = false) }
+    }
+
+    /** Single-flight load: list + active in one background coroutine, parsed
+     *  into immutable models off Main (ME-8 / ME-9). */
+    fun loadAgentProfiles() {
+        profilesJob?.cancel()
+        val generation = ++profilesGeneration
+        profilesJob = viewModelScope.launch(Dispatchers.Default) {
+            _uiState.update { it.copy(profilesLoading = true, profilesError = null) }
+            val res = try { repository.listAgentProfiles() }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { FetchResult<JSONObject>(null, 0) }
+            currentCoroutineContext().ensureActive()
+            val active = try { repository.getActiveAgentProfile() }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            currentCoroutineContext().ensureActive()
+            if (generation != profilesGeneration) return@launch
+            val o = res.body
+            val ok = o?.optBoolean("ok", false) == true
+            _uiState.update {
+                if (!ok) it.copy(
+                    profilesLoading = false,
+                    profilesError = o?.optString("error")?.ifBlank { null }
+                        ?: gatewayError(res.status, "/api/mobile/agent-profiles"))
+                else it.copy(
+                    profiles = parseAgentProfiles(o),
+                    activeProfile = parseActiveAgentProfile(active),
+                    profilesLoading = false,
+                    profilesLoaded = true,
+                )
+            }
+        }
+    }
+
+    /** Kept for existing callers; the list load also refreshes the active row. */
+    fun loadActiveAgentProfile() { loadAgentProfiles() }
+
+    /** Create a new agent profile. */
+    fun createAgentProfile(name: String, displayName: String, description: String, model: String?, provider: String?, soul: String?,
+                           onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            val body = org.json.JSONObject()
+                .put("name", name)
+                .put("display_name", displayName)
+                .put("description", description)
+            if (model != null) body.put("model", model)
+            if (provider != null) body.put("provider", provider)
+            if (soul != null) body.put("soul", soul)
+            val res = try { repository.createAgentProfile(body) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { FetchResult<org.json.JSONObject>(null, 0) }
+            val o = res.body
+            val ok = o?.optBoolean("ok", false) == true
+            if (ok) {
+                loadAgentProfiles()
+            }
+            onDone(ok, o?.optString("error")?.ifBlank { null }
+                ?: gatewayError(res.status, "/api/mobile/agent-profiles"))
+        }
+    }
+
+    /** Update an existing agent profile. */
+    fun updateAgentProfile(name: String, displayName: String?, description: String?, model: String?, provider: String?,
+                           onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            val body = org.json.JSONObject()
+            if (displayName != null) body.put("display_name", displayName)
+            if (description != null) body.put("description", description)
+            if (model != null) body.put("model", model)
+            if (provider != null) body.put("provider", provider)
+            val res = try { repository.updateAgentProfile(name, body) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { FetchResult<org.json.JSONObject>(null, 0) }
+            val o = res.body
+            val ok = o?.optBoolean("ok", false) == true
+            if (ok) {
+                loadAgentProfiles()
+            }
+            onDone(ok, o?.optString("error")?.ifBlank { null }
+                ?: gatewayError(res.status, "/api/mobile/agent-profiles/$name"))
+        }
+    }
+
+    /** Delete an agent profile. */
+    fun deleteAgentProfile(name: String, onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            val res = try { repository.deleteAgentProfile(name) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { FetchResult<org.json.JSONObject>(null, 0) }
+            val o = res.body
+            val ok = o?.optBoolean("ok", false) == true
+            if (ok) {
+                loadAgentProfiles()
+            }
+            onDone(ok, o?.optString("error")?.ifBlank { null }
+                ?: gatewayError(res.status, "/api/mobile/agent-profiles/$name"))
+        }
+    }
+
+    /** Set the active agent profile. */
+    fun setActiveAgentProfile(name: String, onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            val body = org.json.JSONObject().put("name", name)
+            val res = try { repository.setActiveAgentProfile(body) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { FetchResult<org.json.JSONObject>(null, 0) }
+            val o = res.body
+            val ok = o?.optBoolean("ok", false) == true
+            if (ok) loadAgentProfiles()
+            onDone(ok, o?.optString("error")?.ifBlank { null }
+                ?: gatewayError(res.status, "/api/mobile/agent-profiles/active"))
+        }
+    }
+
+    /** Read SOUL.md for a profile. A failure is reported separately so an
+     *  unreadable file is never shown as an empty document (ME-13). */
+    fun loadAgentProfileSoul(name: String, onDone: (content: String?, error: String?) -> Unit) {
+        viewModelScope.launch {
+            val o = try { repository.getAgentProfileSoul(name) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            if (o != null && o.optBoolean("ok", false)) {
+                onDone(o.optString("content", ""), null)
+            } else {
+                onDone(null, o?.optString("error")?.ifBlank { null }
+                    ?: "Could not read SOUL.md for this profile.")
+            }
+        }
+    }
+
+    /** Write SOUL.md for a profile. */
+    fun saveAgentProfileSoul(name: String, content: String, onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            val body = org.json.JSONObject().put("content", content)
+            val res = try { repository.putAgentProfileSoul(name, body) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { FetchResult<org.json.JSONObject>(null, 0) }
+            val o = res.body
+            val ok = o?.optBoolean("ok", false) == true
+            onDone(ok, o?.optString("error")?.ifBlank { null }
+                ?: gatewayError(res.status, "/api/mobile/agent-profiles/$name/soul"))
+        }
+    }
+
+    private data class CapabilityFetch(
+        val items: List<CapabilityItem>,
+        val ok: Boolean,
+        val status: Int,
+        val error: String?,
+    )
+
+    /** Cancel an in-flight capabilities load when the card collapses (ME-8). */
+    fun cancelCapabilitiesLoad() {
+        capabilitiesGeneration++
+        capabilitiesJob?.cancel()
+        capabilitiesJob = null
+        _uiState.update { it.copy(capabilities = it.capabilities.copy(loading = false)) }
+    }
+
+    private suspend fun fetchCapabilitySection(
+        route: String,
+        arrayKey: String,
+        fetch: suspend () -> FetchResult<JSONObject>,
+    ): CapabilityFetch {
+        val res = try { fetch() }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { FetchResult<JSONObject>(null, 0) }
+        currentCoroutineContext().ensureActive()
+        val body = res.body
+        val ok = body?.optBoolean("ok", false) == true
+        return CapabilityFetch(
+            items = if (ok) parseCapabilityItems(body, arrayKey) else emptyList(),
+            ok = ok,
+            status = res.status,
+            error = body?.optString("error")?.ifBlank { null },
+        )
+    }
+
+    /** Failure is a first-class section state, never an empty successful list. */
+    private fun capabilityState(
+        fetch: CapabilityFetch,
+        route: String,
+        anyOtherLoaded: Boolean,
+    ): CapabilitySectionState = if (fetch.ok) {
+        CapabilitySectionState(CapabilitySectionStatus.LOADED, fetch.items)
+    } else {
+        CapabilitySectionState(
+            status = CapabilitySectionStatus.FAILED,
+            error = fetch.error ?: gatewayError(fetch.status, route, anyOtherLoaded),
+        )
+    }
+
+    private fun sectionFromAll(body: JSONObject, key: String, route: String): CapabilitySectionState =
+        if (body.optJSONArray(key) != null) {
+            CapabilitySectionState(CapabilitySectionStatus.LOADED, parseCapabilityItems(body, key))
+        } else {
+            CapabilitySectionState(
+                status = CapabilitySectionStatus.FAILED,
+                error = gatewayError(200, route, true),
+            )
+        }
+
+    /** One fast `/capabilities/all` call; per-section calls run in parallel only
+     *  as fallback so HTTP status can still be reported (ME-6 / ME-7). Parsing
+     *  and mapping happen off Main; stale loads are dropped by generation (ME-8). */
+    fun loadCapabilities() {
+        capabilitiesJob?.cancel()
+        val generation = ++capabilitiesGeneration
+        capabilitiesJob = viewModelScope.launch(Dispatchers.Default) {
+            val key = repository.getSavedConfig()?.baseUrl.orEmpty()
+            _uiState.update { it.copy(capabilities = CapabilitiesState(serverKey = key, loading = true)) }
+
+            val all = try { repository.getJson("/api/mobile/capabilities/all") }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+            currentCoroutineContext().ensureActive()
+
+            val routes = listOf(
+                "/api/mobile/capabilities/plugins",
+                "/api/mobile/capabilities/mcp-servers",
+                "/api/mobile/capabilities/projects",
+                "/api/mobile/capabilities/skills",
+            )
+            val keys = listOf("plugins", "mcp_servers", "projects", "skills")
+
+            val next = if (all?.optBoolean("ok", false) == true) {
+                CapabilitiesState(
+                    serverKey = key,
+                    plugins = sectionFromAll(all, keys[0], routes[0]),
+                    mcpServers = sectionFromAll(all, keys[1], routes[1]),
+                    projects = sectionFromAll(all, keys[2], routes[2]),
+                    skills = sectionFromAll(all, keys[3], routes[3]),
+                )
+            } else {
+                val results = listOf(
+                    async { fetchCapabilitySection(routes[0], keys[0]) { repository.listCapabilitiesPlugins() } },
+                    async { fetchCapabilitySection(routes[1], keys[1]) { repository.listCapabilitiesMcpServers() } },
+                    async { fetchCapabilitySection(routes[2], keys[2]) { repository.listCapabilitiesProjects() } },
+                    async { fetchCapabilitySection(routes[3], keys[3]) { repository.listCapabilitiesSkills() } },
+                ).awaitAll()
+                currentCoroutineContext().ensureActive()
+                val anyLoaded = results.count { it.ok }
+                CapabilitiesState(
+                    serverKey = key,
+                    plugins = capabilityState(results[0], routes[0], anyLoaded > 0),
+                    mcpServers = capabilityState(results[1], routes[1], anyLoaded > 0),
+                    projects = capabilityState(results[2], routes[2], anyLoaded > 0),
+                    skills = capabilityState(results[3], routes[3], anyLoaded > 0),
+                )
+            }
+            if (generation != capabilitiesGeneration || !isActive) return@launch
+            _uiState.update { it.copy(capabilities = next.copy(loading = false)) }
+        }
+    }
+
     fun runJobNow(jobId: String) {
         viewModelScope.launch { repository.jobAction(jobId, "run"); loadServerLists() }
     }
@@ -593,6 +1021,21 @@ class SettingsViewModel @Inject constructor(
         val newValue = !_uiState.value.isDarkTheme
         _uiState.update { it.copy(isDarkTheme = newValue) }
         repository.saveDarkTheme(newValue)
+    }
+
+    /** Silent health check when Settings opens: keep the header honest without
+     * waiting for the user to press Test (ME-1), mirroring Home's check. */
+    fun checkSavedConnection() {
+        viewModelScope.launch {
+            val saved = repository.getSavedConfig()
+            if (saved == null || saved.baseUrl.isBlank()) {
+                _uiState.update { it.copy(connectionStatus = ConnectionStatus.DISCONNECTED) }
+                return@launch
+            }
+            _uiState.update { it.copy(connectionStatus = ConnectionStatus.CONNECTING) }
+            val status = repository.checkConnection(saved)
+            _uiState.update { it.copy(connectionStatus = status) }
+        }
     }
 
     fun testConnection() {
@@ -638,6 +1081,11 @@ class SettingsViewModel @Inject constructor(
                 // Only persist the URL once the connection actually works.
                 // API key IS the credential — nothing else to sign in to.
                 if (connected) {
+                    // A new server means the cached profiles/capabilities belong
+                    // to another machine (MM-2).
+                    if (repository.getSavedConfig()?.baseUrl != normalizedUrl) {
+                        clearServerScopedState()
+                    }
                     repository.saveConfig(
                         ServerConfig(
                             baseUrl = normalizedUrl,

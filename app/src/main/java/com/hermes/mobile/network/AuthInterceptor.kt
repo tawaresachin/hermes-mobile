@@ -4,6 +4,7 @@ import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import okhttp3.Interceptor
 import okhttp3.Response
+import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -68,6 +69,14 @@ class AuthInterceptor @Inject constructor(
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
+        // Pairing validates the host, but a config can reach prefs by other
+        // paths. Enforce the same private-host rule at the HTTP choke point so
+        // a bearer token or SOUL body never rides cleartext to a public host.
+        if (originalRequest.url.scheme.equals("http", ignoreCase = true) &&
+            !ServerHostGuard.isTrustedHttpHost(originalRequest.url.host)
+        ) {
+            throw IOException("Cleartext gateway traffic is limited to private hosts")
+        }
         val apiKey = readApiKey()
         // baseHost == null means we are not configured yet (no key either);
         // keep the historical behaviour there rather than silently dropping auth.

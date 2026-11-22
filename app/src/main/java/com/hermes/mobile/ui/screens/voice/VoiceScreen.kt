@@ -57,6 +57,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.hermes.mobile.ui.components.AutoPlayAudio
 import com.hermes.mobile.ui.components.ModelPickerSheet
+import com.hermes.mobile.ui.components.ModelPickerSheetWithContext
 import com.hermes.mobile.ui.screens.chat.ApprovalCard
 import com.hermes.mobile.ui.theme.HermesPrimary
 import com.hermes.mobile.ui.theme.VoiceCoreWhite
@@ -348,16 +349,17 @@ fun VoiceScreen() {
     }
 
     if (showModelPicker) {
-        ModelPickerSheet(
-                            availableModels = availableModels,
-                            currentModel = currentModel,
-                            modelsLoading = modelsLoading,
-                            onSelect = { modelId, providerSlug, global ->
-                                vm.switchModel(modelId, providerSlug, global)
-                                showModelPicker = false
-                            },
-                            onDismiss = { showModelPicker = false }
-                        )
+        ModelPickerSheetWithContext(
+            context = context,
+            availableModels = availableModels,
+            currentModel = currentModel,
+            modelsLoading = modelsLoading,
+            onSelect = { modelId, providerSlug, global ->
+                vm.switchModel(modelId, providerSlug, global)
+                showModelPicker = false
+            },
+            onDismiss = { showModelPicker = false }
+        )
     }
 
     if (showSessionSheet) {

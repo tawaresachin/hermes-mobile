@@ -1,4 +1,8 @@
 -dontwarn com.google.errorprone.annotations.**
+# errorprone annotations reference javax.lang.model (not on Android's boot
+# classpath); this surfaces in the androidTest R8 pass, which uses these rules
+# via testProguardFiles.
+-dontwarn javax.lang.model.element.Modifier
 -keep class com.google.errorprone.annotations.** { *; }
 -keep class com.google.crypto.tink.** { *; }
 -dontwarn com.google.crypto.tink.**

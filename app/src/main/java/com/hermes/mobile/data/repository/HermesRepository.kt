@@ -539,6 +539,23 @@ class HermesRepository @Inject constructor(
     /** Provider set changed -> the cached model inventory is stale. */
     fun invalidateModelCache() = apiService.invalidateModelCache()
 
+    // ─── Agent profiles (server-side bot profiles with SOUL.md) ───
+    suspend fun listAgentProfiles() = apiService.listAgentProfiles()
+    suspend fun createAgentProfile(body: org.json.JSONObject) = apiService.createAgentProfile(body)
+    suspend fun getAgentProfile(name: String) = apiService.getAgentProfile(name)
+    suspend fun updateAgentProfile(name: String, body: org.json.JSONObject) = apiService.updateAgentProfile(name, body)
+    suspend fun deleteAgentProfile(name: String) = apiService.deleteAgentProfile(name)
+    suspend fun getActiveAgentProfile() = apiService.getActiveAgentProfile()
+    suspend fun setActiveAgentProfile(body: org.json.JSONObject) = apiService.setActiveAgentProfile(body)
+    suspend fun getAgentProfileSoul(name: String) = apiService.getAgentProfileSoul(name)
+    suspend fun putAgentProfileSoul(name: String, body: org.json.JSONObject) = apiService.putAgentProfileSoul(name, body)
+
+    // ─── Capabilities Inspection (server-side per-agent capabilities) ───
+    suspend fun listCapabilitiesPlugins() = apiService.listCapabilitiesPlugins()
+    suspend fun listCapabilitiesMcpServers() = apiService.listCapabilitiesMcpServers()
+    suspend fun listCapabilitiesProjects() = apiService.listCapabilitiesProjects()
+    suspend fun listCapabilitiesSkills() = apiService.listCapabilitiesSkills()
+
     /** Expand a skill slash command via the server (Telegram-parity
      * injection); null = not a skill command. */
     suspend fun resolveSkillCommand(command: String, args: String): String? =

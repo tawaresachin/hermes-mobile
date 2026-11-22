@@ -36,6 +36,9 @@ import kotlin.coroutines.resumeWithException
  * guessing "plugin too old?". */
 data class FetchResult<T>(val body: T?, val status: Int)
 
+/** Explicit JSON write verbs; `else -> POST` silently turned typos into writes. */
+enum class JsonMethod { POST, PATCH, PUT, DELETE }
+
 @Singleton
 class HermesApiService @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -220,6 +223,9 @@ class HermesApiService @Inject constructor(
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(300, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            // Bound the whole call as well: four independent requests without
+            // a ceiling could previously spin for ~22 minutes on a hung route.
+            .callTimeout(360, TimeUnit.SECONDS)
             .addInterceptor(authInterceptor)
             .build()
     }
@@ -1190,52 +1196,61 @@ class HermesApiService @Inject constructor(
      * null when unknown/offline — the UI hides the meter instead of guessing. */
     /** GET $path as JSON (Bearer auth). Null on any failure. Used by slash
      * commands (/skills, /version) that need server truth. */
-    suspend fun getJson(path: String): JSONObject? {
+    suspend fun getJson(path: String): JSONObject? = withContext(Dispatchers.IO) {
+        // Config resolution decrypts prefs; keep it off Main with the call.
         val cfg = config ?: getConfig()
-        val base = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: return null
+        val base = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: return@withContext null
         val key = cfg.apiKey?.takeIf { it.isNotBlank() } ?: ""
-        return withContext(Dispatchers.IO) {
-            try {
-                val builder = Request.Builder().url(base.trimEnd('/') + path).get()
-                if (key.isNotBlank()) builder.header("Authorization", "Bearer $key")
-                client.newCall(builder.build()).execute().use { resp ->
-                    if (!resp.isSuccessful) return@use null
-                    JSONObject(resp.body?.string() ?: return@use null)
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) { null }
-        }
+        try {
+            val builder = Request.Builder().url(base.trimEnd('/') + path).get()
+            if (key.isNotBlank()) builder.header("Authorization", "Bearer $key")
+            client.newCall(builder.build()).execute().use { resp ->
+                if (!resp.isSuccessful) return@use null
+                JSONObject(resp.body?.string() ?: return@use null)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) { null }
     }
 
     /** POST $path with a JSON body (Bearer auth). Null on any failure;
      * HTTP errors surface the parsed body when it is JSON (the plugin's
      * provider routes return {ok:false,error} on 400/404/500). */
-    suspend fun postJson(path: String, body: JSONObject, method: String = "POST"): JSONObject? {
-        val cfg = config ?: getConfig()
-        val base = cfg?.baseUrl?.takeIf { it.isNotBlank() } ?: return null
-        val key = cfg.apiKey?.takeIf { it.isNotBlank() } ?: ""
-        return withContext(Dispatchers.IO) {
+    suspend fun postJson(path: String, body: JSONObject? = null, method: JsonMethod = JsonMethod.POST): JSONObject? =
+        postJsonResult(path, body, method).body
+
+    /** Like [postJson] but keeps the HTTP status so callers can map 4xx/5xx to
+     * an actionable message (gatewayError) instead of "Could not reach server".
+     * Config resolution runs inside IO alongside the network call (ME-5). */
+    suspend fun postJsonResult(path: String, body: JSONObject? = null, method: JsonMethod = JsonMethod.POST): FetchResult<JSONObject> =
+        withContext(Dispatchers.IO) {
+            val cfg = config ?: getConfig()
+            val base = cfg?.baseUrl?.takeIf { it.isNotBlank() }
+                ?: return@withContext FetchResult(null, 0)
+            val key = cfg.apiKey?.takeIf { it.isNotBlank() } ?: ""
             try {
                 val rb = Request.Builder().url(base.trimEnd('/') + path)
                     .header("Content-Type", "application/json")
                 if (key.isNotBlank()) rb.header("Authorization", "Bearer $key")
+                val reqBody = body?.toString()?.toRequestBody(jsonMediaType)
                 when (method) {
-                    "DELETE" -> rb.delete(if (body.length() > 0) body.toString().toRequestBody(null) else null)
-                    else -> rb.post(body.toString().toRequestBody(null))
+                    // DELETE is genuinely body-less; sending `{}` made some
+                    // proxies reject the request before it reached the plugin.
+                    JsonMethod.DELETE -> if (reqBody == null) rb.delete() else rb.delete(reqBody)
+                    JsonMethod.PATCH -> rb.patch(reqBody ?: "{}".toRequestBody(jsonMediaType))
+                    JsonMethod.PUT -> rb.put(reqBody ?: "{}".toRequestBody(jsonMediaType))
+                    JsonMethod.POST -> rb.post(reqBody ?: "{}".toRequestBody(jsonMediaType))
                 }
                 client.newCall(rb.build()).execute().use { resp ->
-                    val txt = resp.body?.string() ?: return@use null
-                    val json = runCatching { JSONObject(txt) }.getOrNull() ?: return@use null
-                    // 4xx/5xx with a structured error body still parse; the
-                    // caller checks ok. Only a non-JSON body counts as failure.
-                    json
+                    // Parse the body even on 4xx/5xx — plugin routes return
+                    // {ok:false,error} there and the status explains the rest.
+                    val json = resp.body?.string()?.let { runCatching { JSONObject(it) }.getOrNull() }
+                    FetchResult(json, resp.code)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
-            } catch (_: Exception) { null }
+            } catch (_: Exception) { FetchResult(null, 0) }
         }
-    }
 
     // ─── Model providers (plugin /api/mobile/providers/*) ───
     // CRUD for OpenAI-compatible custom endpoints on the SERVER (desktop
@@ -1265,12 +1280,154 @@ class HermesApiService @Inject constructor(
         postJson("/api/mobile/providers", body)
     suspend fun providersDelete(id: String): JSONObject? =
         postJson("/api/mobile/providers/" + java.net.URLEncoder.encode(id, "UTF-8")
-            .replace("+", "%20"), JSONObject(), "DELETE")
+            .replace("+", "%20"), method = JsonMethod.DELETE)
     suspend fun providersActivate(id: String): JSONObject? =
         postJson("/api/mobile/providers/" + java.net.URLEncoder.encode(id, "UTF-8")
             .replace("+", "%20") + "/activate", JSONObject())
     suspend fun providersValidate(body: JSONObject): JSONObject? =
         postJson("/api/mobile/providers/validate", body)
+
+    // ─── Agent Profiles (plugin /api/mobile/agent-profiles/*) ───
+    // CRUD for agent bot profiles with SOUL.md persistence
+
+    /** GET /api/mobile/agent-profiles — List all configured agent profiles. */
+    suspend fun listAgentProfiles(): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+        val cfg = config ?: getConfig()
+        val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext FetchResult(null, 0)
+        try {
+            val builder = Request.Builder().url("$baseUrl/api/mobile/agent-profiles").get()
+            cfg.apiKey?.takeIf { it.isNotBlank() }
+                ?.let { builder.header("Authorization", "Bearer $it") }
+            client.newCall(builder.build())
+                .execute().use { r ->
+                    FetchResult(
+                        if (r.isSuccessful) runCatching { JSONObject(r.body?.string() ?: "") }.getOrNull()
+                        else null,
+                        r.code
+                    )
+                }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
+    }
+
+    /** POST /api/mobile/agent-profiles — Create a new agent profile. */
+    suspend fun createAgentProfile(body: JSONObject): FetchResult<JSONObject> =
+        postJsonResult("/api/mobile/agent-profiles", body)
+
+    /** GET /api/mobile/agent-profiles/{name} — Get a specific profile. */
+    suspend fun getAgentProfile(name: String): JSONObject? =
+        getJson("/api/mobile/agent-profiles/" + java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20"))
+
+    /** PATCH /api/mobile/agent-profiles/{name} — Update profile metadata. */
+    suspend fun updateAgentProfile(name: String, body: JSONObject): FetchResult<JSONObject> =
+        postJsonResult("/api/mobile/agent-profiles/" + java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20"), body, method = JsonMethod.PATCH)
+
+    /** DELETE /api/mobile/agent-profiles/{name} — Delete a profile. */
+    suspend fun deleteAgentProfile(name: String): FetchResult<JSONObject> =
+        postJsonResult("/api/mobile/agent-profiles/" + java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20"), method = JsonMethod.DELETE)
+
+    /** GET /api/mobile/agent-profiles/active — Get the active/current profile. */
+    suspend fun getActiveAgentProfile(): JSONObject? =
+        getJson("/api/mobile/agent-profiles/active")
+
+    /** POST /api/mobile/agent-profiles/active — Set the active profile. */
+    suspend fun setActiveAgentProfile(body: JSONObject): FetchResult<JSONObject> =
+        postJsonResult("/api/mobile/agent-profiles/active", body)
+
+    /** GET /api/mobile/agent-profiles/{name}/soul — Read SOUL.md for a profile. */
+    suspend fun getAgentProfileSoul(name: String): JSONObject? =
+        getJson("/api/mobile/agent-profiles/" + java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20") + "/soul")
+
+    /** PUT /api/mobile/agent-profiles/{name}/soul — Write SOUL.md for a profile. */
+    suspend fun putAgentProfileSoul(name: String, body: JSONObject): FetchResult<JSONObject> =
+        postJsonResult("/api/mobile/agent-profiles/" + java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20") + "/soul", body, method = JsonMethod.PUT)
+
+    // ─── Capabilities Inspection (plugin /api/mobile/capabilities/*) ───
+    // List plugins, MCP servers, projects, skills
+
+    /** GET /api/mobile/capabilities/plugins — List installed plugins. */
+    suspend fun listCapabilitiesPlugins(): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+        val cfg = config ?: getConfig()
+        val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext FetchResult(null, 0)
+        try {
+            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/plugins").get()
+            cfg.apiKey?.takeIf { it.isNotBlank() }
+                ?.let { builder.header("Authorization", "Bearer $it") }
+            client.newCall(builder.build())
+                .execute().use { r ->
+                    FetchResult(
+                        if (r.isSuccessful) runCatching { JSONObject(r.body?.string() ?: "") }.getOrNull()
+                        else null,
+                        r.code
+                    )
+                }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
+    }
+
+    /** GET /api/mobile/capabilities/mcp-servers — List MCP servers. */
+    suspend fun listCapabilitiesMcpServers(): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+        val cfg = config ?: getConfig()
+        val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext FetchResult(null, 0)
+        try {
+            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/mcp-servers").get()
+            cfg.apiKey?.takeIf { it.isNotBlank() }
+                ?.let { builder.header("Authorization", "Bearer $it") }
+            client.newCall(builder.build())
+                .execute().use { r ->
+                    FetchResult(
+                        if (r.isSuccessful) runCatching { JSONObject(r.body?.string() ?: "") }.getOrNull()
+                        else null,
+                        r.code
+                    )
+                }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
+    }
+
+    /** GET /api/mobile/capabilities/projects — List projects. */
+    suspend fun listCapabilitiesProjects(): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+        val cfg = config ?: getConfig()
+        val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext FetchResult(null, 0)
+        try {
+            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/projects").get()
+            cfg.apiKey?.takeIf { it.isNotBlank() }
+                ?.let { builder.header("Authorization", "Bearer $it") }
+            client.newCall(builder.build())
+                .execute().use { r ->
+                    FetchResult(
+                        if (r.isSuccessful) runCatching { JSONObject(r.body?.string() ?: "") }.getOrNull()
+                        else null,
+                        r.code
+                    )
+                }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
+    }
+
+    /** GET /api/mobile/capabilities/skills — List skills with enabled state. */
+    suspend fun listCapabilitiesSkills(): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+        val cfg = config ?: getConfig()
+        val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext FetchResult(null, 0)
+        try {
+            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/skills").get()
+            cfg.apiKey?.takeIf { it.isNotBlank() }
+                ?.let { builder.header("Authorization", "Bearer $it") }
+            client.newCall(builder.build())
+                .execute().use { r ->
+                    FetchResult(
+                        if (r.isSuccessful) runCatching { JSONObject(r.body?.string() ?: "") }.getOrNull()
+                        else null,
+                        r.code
+                    )
+                }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { FetchResult(null, 0) }
+    }
+
+    /** GET /api/mobile/capabilities/all — Get all capabilities in one call. */
+    suspend fun getAllCapabilities(): JSONObject? =
+        getJson("/api/mobile/capabilities/all")
 
     /** Live server-side context fill for a session (active-row token sum;
      * accurate even after a compression rotation while the app was away).

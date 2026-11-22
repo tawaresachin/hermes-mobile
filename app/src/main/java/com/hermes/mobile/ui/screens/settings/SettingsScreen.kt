@@ -29,7 +29,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ConnectionStatus
@@ -38,7 +37,6 @@ import com.hermes.mobile.ui.theme.*
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -56,7 +54,10 @@ fun SettingsScreen(
 
     // Load the host computer's keep-awake state on screen open (idempotent,
     // silent when not connected yet).
-    LaunchedEffect(Unit) { viewModel.loadSystemStatus() }
+    LaunchedEffect(Unit) {
+        viewModel.loadSystemStatus()
+        viewModel.checkSavedConnection()
+    }
 
     /** Private/Tailscale/LAN-only guard for QR-derived server URLs. */
     fun isTrustedBridgeHost(rawUrl: String): Boolean = isTrustedServerHost(rawUrl)
@@ -293,17 +294,26 @@ fun SettingsScreen(
             // ─── 3. ACCOUNT ───
             SettingsSection("Account") {
                 if (uiState.isLoggedIn) {
-                    // Logged-in state — show masked API key
+                    // Paired ≠ reachable: keep this card in step with the
+                    // live header instead of claiming a connection (ME-1).
+                    val (accountColor, accountText) = when (uiState.connectionStatus) {
+                        ConnectionStatus.CONNECTED -> SuccessGreen to "Connected via API Key"
+                        ConnectionStatus.CONNECTING -> WarningAmber to "Checking server…"
+                        ConnectionStatus.ERROR -> ErrorRed to "Paired — connection failed"
+                        ConnectionStatus.DISCONNECTED ->
+                            MaterialTheme.colorScheme.onSurfaceVariant to "Paired — not connected"
+                    }
+                    // Paired state — show masked API key
                     var isApiKeyVisible by remember { mutableStateOf(false) }
                     Column {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = SuccessGreen, modifier = Modifier.size(22.dp))
+                            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = accountColor, modifier = Modifier.size(22.dp))
                             Spacer(modifier = Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Connected via API Key", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                                Text(accountText, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                                 Text(
                                     if (isApiKeyVisible) uiState.apiKey
                                     else uiState.apiKey.takeIf { it.startsWith("hermes-") }
@@ -507,9 +517,21 @@ fun SettingsScreen(
                 ServerListsPanel(viewModel = viewModel, uiState = uiState)
             }
 
-            // ─── 7b. PROVIDERS (server-side model provider CRUD) ───
+            // ─── 7b. CAPABILITIES (server-side plugins, MCP servers, projects, skills) ───
+            SettingsSection("Capabilities") {
+                CapabilitiesCard(viewModel = viewModel, uiState = uiState)
+            }
+
+            // ─── 7c. PROVIDERS (server-side model provider CRUD) ───
             SettingsSection("Providers") {
                 ProvidersCard(viewModel = viewModel, uiState = uiState)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ─── 7d. AGENT PROFILES (server-side bot profiles with SOUL.md) ───
+            SettingsSection("Agent Profiles") {
+                ProfilesCard(viewModel = viewModel, uiState = uiState)
             }
 
             Spacer(modifier = Modifier.height(12.dp))

@@ -37,8 +37,8 @@ android {
         applicationId = "com.hermes.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 123
-        versionName = "0.1.23"
+        versionCode = 124
+        versionName = "0.1.24"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -79,6 +79,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // The androidTest APK is minified with its own rule set; without
+            // this the errorprone annotations pulled in transitively fail R8
+            // with "Missing class javax.lang.model.element.Modifier".
+            testProguardFiles("proguard-rules.pro")
         }
     }
 

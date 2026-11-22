@@ -61,6 +61,7 @@ import com.hermes.mobile.ui.components.AttachSheet
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.components.MessageActionSheet
 import com.hermes.mobile.ui.components.ModelPickerSheet
+import com.hermes.mobile.ui.components.ModelPickerSheetWithContext
 import com.hermes.mobile.ui.components.ReplyBar
 import com.hermes.mobile.R
 import com.hermes.mobile.ui.theme.*
@@ -2250,7 +2251,8 @@ fun ChatScreen(
 
         // ── Model Picker Bottom Sheet ──
         if (showModelPicker) {
-            ModelPickerSheet(
+            ModelPickerSheetWithContext(
+                context = context,
                 availableModels = availableModels,
                 currentModel = currentModel,
                 currentProviderSlug = vm.currentProviderSlug,
