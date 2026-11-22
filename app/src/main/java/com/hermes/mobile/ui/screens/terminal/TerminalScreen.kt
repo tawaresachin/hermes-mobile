@@ -430,6 +430,9 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     var connSource by remember { mutableStateOf("gateway") }
     var showAdvanced by remember { mutableStateOf(false) }
     var gw by remember { mutableStateOf<GatewayPtyClient?>(null) }
+    // Live identity from the gateway's /api/mobile/pty/info, refreshed on
+    // every connect/reconnect. Null until it arrives (or on failure).
+    var gatewayInfo by remember { mutableStateOf<GatewayPtyInfo?>(null) }
 
     // Every byte the keyboard produces goes to whichever PTY owns the
     // screen. Gateway output is already raw; SSH is a text stream.
@@ -457,6 +460,8 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             return
         }
         val (base, key) = creds
+        gatewayInfo = null                      // never flash a previous host
+        scope.launch { gatewayInfo = fetchGatewayPtyInfo(base, key) }
         gw?.close()                            // defensive: no orphan session
         // The WebView reports real cols/rows once laid out; before that
         // (fresh launch) use the device estimate.
@@ -602,13 +607,33 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.Terminal, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(8.dp))
-            Text(
-                buildString {
-                    append(if (connected && gw != null) "Terminal (Gateway)" else "Terminal (SSH/PTY)")
-                    termGeom?.let { append("  ${it.second}\u00d7${it.first}") }
-                },
-                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold
-            )
+            Column {
+                Text(
+                    buildString {
+                        append(if (connected && gw != null) "Terminal (Gateway)" else "Terminal (SSH/PTY)")
+                        termGeom?.let { append("  ${it.second}\u00d7${it.first}") }
+                    },
+                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold
+                )
+                // Only the header proves identity; the shell keeps its own
+                // prompt. Values are fetched live, never authored here.
+                if (connected && gw != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Detected",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            gatewayPtySubtitle(gatewayInfo),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
         }
         Spacer(Modifier.height(12.dp))
         if (!connected) {
