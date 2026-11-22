@@ -477,7 +477,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 // One-time Hermes-styled header (gold/cyan/text from the
                 // active CLI skin). The shell's real prompt follows it.
                 webState.writeText(
-                    "\u001b[38;2;255;191;0m  ◆  Hermes Gateway Shell\u001b[0m\r\n" +
+                    "\u001b[38;2;255;191;0m  >  Hermes Gateway Shell\u001b[0m\r\n" +
                         "\u001b[38;2;255;248;220m  Type \u001b[38;2;17;168;205m" +
                         "hermes\u001b[38;2;255;248;220m to launch the CLI.\u001b[0m\r\n\r\n"
                 )

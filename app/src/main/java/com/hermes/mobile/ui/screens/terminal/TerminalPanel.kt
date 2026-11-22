@@ -6,7 +6,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.view.MotionEvent
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -303,6 +305,20 @@ fun TerminalPanel(
                     state.attach(this)
                     isFocusable = true
                     isFocusableInTouchMode = true
+                    // xterm's textarea.focus() alone does not raise the soft
+                    // keyboard on Android; the IME needs a real view gesture.
+                    setOnTouchListener { v, event ->
+                        if (event.actionMasked == MotionEvent.ACTION_UP) {
+                            v.requestFocus()
+                            // Defer until xterm's touchend has focused its
+                            // textarea, so the IME binds to the right editor.
+                            v.post {
+                                (ctx.getSystemService(Context.INPUT_METHOD_SERVICE)
+                                    as? InputMethodManager)?.showSoftInput(v, 0)
+                            }
+                        }
+                        false
+                    }
                     loadUrl("file:///android_asset/terminal/index.html")
                 }
             },
