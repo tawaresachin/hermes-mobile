@@ -11,12 +11,19 @@
   var SearchCtor = window.SearchAddon && window.SearchAddon.SearchAddon
     ? window.SearchAddon.SearchAddon : window.SearchAddon;
 
+  // Palette taken from the installed Hermes CLI default skin
+  // (~/.hermes/hermes-agent/hermes_cli/skin_engine.py: status_bar_bg #1a1a2e,
+  // banner_text/prompt #FFF8DC, ui_accent #FFBF00, selection_bg #3a3a55) and
+  // the desktop terminal's fixed ANSI table
+  // (apps/desktop/src/app/right-sidebar/terminal/selection.ts). The 16 ANSI
+  // slots are xterm's 256-colour-capable palette; no colour is guessed.
   var term = new TerminalCtor({
-    fontFamily: 'monospace',
-    fontSize: 13,
-    lineHeight: 1.15,
+    fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: 11,
+    lineHeight: 1.2,
     scrollback: 10000,
     cursorBlink: true,
+    cursorStyle: 'block',
     convertEol: false,
     screenReaderMode: false,
     // The search addon highlights matches with decorations, which xterm 6
@@ -24,27 +31,27 @@
     allowProposedApi: true,
     minimumContrastRatio: 4.5,
     theme: {
-      background: '#14161a',
-      foreground: '#d7dae0',
-      cursor: '#d7dae0',
-      cursorAccent: '#14161a',
-      selectionBackground: '#3a4252',
-      black: '#1c1f26',
-      red: '#e06c75',
-      green: '#98c379',
-      yellow: '#e5c07b',
-      blue: '#61afef',
-      magenta: '#c678dd',
-      cyan: '#56b6c2',
-      white: '#d7dae0',
-      brightBlack: '#5c6370',
-      brightRed: '#ef7b85',
-      brightGreen: '#a9d383',
-      brightYellow: '#f0cf8b',
-      brightBlue: '#7cc0f7',
-      brightMagenta: '#d68ce4',
-      brightCyan: '#6cc5d1',
-      brightWhite: '#ffffff'
+      background: '#1a1a2e',
+      foreground: '#FFF8DC',
+      cursor: '#FFBF00',
+      cursorAccent: '#1a1a2e',
+      selectionBackground: '#3a3a55',
+      black: '#000000',
+      red: '#cd3131',
+      green: '#0dbc79',
+      yellow: '#e5e510',
+      blue: '#2472c8',
+      magenta: '#bc3fbc',
+      cyan: '#11a8cd',
+      white: '#e5e5e5',
+      brightBlack: '#666666',
+      brightRed: '#f14c4c',
+      brightGreen: '#23d18b',
+      brightYellow: '#f5f543',
+      brightBlue: '#3b8eea',
+      brightMagenta: '#d670d6',
+      brightCyan: '#29b8db',
+      brightWhite: '#e5e5e5'
     }
   });
 

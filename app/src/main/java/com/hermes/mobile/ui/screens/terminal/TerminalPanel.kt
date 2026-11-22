@@ -288,7 +288,7 @@ fun TerminalPanel(
                     settings.displayZoomControls = false
                     overScrollMode = View.OVER_SCROLL_NEVER
                     isVerticalScrollBarEnabled = false
-                    setBackgroundColor(0xFF14161A.toInt())
+                    setBackgroundColor(0xFF1A1A2E.toInt())
                     addJavascriptInterface(bridge, "HermesBridge")
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(

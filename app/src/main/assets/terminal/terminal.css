@@ -3,7 +3,7 @@ html, body {
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: #14161a;
+  background: #1a1a2e;
   -webkit-text-size-adjust: 100%;
   touch-action: none;
 }
@@ -12,7 +12,7 @@ html, body {
   position: absolute;
   inset: 0;
   box-sizing: border-box;
-  padding: 0;
+  padding: 6px 4px;
 }
 
 #terminal .xterm {

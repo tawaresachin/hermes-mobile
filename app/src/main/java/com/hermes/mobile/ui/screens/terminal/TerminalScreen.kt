@@ -423,10 +423,12 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     // is visible at a glance instead of looking like "missing output".
     var termGeom by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
-    // ── Batch 4: gateway-side PTY bridge ──
-    // connSource: "ssh" (device-side SSH, batches 1-3) or "gateway"
-    // (plugin /api/mobile/pty/ws — a shell ON the gateway host).
-    var connSource by remember { mutableStateOf("ssh") }
+    // ── Gateway-side PTY bridge ──
+    // connSource: "gateway" (plugin /api/mobile/pty/ws — a shell ON the
+    // gateway host, the default one-tap path) or "ssh" (device-side SSH).
+    // SSH is tucked behind an Advanced toggle so the common case is a tap.
+    var connSource by remember { mutableStateOf("gateway") }
+    var showAdvanced by remember { mutableStateOf(false) }
     var gw by remember { mutableStateOf<GatewayPtyClient?>(null) }
 
     // Every byte the keyboard produces goes to whichever PTY owns the
@@ -472,6 +474,13 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 hadSession = true
                 connected = true
                 webState.clear()
+                // One-time Hermes-styled header (gold/cyan/text from the
+                // active CLI skin). The shell's real prompt follows it.
+                webState.writeText(
+                    "\u001b[38;2;255;191;0m  ◆  Hermes Gateway Shell\u001b[0m\r\n" +
+                        "\u001b[38;2;255;248;220m  Type \u001b[38;2;17;168;205m" +
+                        "hermes\u001b[38;2;255;248;220m to launch the CLI.\u001b[0m\r\n\r\n"
+                )
                 webState.focus()
                 error = ""
             }
@@ -608,54 +617,73 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                     .weight(1f, fill = false)
                     .verticalScroll(rememberScrollState())
             ) {
-                // ── Batch 4: connection source — device-side SSH, or the
-                // gateway's own shell over the authenticated API bridge.
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(36.dp)
-                            .clip(MaterialTheme.shapes.small)
-                            .background(
-                                if (connSource == "ssh")
-                                    MaterialTheme.colorScheme.primaryContainer
-                                    else MaterialTheme.colorScheme.surfaceVariant
-                            )
-                            .border(
-                                1.dp,
-                                if (connSource == "ssh")
-                                    MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.outlineVariant
-                            )
-                            .clickable { connSource = "ssh" },
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("SSH", style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(horizontal = 8.dp))
-                    }
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(36.dp)
-                            .clip(MaterialTheme.shapes.small)
-                            .background(
-                                if (connSource == "gateway")
-                                    MaterialTheme.colorScheme.primaryContainer
-                                    else MaterialTheme.colorScheme.surfaceVariant
-                            )
-                            .border(
-                                1.dp,
-                                if (connSource == "gateway")
-                                    MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.outlineVariant
-                            )
-                            .clickable { connSource = "gateway" },
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Gateway", style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(horizontal = 8.dp))
+                // ── Gateway shell is the default, one-tap path. SSH is
+                // advanced: collapsed it forces gateway; expanded reveals
+                // the source switch and the SSH form below. ──
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (showAdvanced) "Hide advanced" else "Advanced (SSH)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable {
+                            showAdvanced = !showAdvanced
+                            if (!showAdvanced) connSource = "gateway"
+                        }
+                    )
+                }
+                if (showAdvanced) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(36.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(
+                                    if (connSource == "ssh")
+                                        MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                                .border(
+                                    1.dp,
+                                    if (connSource == "ssh")
+                                        MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.outlineVariant
+                                )
+                                .clickable { connSource = "ssh" },
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("SSH", style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(horizontal = 8.dp))
+                        }
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(36.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(
+                                    if (connSource == "gateway")
+                                        MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                                .border(
+                                    1.dp,
+                                    if (connSource == "gateway")
+                                        MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.outlineVariant
+                                )
+                                .clickable { connSource = "gateway" },
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Gateway", style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(horizontal = 8.dp))
+                        }
                     }
                 }
                 Spacer(Modifier.height(12.dp))
