@@ -53,17 +53,26 @@ class ModelFavoritesStoreTest {
         val store = ModelFavoritesStore(tp.prefs)
         assertEquals(setOf("agnes-3.0-flash"), store.getFavorites())
 
-        store.syncInventory(
-            listOf(
-                ModelInfo(id = "agnes-3.0-flash", name = "A", provider = "Agnes Paid", providerSlug = "agnes"),
-                ModelInfo(id = "agnes-3.0-flash", name = "A", provider = "FreeLLM", providerSlug = "free"),
-                ModelInfo(id = "other", name = "O", provider = "Other", providerSlug = "other"),
-            )
+        val models = listOf(
+            ModelInfo(id = "agnes-3.0-flash", name = "A", provider = "Agnes Paid", providerSlug = "agnes"),
+            ModelInfo(id = "agnes-3.0-flash", name = "A", provider = "FreeLLM", providerSlug = "free"),
+            ModelInfo(id = "other", name = "O", provider = "Other", providerSlug = "other"),
         )
+        store.syncInventory(models)
 
         assertEquals(setOf("agnes|agnes-3.0-flash", "free|agnes-3.0-flash"), store.getFavorites())
         assertTrue(store.isFavorite("agnes", "agnes-3.0-flash"))
         assertFalse(store.isFavorite("other", "agnes-3.0-flash"))
+
+        // The migration is written through once: no id-only key survives in
+        // persisted storage, and a second sync is a no-op.
+        val persisted = JSONArray(tp.stored!!)
+        assertEquals(2, persisted.length())
+        repeat(persisted.length()) { i ->
+            assertTrue(persisted.getJSONObject(i).getString("k").contains(FavoriteKeys.SEPARATOR))
+        }
+        store.syncInventory(models)
+        assertEquals(setOf("agnes|agnes-3.0-flash", "free|agnes-3.0-flash"), store.getFavorites())
     }
 
     @Test

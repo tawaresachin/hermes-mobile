@@ -74,6 +74,7 @@ class ModelPickerSheetTest {
         // Grouped view: the favourite stays in its provider group AND the
         // Favorites anchor is visible; the row is emitted only once.
         composeRule.onNodeWithText("Favorites").assertExists()
+        composeRule.onNodeWithText("· 1 starred").assertExists()
         composeRule.onNodeWithText("AGNES PAID").assertExists()
         composeRule.onAllNodes(hasText("Agnes 3.0 Flash")).assertCountEquals(1)
 
@@ -84,6 +85,7 @@ class ModelPickerSheetTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithText("Favorites").assertExists()
+        composeRule.onNodeWithText("· 1 starred").assertExists()
         composeRule.onNodeWithText("AGNES PAID").assertExists()
         composeRule.onAllNodes(hasText("Agnes 3.0 Flash")).assertCountEquals(1)
 
@@ -107,6 +109,7 @@ class ModelPickerSheetTest {
 
         // HI-1: no vanishing row, filled star, and a visible anchor.
         composeRule.onNodeWithText("Favorites").assertExists()
+        composeRule.onNodeWithText("· 1 starred").assertExists()
         composeRule.onNodeWithText("AGNES PAID").assertExists()
         composeRule.onNodeWithContentDescription("Unfavorite").assertExists()
         composeRule.onAllNodes(hasText("Agnes 3.0 Flash")).assertCountEquals(1)

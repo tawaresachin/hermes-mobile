@@ -242,8 +242,11 @@ fun ModelPickerSheetWithContext(
                                     color = HermesPrimary
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
+                                // Read as "Favorites · N starred": the anchor
+                                // holds no rows — stars stay in their provider
+                                // group, so the count needs a unit to be clear.
                                 Text(
-                                    text = "${favorites.size}",
+                                    text = "· ${favorites.size} starred",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

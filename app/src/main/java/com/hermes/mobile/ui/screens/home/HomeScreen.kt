@@ -1,5 +1,6 @@
 package com.hermes.mobile.ui.screens.home
 
+import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -123,6 +124,22 @@ import javax.inject.Inject
 
 // ─── Drawer geometry (right-edge feature drawer overlay) ───
 private const val DRAWER_WIDTH_DP = 280
+private const val MENU_ACTION_GUARD_MS = 250L
+
+/** The tap that opens the drawer must not also fire New chat or a drawer
+ *  item: the overlay is composed during that gesture and can be re-hit-
+ *  tested for its release. Actions are ignored for one short window after
+ *  opening. */
+internal class MenuActionGate(
+    private val guardMs: Long = MENU_ACTION_GUARD_MS,
+    private val clock: () -> Long = { SystemClock.uptimeMillis() }
+) {
+    private var blockedUntil = 0L
+
+    fun arm() { blockedUntil = clock() + guardMs }
+    fun ready(): Boolean = clock() >= blockedUntil
+    fun run(action: () -> Unit) { if (ready()) action() }
+}
 
 // ─── UI State ───
 
@@ -306,6 +323,7 @@ fun HomeScreen(
         // remembered across restarts; an item tap or scrim tap
         // auto-collapses it.
         var panelOpen by remember { mutableStateOf(HomeUiStore.panelOpen(context)) }
+        val menuGate = remember { MenuActionGate() }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -321,10 +339,11 @@ fun HomeScreen(
                 onRefresh = { viewModel.refreshConnection() },
                 panelOpen = panelOpen,
                 onTogglePanel = {
+                    if (!panelOpen) menuGate.arm()
                     panelOpen = !panelOpen
                     HomeUiStore.setPanelOpen(context, panelOpen)
                 },
-                onNewChat = { viewModel.createNewSession(onCreated = onNavigateToChat) },
+                onNewChat = { menuGate.run { viewModel.createNewSession(onCreated = onNavigateToChat) } },
                 newChatEnabled = !uiState.isLoading
             )
 
@@ -412,26 +431,15 @@ fun HomeScreen(
                     .width(DRAWER_WIDTH_DP.dp)
                     .offset(x = slideX)
             ) {
+                val closeDrawer = {
+                    panelOpen = false
+                    HomeUiStore.setPanelOpen(context, false)
+                }
                 FeatureDrawerCard(
-                    onDismiss = {
-                        panelOpen = false
-                        HomeUiStore.setPanelOpen(context, false)
-                    },
-                    onVoiceInput = {
-                        panelOpen = false
-                        HomeUiStore.setPanelOpen(context, false)
-                        onNavigateToVoice()
-                    },
-                    onResumeSession = {
-                        panelOpen = false
-                        HomeUiStore.setPanelOpen(context, false)
-                        onNavigateToSessions()
-                    },
-                    onTerminal = {
-                        panelOpen = false
-                        HomeUiStore.setPanelOpen(context, false)
-                        onNavigateToTerminal()
-                    }
+                    onDismiss = { menuGate.run(closeDrawer) },
+                    onVoiceInput = { menuGate.run { closeDrawer(); onNavigateToVoice() } },
+                    onResumeSession = { menuGate.run { closeDrawer(); onNavigateToSessions() } },
+                    onTerminal = { menuGate.run { closeDrawer(); onNavigateToTerminal() } }
                 )
             }
         }
@@ -474,7 +482,7 @@ fun HomeScreen(
 // ─── Compact Home Header (greeting + connection line) ───
 
 @Composable
-private fun HomeHeader(
+internal fun HomeHeader(
     greeting: String,
     emoji: String,
     status: ConnectionStatus,
@@ -593,7 +601,7 @@ private fun HomeHeader(
 // New features = one more FeaturePill row in this Column.
 
 @Composable
-private fun FeatureDrawerCard(
+internal fun FeatureDrawerCard(
     onDismiss: () -> Unit,
     onVoiceInput: () -> Unit,
     onResumeSession: () -> Unit,
