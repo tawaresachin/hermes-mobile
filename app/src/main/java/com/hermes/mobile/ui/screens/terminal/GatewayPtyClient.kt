@@ -2,6 +2,7 @@ package com.hermes.mobile.ui.screens.terminal
 
 import android.os.Handler
 import android.os.Looper
+import java.io.ByteArrayOutputStream
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -35,6 +36,7 @@ class GatewayPtyClient(private val baseUrl: String, private val apiKey: String) 
     private val http = OkHttpClient()
     private val main = Handler(Looper.getMainLooper())
     private var ws: WebSocket? = null
+    private val promptFilter = GatewayPromptFilter()
 
     companion object {
         // One live gateway shell per process, mirroring SshTerminal's
@@ -69,7 +71,8 @@ class GatewayPtyClient(private val baseUrl: String, private val apiKey: String) 
                     val f = JSONObject(text)
                     when (f.optString("t")) {
                         "out" -> post {
-                            cb.onOut(java.util.Base64.getDecoder().decode(f.getString("d")))
+                            val raw = java.util.Base64.getDecoder().decode(f.getString("d"))
+                            cb.onOut(promptFilter.feed(raw))
                         }
                         "exit" -> post { cb.onExit(f.optInt("code", 0)) }
                         "err" -> post { cb.onErr(f.optString("m", "gateway error")) }
@@ -121,5 +124,47 @@ class GatewayPtyClient(private val baseUrl: String, private val apiKey: String) 
         main.post {
             try { block() } catch (_: Exception) { /* screen gone */ }
         }
+    }
+}
+
+/** zsh's PROMPT_SP paints an inverse '%' box before the first prompt on a raw
+ *  PTY. Drop only that exact sequence; all other bytes stay byte-for-byte. */
+internal class GatewayPromptFilter {
+    private val pending = ByteArray(MARKER.size)
+    private var matched = 0
+
+    fun feed(bytes: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream(bytes.size)
+        var i = 0
+        while (i < bytes.size) {
+            val byte = bytes[i]
+            if (matched > 0) {
+                if (MARKER[matched] == byte) {
+                    pending[matched++] = byte
+                    if (matched == MARKER.size) matched = 0
+                    i++
+                    continue
+                }
+                out.write(pending, 0, matched)
+                matched = 0
+                continue // reprocess the mismatching byte
+            }
+            if (byte == MARKER[0]) pending[matched++] = byte
+            else out.write(byte.toInt())
+            i++
+        }
+        return out.toByteArray()
+    }
+
+    internal companion object {
+        val MARKER = byteArrayOf(
+            0x1B, '['.code.toByte(), '1'.code.toByte(), 'm'.code.toByte(),
+            0x1B, '['.code.toByte(), '7'.code.toByte(), 'm'.code.toByte(),
+            '%'.code.toByte(),
+            0x1B, '['.code.toByte(), '2'.code.toByte(), '7'.code.toByte(),
+            'm'.code.toByte(),
+            0x1B, '['.code.toByte(), '1'.code.toByte(), 'm'.code.toByte(),
+            0x1B, '['.code.toByte(), '0'.code.toByte(), 'm'.code.toByte()
+        )
     }
 }
