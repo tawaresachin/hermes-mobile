@@ -26,6 +26,9 @@
     cursorStyle: 'block',
     convertEol: false,
     screenReaderMode: false,
+    // The bundled xterm defaults to its DOM renderer; naming it keeps this
+    // explicit if the bundle is ever swapped for a canvas-default build.
+    rendererType: 'dom',
     // The search addon highlights matches with decorations, which xterm 6
     // still gates behind the proposed API.
     allowProposedApi: true,
@@ -72,6 +75,29 @@
     textarea.spellcheck = false;
   }
 
+  // ── Paint: writes can land before the WebView has started its frame
+  // pump (or while it is off-screen). xterm then updates its buffer but
+  // never schedules a repaint, which is why the banner existed in the
+  // buffer while the screen stayed flat navy. Force a full refresh on
+  // both the next animation frame and a short timer; the timer is the
+  // fallback for a WebView that has no rAF pump yet. Both are coalesced
+  // so a burst of PTY frames costs at most two refreshes.
+  var rafQueued = false;
+  var timerQueued = false;
+  function doRefresh() {
+    try { term.refresh(0, term.rows - 1); } catch (_) {}
+  }
+  function scheduleRefresh() {
+    if (!rafQueued && window.requestAnimationFrame) {
+      rafQueued = true;
+      window.requestAnimationFrame(function () { rafQueued = false; doRefresh(); });
+    }
+    if (!timerQueued) {
+      timerQueued = true;
+      setTimeout(function () { timerQueued = false; doRefresh(); }, 60);
+    }
+  }
+
   // ── Fit: keyboard, rotation, split-screen. The PTY follows on resize.
   // Kotlin calls fit() from onSizeChanged as well, because a WebView that
   // reports its size late never fires the observer and xterm would keep
@@ -95,6 +121,8 @@
       lastRows = term.rows;
       Bridge.resized(term.cols, term.rows);
     }
+    // A resize invalidates the renderer's cell cache: repaint immediately.
+    if (ok) scheduleRefresh();
     return ok;
   }
   new ResizeObserver(function () { refit(); }).observe(root);
@@ -250,9 +278,9 @@
   }
 
   window.HermesTerminal = {
-    writeBase64: function (b64) { term.write(bytesFromBase64(b64)); },
-    writeText: function (text) { term.write(text); },
-    clear: function () { term.reset(); },
+    writeBase64: function (b64) { term.write(bytesFromBase64(b64)); scheduleRefresh(); },
+    writeText: function (text) { term.write(text); scheduleRefresh(); },
+    clear: function () { term.reset(); scheduleRefresh(); },
     focus: function () { term.focus(); },
     fit: refit,
     find: function (query, incremental, backwards) {

@@ -66,10 +66,17 @@ fun SettingsToggle(
             imageVector = icon,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 0.6f else 0.38f),
-            modifier = Modifier.size(22.dp)
+            // The switch thumb alone is a tiny hit target. Make the icon and
+            // label siblings of the Switch clickable too; nesting clickables
+            // would let the inner one swallow the tap and toggle twice.
+            modifier = Modifier
+                .size(22.dp)
+                .clickable(enabled = enabled) { onCheckedChange(!checked) }
         )
         Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier
+            .weight(1f)
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }) {
             Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1.0f else 0.38f))
             Text(subtitle, style = MaterialTheme.typography.bodySmall,
                 maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,

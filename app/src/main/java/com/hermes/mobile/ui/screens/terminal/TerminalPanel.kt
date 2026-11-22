@@ -288,6 +288,10 @@ fun TerminalPanel(
                     settings.displayZoomControls = false
                     overScrollMode = View.OVER_SCROLL_NEVER
                     isVerticalScrollBarEnabled = false
+                    // A forced software layer makes the DOM renderer paint
+                    // reliably on WebViews whose hardware compositor drops
+                    // text after late resize/flush (blank-but-buffered bug).
+                    setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                     setBackgroundColor(0xFF1A1A2E.toInt())
                     addJavascriptInterface(bridge, "HermesBridge")
                     webViewClient = object : WebViewClient() {

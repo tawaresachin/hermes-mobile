@@ -35,12 +35,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
@@ -446,14 +443,14 @@ fun VoiceScreen() {
     }
 }
 
-/** The voice conversation orb: one soft, luminous sphere. Layered radial
- * gradients run hot core -> cyan -> violet -> deep blue; a slowly morphing
- * silhouette and iridescent drift keep it organic. Breathing and mic level
- * drive scale/brightness. No rim, filaments or expanding rings.
+/** The voice conversation orb: a boundary-free ball of light. A feathered
+ * bloom halo and a body gradient whose alpha reaches zero across the outer
+ * third of its radius replace the old opaque silhouette; travelling wisps
+ * add slow turbulence. Breathing and mic level drive scale/brightness.
  *
  * The 252dp box stays the barge-in tap target; every animated value is read
  * inside the draw scope (or graphicsLayer), so frames redraw without ever
- * recomposing the screen. The morph path is reused, not rebuilt per frame. */
+ * recomposing the screen. */
 @Composable
 private fun ConversationOrb(
     phase: ConversationPhase,
@@ -488,8 +485,6 @@ private fun ConversationOrb(
         animationSpec = infiniteRepeatable(tween(4_200, easing = LinearEasing), RepeatMode.Reverse),
         label = "orb-breathe",
     )
-    // One Path reused across frames: re-wound in draw, never allocated there.
-    val blobPath = remember { Path() }
     Box(
         modifier = Modifier
             .size(252.dp)
@@ -534,30 +529,23 @@ private fun ConversationOrb(
             val violet = lerp(VoiceNeonViolet, Color(0xFFB073FF), (1f - hue) * 0.35f)
             val deep = Color(0xFF0A1C55)
 
-            val r = size.minDimension * 0.31f
+            val r = size.minDimension * 0.34f
             val cx = size.width / 2f
             val cy = size.height * 0.47f
             val mid = Offset(cx, cy)
 
-            // Subtle floor glow beneath the sphere.
-            drawOval(
-                brush = Brush.radialGradient(
-                    colors = listOf(violet.copy(alpha = 0.20f * energy), Color.Transparent),
-                    center = Offset(cx, cy + r * 1.15f),
-                    radius = r * 1.15f,
-                ),
-                topLeft = Offset(cx - r * 1.15f, cy + r * 0.62f),
-                size = Size(r * 2.3f, r * 0.95f),
-            )
-
-            // Wide, faint bloom with no hard edge.
-            val bloomR = r * 1.85f
+            // 1. Feathered bloom halo. Alpha reaches zero at the drawn edge,
+            // so there is no silhouette to trace, only light falling off
+            // into the near-black stage.
+            // Kept inside the 252dp canvas so alpha reaches zero before the
+            // canvas clips: a clipped gradient would leave a crisp edge.
+            val bloomR = r * 1.35f
             drawCircle(
                 brush = Brush.radialGradient(
                     colorStops = arrayOf(
-                        0.00f to cyan.copy(alpha = 0.16f * energy),
-                        0.42f to violet.copy(alpha = 0.11f * energy),
-                        0.72f to deep.copy(alpha = 0.06f * energy),
+                        0.00f to cyan.copy(alpha = 0.30f * energy),
+                        0.26f to violet.copy(alpha = 0.22f * energy),
+                        0.58f to deep.copy(alpha = 0.10f * energy),
                         1.00f to Color.Transparent,
                     ),
                     center = mid,
@@ -565,99 +553,77 @@ private fun ConversationOrb(
                 ),
                 radius = bloomR,
                 center = mid,
+                blendMode = BlendMode.Screen,
             )
 
-            // Organic silhouette, rebuilt in place each frame.
-            val wobble = if (reduceMotion) 0.02f else 0.035f + 0.045f * energy
-            buildOrbPath(blobPath, cx, cy, r, t, wobble)
-            clipPath(blobPath) {
-                val bodyTopLeft = Offset(cx - r * 1.3f, cy - r * 1.3f)
-                val bodySize = Size(r * 2.6f, r * 2.6f)
-                // Body: hot core -> cyan -> violet -> deep blue, highlight
-                // offset up-left so the sphere reads as lit, not flat.
-                drawRect(
-                    brush = Brush.radialGradient(
-                        colorStops = arrayOf(
-                            0.00f to core.copy(alpha = 0.98f),
-                            0.16f to cyan.copy(alpha = 0.95f),
-                            0.40f to cyan.copy(alpha = 0.72f),
-                            0.66f to violet.copy(alpha = 0.78f),
-                            0.88f to deep.copy(alpha = 0.96f),
-                            1.00f to deep,
-                        ),
-                        center = Offset(cx - r * 0.30f, cy - r * 0.34f),
-                        radius = r * 1.75f,
+            // 2. Body: hot core -> cyan -> violet -> deep blue, with alpha
+            // dying across the outer third of the radius. No clip path:
+            // the gas has no boundary to reveal.
+            val bodyR = r * 1.25f
+            val bodyCenter = Offset(cx - r * 0.10f, cy - r * 0.14f)
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colorStops = arrayOf(
+                        0.00f to core.copy(alpha = 0.96f),
+                        0.14f to cyan.copy(alpha = 0.88f),
+                        0.34f to cyan.copy(alpha = 0.64f),
+                        0.54f to violet.copy(alpha = 0.56f),
+                        0.68f to violet.copy(alpha = 0.26f),
+                        0.84f to deep.copy(alpha = 0.08f),
+                        1.00f to Color.Transparent,
                     ),
-                    topLeft = bodyTopLeft,
-                    size = bodySize,
-                )
-                // Slowly travelling iridescent wash.
-                val dx = if (reduceMotion) 0f else cos(t * 0.8f) * r * 0.45f
-                val dy = if (reduceMotion) 0f else sin(t * 0.6f) * r * 0.38f
-                drawRect(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            cyan.copy(alpha = 0.30f * energy),
-                            violet.copy(alpha = 0.18f * energy),
-                            Color.Transparent,
-                        ),
-                        center = Offset(cx + dx, cy + dy),
-                        radius = r * 1.25f,
-                    ),
-                    topLeft = bodyTopLeft,
-                    size = bodySize,
-                    blendMode = BlendMode.Screen,
-                )
-                // White-hot core, breathing with volume.
-                val hx = cx - r * 0.12f
-                val hy = cy - r * 0.16f
-                val coreR = r * (0.30f + 0.10f * energy)
+                    center = bodyCenter,
+                    radius = bodyR,
+                ),
+                radius = bodyR,
+                center = bodyCenter,
+            )
+
+            // 3. Slow internal turbulence: three travelling wisps, drawn
+            // additively so they read as light inside the gas, not shapes.
+            for (i in 0 until 3) {
+                val phase = t + i * 2.0943951f
+                val wx = cx + cos(phase * 0.8f) * r * 0.44f
+                val wy = cy + sin(phase * 0.6f) * r * 0.38f
+                val wr = r * (0.70f + 0.12f * sin(phase * 1.3f))
+                val wCenter = Offset(wx, wy)
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            Color.White.copy(alpha = (0.55f + 0.35f * energy).coerceIn(0f, 1f)),
-                            core.copy(alpha = 0.35f * energy),
+                            (if (i == 1) violet else cyan)
+                                .copy(alpha = (0.18f + 0.12f * energy).coerceIn(0f, 1f)),
                             Color.Transparent,
                         ),
-                        center = Offset(hx, hy),
-                        radius = coreR,
+                        center = wCenter,
+                        radius = wr,
                     ),
-                    radius = coreR,
-                    center = Offset(hx, hy),
+                    radius = wr,
+                    center = wCenter,
+                    blendMode = BlendMode.Screen,
                 )
             }
+
+            // 4. Bright diffuse core, breathing with mic level.
+            val hx = cx - r * 0.08f
+            val hy = cy - r * 0.12f
+            val coreR = r * (0.32f + 0.10f * energy)
+            val hotCenter = Offset(hx, hy)
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = (0.50f + 0.30f * energy).coerceIn(0f, 1f)),
+                        core.copy(alpha = 0.30f * energy),
+                        Color.Transparent,
+                    ),
+                    center = hotCenter,
+                    radius = coreR,
+                ),
+                radius = coreR,
+                center = hotCenter,
+                blendMode = BlendMode.Screen,
+            )
         }
     }
-}
-
-/** Re-winds [path] into a closed, softly morphing 8-lobe silhouette.
- * Coordinates are computed as raw floats so no Offset/Path is allocated per
- * frame — the same [Path] instance is reused for the life of the orb. */
-private fun buildOrbPath(path: Path, cx: Float, cy: Float, r: Float, t: Float, wobble: Float) {
-    val n = 8
-    val step = 6.2831853f / n
-    fun px(i: Int): Float {
-        val a = i * step
-        return cx + cos(a) * r * (1f + wobble * (sin(a * 2f + t) + 0.6f * cos(a * 3f - t * 0.8f)))
-    }
-    fun py(i: Int): Float {
-        val a = i * step
-        return cy + sin(a) * r * (1f + wobble * (sin(a * 2f + t) + 0.6f * cos(a * 3f - t * 0.8f)))
-    }
-    path.rewind()
-    path.moveTo(px(0), py(0))
-    for (i in 0 until n) {
-        val p0x = px((i - 1 + n) % n); val p0y = py((i - 1 + n) % n)
-        val p1x = px(i);           val p1y = py(i)
-        val p2x = px((i + 1) % n); val p2y = py((i + 1) % n)
-        val p3x = px((i + 2) % n); val p3y = py((i + 2) % n)
-        path.cubicTo(
-            p1x + (p2x - p0x) / 6f, p1y + (p2y - p0y) / 6f,
-            p2x - (p3x - p1x) / 6f, p2y - (p3y - p1y) / 6f,
-            p2x, p2y,
-        )
-    }
-    path.close()
 }
 
 private fun conversationStatusText(phase: ConversationPhase, status: String?): String = when (phase) {
