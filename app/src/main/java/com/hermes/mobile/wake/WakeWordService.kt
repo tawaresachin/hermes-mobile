@@ -225,21 +225,14 @@ class WakeWordService : Service() {
             stopSelf()
             return
         }
-        if (foreground || WakeWordPrefs.backgroundListening(this)) {
-            resume(WakePauseReason.AppBackground)
-        } else {
-            // Background listening is opt-in. Stop entirely so no mic or
-            // notification survives the app leaving the foreground.
-            stopSelf()
-        }
+        // One toggle means always armed: the foreground service keeps the mic
+        // when the app leaves the foreground. No background pref to honour.
+        if (WakeWordPrefs.isEnabled(this)) resume(WakePauseReason.AppBackground)
     }
 
-    private fun onScreenOn(on: Boolean) {
-        if (WakeWordPrefs.backgroundListening(this) || on) {
-            resume(WakePauseReason.ScreenOff)
-        } else {
-            pause(WakePauseReason.ScreenOff)
-        }
+    private fun onScreenOn(@Suppress("UNUSED_PARAMETER") on: Boolean) {
+        // Keep listening across screen-off too; the single toggle owns it.
+        if (WakeWordPrefs.isEnabled(this)) resume(WakePauseReason.ScreenOff)
     }
 
     private fun onRouteChanged() {

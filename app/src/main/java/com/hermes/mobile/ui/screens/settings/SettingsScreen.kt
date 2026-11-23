@@ -63,9 +63,6 @@ fun SettingsScreen(
     LaunchedEffect(Unit) { WakeWordBus.publishEnabled(WakeWordPrefs.isEnabled(context)) }
     val wakeEnabled by WakeWordBus.enabled.collectAsState()
     var wakeSensitivity by remember { mutableStateOf(WakeWordPrefs.sensitivity(context)) }
-    var wakeNewSession by remember { mutableStateOf(WakeWordPrefs.startNewSessionOnWake(context)) }
-    var wakeBackground by remember { mutableStateOf(WakeWordPrefs.backgroundListening(context)) }
-    var wakeSpeakReplies by remember { mutableStateOf(WakeWordPrefs.speakReplies(context)) }
 
     fun enableWake() {
         WakeWordService.start(context)
@@ -456,31 +453,20 @@ fun SettingsScreen(
             // ─── 6. PREFERENCES ───
             SettingsSection("Preferences") {
                 // Chat text size: same key ChatViewModel reads live via prefs.
-                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.TextFormat, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(22.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text("Chat Text Size",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        // Value sits right beside the label — weight(1f) pinned
-                        // it to the card's far edge, leaving a dead gap mid-row.
-                        val shown = if (chatFontSp * 2 % 2f < 0.01f ||
-                                         chatFontSp * 2 % 2f > 1.99f)
-                            "${chatFontSp.toInt()}" else "%.1f".format(chatFontSp)
-                        Text("$shown sp",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = HermesPrimary)
-                        // Inline escape hatch — only once the size is manual.
-                        if (chatFontManual) {
-                            Spacer(Modifier.weight(1f))
+                val shown = if (chatFontSp * 2 % 2f < 0.01f ||
+                                 chatFontSp * 2 % 2f > 1.99f)
+                    "${chatFontSp.toInt()}" else "%.1f".format(chatFontSp)
+                SettingsSlider(
+                    icon = Icons.Filled.TextFormat,
+                    label = "Chat Text Size",
+                    valueText = "$shown sp",
+                    value = chatFontSp,
+                    valueRange = 12f..20f,
+                    steps = 15,
+                    onValueChange = { viewModel.setChatFont(
+                        kotlin.math.round(it * 2f) / 2f) },
+                    trailing = if (chatFontManual) {
+                        {
                             Text("Auto (device)",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = HermesPrimary,
@@ -489,57 +475,8 @@ fun SettingsScreen(
                                     .clickable { viewModel.resetChatFont() }
                                     .padding(horizontal = 8.dp, vertical = 4.dp))
                         }
-                    }
-                    // 0.5 sp detents, hairline track + dot thumb —
-                    // quiet Material-3 shape, brand-blue fill.
-                    Slider(
-                        value = chatFontSp,
-                        onValueChange = { viewModel.setChatFont(
-                            kotlin.math.round(it * 2f) / 2f) },
-                        valueRange = 12f..20f,
-                        steps = 15,
-                        modifier = Modifier.height(28.dp),
-                        colors = SliderDefaults.colors(
-                            thumbColor = HermesPrimary,
-                            activeTrackColor = HermesPrimary,
-                            inactiveTrackColor =
-                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                        ),
-                        track = { state ->
-                            val inactive = MaterialTheme.colorScheme
-                                .outlineVariant.copy(alpha = 0.55f)
-                            val active = HermesPrimary
-                            androidx.compose.foundation.Canvas(
-                                Modifier.fillMaxWidth().height(28.dp)) {
-                                val frac = ((state.value - 12f) / 8f)
-                                    .coerceIn(0f, 1f)
-                                val inset = 6.dp.toPx()
-                                val barW = size.width - inset * 2
-                                val y = size.height / 2f - 1.dp.toPx()
-                                drawRoundRect(
-                                    color = inactive,
-                                    topLeft = androidx.compose.ui.geometry.Offset(
-                                        inset, y),
-                                    size = androidx.compose.ui.geometry.Size(
-                                        barW, 2.dp.toPx()),
-                                    cornerRadius = androidx.compose.ui.geometry
-                                        .CornerRadius(1.dp.toPx()))
-                                if (frac > 0f) drawRoundRect(
-                                    color = active,
-                                    topLeft = androidx.compose.ui.geometry.Offset(
-                                        inset, y),
-                                    size = androidx.compose.ui.geometry.Size(
-                                        barW * frac, 2.dp.toPx()),
-                                    cornerRadius = androidx.compose.ui.geometry
-                                        .CornerRadius(1.dp.toPx()))
-                            }
-                        },
-                        thumb = {
-                            Box(Modifier.size(12.dp)
-                                .background(HermesPrimary, CircleShape))
-                        },
-                    )
-                }
+                    } else null,
+                )
                 SettingsToggle(
                     icon = Icons.Filled.Compress,
                     title = "Token Optimizer",
@@ -586,72 +523,28 @@ fun SettingsScreen(
                 SettingsToggle(
                     icon = Icons.Filled.Mic,
                     title = "Hey Hermes",
-                    subtitle = if (wakeEnabled) "Listening on this device" else "Off",
+                    subtitle = if (wakeEnabled) "Listening" else "Off",
                     checked = wakeEnabled,
                     onCheckedChange = { on -> if (on) requestWakePermissions() else disableWake() }
                 )
-                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "Sensitivity",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
-                        Text(
-                            "%.2f".format(wakeSensitivity),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = HermesPrimary
-                        )
-                    }
-                    Slider(
+                if (wakeEnabled) {
+                    SettingsSlider(
+                        icon = Icons.Filled.Tune,
+                        label = "Wake sensitivity",
+                        valueText = "%.2f".format(wakeSensitivity),
                         value = wakeSensitivity,
+                        valueRange = WakeWordPrefs.MIN_SENSITIVITY..WakeWordPrefs.MAX_SENSITIVITY,
+                        steps = 4,
                         onValueChange = {
                             wakeSensitivity = it
                             WakeWordPrefs.setSensitivity(context, it)
                             WakeWordService.updateSensitivity(context)
                         },
-                        valueRange = WakeWordPrefs.MIN_SENSITIVITY..WakeWordPrefs.MAX_SENSITIVITY,
-                        steps = 4,
-                        colors = SliderDefaults.colors(
-                            thumbColor = HermesPrimary,
-                            activeTrackColor = HermesPrimary
-                        )
                     )
                 }
-                SettingsToggle(
-                    icon = Icons.Filled.Chat,
-                    title = "Start a new chat when I say Hey Hermes",
-                    subtitle = if (wakeNewSession) "Fresh chat for each wake" else "Use the current chat",
-                    checked = wakeNewSession,
-                    onCheckedChange = {
-                        wakeNewSession = it
-                        WakeWordPrefs.setStartNewSessionOnWake(context, it)
-                    }
-                )
-                SettingsToggle(
-                    icon = Icons.Filled.Public,
-                    title = "Listen in the background",
-                    subtitle = if (wakeBackground) "Keeps listening when the app is closed" else "Only while Hermes is open",
-                    checked = wakeBackground,
-                    onCheckedChange = {
-                        wakeBackground = it
-                        WakeWordPrefs.setBackgroundListening(context, it)
-                    }
-                )
-                SettingsToggle(
-                    icon = Icons.Filled.VolumeUp,
-                    title = "Speak replies",
-                    subtitle = if (wakeSpeakReplies) "Hermes answers out loud after a wake" else "Replies stay on screen only",
-                    checked = wakeSpeakReplies,
-                    onCheckedChange = {
-                        wakeSpeakReplies = it
-                        WakeWordPrefs.setSpeakReplies(context, it)
-                    }
-                )
                 Text(
-                    text = "Privacy: wake audio is processed on this device only. " +
-                        "No audio is stored, uploaded, or logged.",
+                    text = "On-device only — no audio leaves your phone. " +
+                        "A mic notification shows while listening.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 8.dp)

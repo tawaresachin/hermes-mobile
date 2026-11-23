@@ -32,6 +32,8 @@ class VoiceCapture(
     private val onError: (String) -> Unit,
     /** Smoothed 0..1 loudness, ~33×/s, for the orb's live swell. */
     private val onLevel: (Float) -> Unit,
+    /** Trailing quiet that closes an utterance; hands-free wake uses ~1.5 s. */
+    private val silenceEndMs: Int = SILENCE_END_MS,
 ) {
     companion object {
         const val SAMPLE_RATE = 16_000
@@ -106,7 +108,7 @@ class VoiceCapture(
             return
         }
 
-        val detector = UtteranceDetector()
+        val detector = UtteranceDetector(silenceEndMs = silenceEndMs)
         val frame = ShortArray(FRAME_SAMPLES)
         val pcm = ByteArray(FRAME_SAMPLES * 2) // reused: 33 frames/s, no churn
         val utterance = ByteArrayOutputStream()
