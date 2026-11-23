@@ -24,19 +24,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -237,6 +237,123 @@ internal fun terminalKeyBytes(key: TerminalKey): ByteArray = when (key) {
 }
 
 /**
+ * Fixed geometry of the terminal strip. Kept here so the width contract —
+ * every control visible on a 373dp phone, Disconnect pinned on a 320dp one —
+ * can be asserted without launching the app.
+ */
+internal object TerminalControlBarLayout {
+    const val KeyButtonSizeDp = 40
+    const val ArrowHalfSizeDp = 40
+    const val DisconnectSizeDp = 40
+    const val SpacingDp = 2
+    const val KeyButtonCount = 5
+
+    /** Find, Copy, ^C, Esc, Tab plus the two-half arrow pill. */
+    val keyRowWidthDp: Int
+        get() = KeyButtonSizeDp * KeyButtonCount + ArrowHalfSizeDp * 2 +
+            SpacingDp * KeyButtonCount
+
+    /** TerminalScreen pads the screen 16dp on each side. */
+    fun fitsWithoutKeyScroll(screenWidthDp: Int): Boolean =
+        keyRowWidthDp + SpacingDp + DisconnectSizeDp <= screenWidthDp - 32
+}
+
+/**
+ * One compact strip. Only the key buttons scroll; Disconnect lives outside
+ * that scroll container so a narrow phone can never clip it.
+ */
+@Composable
+internal fun TerminalControlBar(
+    onFind: () -> Unit,
+    onCopy: () -> Unit,
+    onKey: (TerminalKey) -> Unit,
+    onDisconnect: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .testTag("terminal_control_bar"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(TerminalControlBarLayout.SpacingDp.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState())
+                .testTag("terminal_control_keys"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(TerminalControlBarLayout.SpacingDp.dp)
+        ) {
+            IconButton(
+                onClick = onFind,
+                modifier = Modifier
+                    .size(TerminalControlBarLayout.KeyButtonSizeDp.dp)
+                    .semantics { contentDescription = "Find in terminal" }
+            ) { Icon(Icons.Filled.Search, contentDescription = null) }
+            IconButton(
+                onClick = onCopy,
+                modifier = Modifier
+                    .size(TerminalControlBarLayout.KeyButtonSizeDp.dp)
+                    .semantics { contentDescription = "Copy selection" }
+            ) { Icon(Icons.Filled.ContentCopy, contentDescription = null) }
+            IconButton(
+                onClick = { onKey(TerminalKey.CtrlC) },
+                modifier = Modifier
+                    .size(TerminalControlBarLayout.KeyButtonSizeDp.dp)
+                    .semantics { contentDescription = "Ctrl-C" }
+            ) { Text("^C", style = MaterialTheme.typography.labelSmall) }
+            IconButton(
+                onClick = { onKey(TerminalKey.Esc) },
+                modifier = Modifier
+                    .size(TerminalControlBarLayout.KeyButtonSizeDp.dp)
+                    .semantics { contentDescription = "Esc" }
+            ) { Text("Esc", style = MaterialTheme.typography.labelSmall) }
+            IconButton(
+                onClick = { onKey(TerminalKey.Tab) },
+                modifier = Modifier
+                    .size(TerminalControlBarLayout.KeyButtonSizeDp.dp)
+                    .semantics { contentDescription = "Tab" }
+            ) { Text("Tab", style = MaterialTheme.typography.labelSmall) }
+            // One rounded container, two halves — the requested Up/Down pill.
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    .testTag("terminal_arrows"),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = { onKey(TerminalKey.Up) },
+                    modifier = Modifier
+                        .size(TerminalControlBarLayout.ArrowHalfSizeDp.dp)
+                        .semantics { contentDescription = "Previous history line" }
+                ) { Icon(Icons.Filled.ArrowUpward, contentDescription = null) }
+                IconButton(
+                    onClick = { onKey(TerminalKey.Down) },
+                    modifier = Modifier
+                        .size(TerminalControlBarLayout.ArrowHalfSizeDp.dp)
+                        .semantics { contentDescription = "Next history line" }
+                ) { Icon(Icons.Filled.ArrowDownward, contentDescription = null) }
+            }
+        }
+        IconButton(
+            onClick = onDisconnect,
+            modifier = Modifier
+                .size(TerminalControlBarLayout.DisconnectSizeDp.dp)
+                .semantics { contentDescription = "Disconnect" }
+        ) {
+            Icon(
+                Icons.Filled.PowerSettingsNew,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
+/**
  * Live terminal surface: xterm.js in a WebView (screen grid, scrollback,
  * alternate screen, selection) plus a Compose find/copy toolbar.
  */
@@ -394,73 +511,11 @@ fun TerminalPanel(
             }
         }
 
-        // One compact, scrollable strip. 44dp targets keep the phone
-        // keyboard and system bars out of the terminal's writing area.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(44.dp)
-                .horizontalScroll(rememberScrollState()),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            IconButton(
-                onClick = { if (findOpen) closeFind() else findOpen = true },
-                modifier = Modifier
-                    .size(44.dp)
-                    .semantics { contentDescription = "Find in terminal" }
-            ) { Icon(Icons.Filled.Search, contentDescription = null) }
-            IconButton(
-                onClick = { state.copySelection() },
-                modifier = Modifier
-                    .size(44.dp)
-                    .semantics { contentDescription = "Copy selection" }
-            ) { Icon(Icons.Filled.ContentCopy, contentDescription = null) }
-            IconButton(
-                onClick = { sendRaw(TerminalKey.CtrlC) },
-                modifier = Modifier
-                    .size(44.dp)
-                    .semantics { contentDescription = "Ctrl-C" }
-            ) { Text("^C", style = MaterialTheme.typography.labelSmall) }
-            IconButton(
-                onClick = { sendRaw(TerminalKey.Esc) },
-                modifier = Modifier
-                    .size(44.dp)
-                    .semantics { contentDescription = "Esc" }
-            ) { Text("Esc", style = MaterialTheme.typography.labelSmall) }
-            IconButton(
-                onClick = { sendRaw(TerminalKey.Tab) },
-                modifier = Modifier
-                    .size(44.dp)
-                    .semantics { contentDescription = "Tab" }
-            ) { Text("Tab", style = MaterialTheme.typography.labelSmall) }
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                IconButton(
-                    onClick = { sendRaw(TerminalKey.Up) },
-                    modifier = Modifier
-                        .size(44.dp)
-                        .semantics { contentDescription = "Previous history line" }
-                ) { Icon(Icons.Filled.ArrowUpward, contentDescription = null) }
-                IconButton(
-                    onClick = { sendRaw(TerminalKey.Down) },
-                    modifier = Modifier
-                        .size(44.dp)
-                        .semantics { contentDescription = "Next history line" }
-                ) { Icon(Icons.Filled.ArrowDownward, contentDescription = null) }
-            }
-            TextButton(
-                onClick = onDisconnect,
-                modifier = Modifier
-                    .height(44.dp)
-                    .semantics { contentDescription = "Disconnect" },
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                )
-            ) { Text("Disconnect", style = MaterialTheme.typography.labelSmall) }
-        }
+        TerminalControlBar(
+            onFind = { if (findOpen) closeFind() else findOpen = true },
+            onCopy = { state.copySelection() },
+            onKey = { sendRaw(it) },
+            onDisconnect = onDisconnect
+        )
     }
 }
