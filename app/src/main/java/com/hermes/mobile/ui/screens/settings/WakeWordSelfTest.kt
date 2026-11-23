@@ -22,6 +22,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hermes.mobile.wake.WakeWordDetector
@@ -44,31 +46,33 @@ fun WakeWordSelfTestRow() {
     var show by remember { mutableStateOf(false) }
 
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(enabled = !running) {
-            running = true
-            scope.launch(Dispatchers.IO) {
-                val lines = listOf("hey_hermes.wav", "hello_there.wav").map { runFixture(context, it) }
-                val text = buildString {
-                    append("threshold 0.6 · 3 windows · 2s cooldown\n\n")
-                    lines.forEach { r ->
-                        append(r.name).append('\n')
-                        if (r.error != null) {
-                            append("  ERROR: ").append(r.error)
-                        } else {
-                            append("  max score ").append("%.4f".format(r.maxScore))
-                            append("  ·  ").append(if (r.fired) "FIRED" else "not fired")
-                            append("  ·  ").append(r.frames).append(" frames")
+        modifier = Modifier.fillMaxWidth()
+            .clickable(enabled = !running) {
+                running = true
+                scope.launch(Dispatchers.IO) {
+                    val lines = listOf("hey_hermes.wav", "hello_there.wav").map { runFixture(context, it) }
+                    val text = buildString {
+                        append("threshold 0.6 · 3 windows · 2s cooldown\n\n")
+                        lines.forEach { r ->
+                            append(r.name).append('\n')
+                            if (r.error != null) {
+                                append("  ERROR: ").append(r.error)
+                            } else {
+                                append("  max score ").append("%.4f".format(r.maxScore))
+                                append("  ·  ").append(if (r.fired) "FIRED" else "not fired")
+                                append("  ·  ").append(r.frames).append(" frames")
+                            }
+                            append('\n')
                         }
-                        append('\n')
+                    }
+                    withContext(Dispatchers.Main) {
+                        report = text
+                        running = false
+                        show = true
                     }
                 }
-                withContext(Dispatchers.Main) {
-                    report = text
-                    running = false
-                    show = true
-                }
             }
-        },
+            .semantics { contentDescription = "Run wake word fixture self-test" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
