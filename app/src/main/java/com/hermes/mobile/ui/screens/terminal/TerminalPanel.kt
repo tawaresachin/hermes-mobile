@@ -13,11 +13,18 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -39,9 +46,12 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -215,6 +225,17 @@ internal fun findStatus(index: Int, count: Int, hasQuery: Boolean): String = whe
     else -> "${index + 1}/$count"
 }
 
+/** Raw keys the phone keyboard cannot produce; bytes are PTY-exact. */
+internal enum class TerminalKey { CtrlC, Esc, Tab, Up, Down }
+
+internal fun terminalKeyBytes(key: TerminalKey): ByteArray = when (key) {
+    TerminalKey.CtrlC -> byteArrayOf(0x03)
+    TerminalKey.Esc -> byteArrayOf(0x1b)
+    TerminalKey.Tab -> byteArrayOf(0x09)
+    TerminalKey.Up -> byteArrayOf(0x1b, 0x5b, 0x41)
+    TerminalKey.Down -> byteArrayOf(0x1b, 0x5b, 0x42)
+}
+
 /**
  * Live terminal surface: xterm.js in a WebView (screen grid, scrollback,
  * alternate screen, selection) plus a Compose find/copy toolbar.
@@ -225,6 +246,8 @@ fun TerminalPanel(
     state: TerminalWebViewState,
     sendInput: (ByteArray) -> Unit,
     onResize: (Int, Int) -> Unit,
+    onSendRaw: (ByteArray) -> Unit,
+    onDisconnect: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -253,6 +276,11 @@ fun TerminalPanel(
         queryState.value = ""
         status = ""
         state.clearFind()
+        state.focus()
+    }
+
+    fun sendRaw(key: TerminalKey) {
+        onSendRaw(terminalKeyBytes(key))
         state.focus()
     }
 
@@ -366,32 +394,73 @@ fun TerminalPanel(
             }
         }
 
+        // One compact, scrollable strip. 44dp targets keep the phone
+        // keyboard and system bars out of the terminal's writing area.
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            TextButton(onClick = {
-                if (findOpen) {
-                    closeFind()
-                } else {
-                    findOpen = true
-                }
-            }) {
-                Icon(
-                    Icons.Filled.Search,
-                    contentDescription = null,
-                    modifier = Modifier.padding(end = 4.dp)
-                )
-                Text("Find", style = MaterialTheme.typography.labelSmall)
+            IconButton(
+                onClick = { if (findOpen) closeFind() else findOpen = true },
+                modifier = Modifier
+                    .size(44.dp)
+                    .semantics { contentDescription = "Find in terminal" }
+            ) { Icon(Icons.Filled.Search, contentDescription = null) }
+            IconButton(
+                onClick = { state.copySelection() },
+                modifier = Modifier
+                    .size(44.dp)
+                    .semantics { contentDescription = "Copy selection" }
+            ) { Icon(Icons.Filled.ContentCopy, contentDescription = null) }
+            IconButton(
+                onClick = { sendRaw(TerminalKey.CtrlC) },
+                modifier = Modifier
+                    .size(44.dp)
+                    .semantics { contentDescription = "Ctrl-C" }
+            ) { Text("^C", style = MaterialTheme.typography.labelSmall) }
+            IconButton(
+                onClick = { sendRaw(TerminalKey.Esc) },
+                modifier = Modifier
+                    .size(44.dp)
+                    .semantics { contentDescription = "Esc" }
+            ) { Text("Esc", style = MaterialTheme.typography.labelSmall) }
+            IconButton(
+                onClick = { sendRaw(TerminalKey.Tab) },
+                modifier = Modifier
+                    .size(44.dp)
+                    .semantics { contentDescription = "Tab" }
+            ) { Text("Tab", style = MaterialTheme.typography.labelSmall) }
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                IconButton(
+                    onClick = { sendRaw(TerminalKey.Up) },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics { contentDescription = "Previous history line" }
+                ) { Icon(Icons.Filled.ArrowUpward, contentDescription = null) }
+                IconButton(
+                    onClick = { sendRaw(TerminalKey.Down) },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics { contentDescription = "Next history line" }
+                ) { Icon(Icons.Filled.ArrowDownward, contentDescription = null) }
             }
-            TextButton(onClick = { state.copySelection() }) {
-                Icon(
-                    Icons.Filled.ContentCopy,
-                    contentDescription = null,
-                    modifier = Modifier.padding(end = 4.dp)
+            TextButton(
+                onClick = onDisconnect,
+                modifier = Modifier
+                    .height(44.dp)
+                    .semantics { contentDescription = "Disconnect" },
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
                 )
-                Text("Copy", style = MaterialTheme.typography.labelSmall)
-            }
+            ) { Text("Disconnect", style = MaterialTheme.typography.labelSmall) }
         }
     }
 }

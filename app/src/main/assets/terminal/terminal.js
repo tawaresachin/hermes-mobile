@@ -75,13 +75,12 @@
     textarea.spellcheck = false;
   }
 
-  // ── Paint: writes can land before the WebView has started its frame
-  // pump (or while it is off-screen). xterm then updates its buffer but
-  // never schedules a repaint, which is why the banner existed in the
-  // buffer while the screen stayed flat navy. Force a full refresh on
-  // both the next animation frame and a short timer; the timer is the
-  // fallback for a WebView that has no rAF pump yet. Both are coalesced
-  // so a burst of PTY frames costs at most two refreshes.
+  // ── Paint: xterm parses writes asynchronously. A refresh scheduled
+  // immediately after write() can run against a half-parsed buffer, which
+  // collapses a full-screen repaint (cursor addressing + 256-colour SGR)
+  // to its last line. Refresh from the write callback instead, coalesced
+  // onto the next frame with a short timer fallback for WebViews whose
+  // rAF pump has not started yet.
   var rafQueued = false;
   var timerQueued = false;
   function doRefresh() {
@@ -96,6 +95,9 @@
       timerQueued = true;
       setTimeout(function () { timerQueued = false; doRefresh(); }, 60);
     }
+  }
+  function write(data) {
+    term.write(data, function () { scheduleRefresh(); });
   }
 
   // ── Fit: keyboard, rotation, split-screen. The PTY follows on resize.
@@ -278,8 +280,8 @@
   }
 
   window.HermesTerminal = {
-    writeBase64: function (b64) { term.write(bytesFromBase64(b64)); scheduleRefresh(); },
-    writeText: function (text) { term.write(text); scheduleRefresh(); },
+    writeBase64: function (b64) { write(bytesFromBase64(b64)); },
+    writeText: function (text) { write(text); },
     clear: function () { term.reset(); scheduleRefresh(); },
     focus: function () { term.focus(); },
     fit: refit,

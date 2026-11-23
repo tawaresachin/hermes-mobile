@@ -1080,46 +1080,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             // Real VT surface: xterm.js owns the screen grid, scrollback,
             // alternate screen and selection. The panel carries find/copy;
             // typing goes straight to the PTY.
-            TerminalPanel(
-                state = webState,
-                sendInput = { sendInputBytes(it) },
-                onResize = { cols, rows ->
-                    termGeom = cols to rows
-                    gw?.takeIf { it.isOpen }?.resize(cols, rows)
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            )
-            // ── Raw-key row: drive interactive programs (less, vim,
-            // sudo -i) that phone keyboards cannot produce. Sent straight
-            // to the PTY; the remote shell owns semantics.
-            fun sendRaw(bytes: IntArray) {
-                sendInputBytes(bytes.map { it.toByte() }.toByteArray())
-                webState.focus()
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                TextButton(onClick = { sendRaw(intArrayOf(0x03)) }, modifier = Modifier.weight(1f)) {
-                    Text("Ctrl-C", style = MaterialTheme.typography.labelSmall)
-                }
-                TextButton(onClick = { sendRaw(intArrayOf(0x1b)) }, modifier = Modifier.weight(1f)) {
-                    Text("Esc", style = MaterialTheme.typography.labelSmall)
-                }
-                TextButton(onClick = { sendRaw(intArrayOf(0x09)) }, modifier = Modifier.weight(1f)) {
-                    Text("Tab", style = MaterialTheme.typography.labelSmall)
-                }
-                TextButton(onClick = { sendRaw(intArrayOf(0x1b, 0x5b, 0x41)) }, modifier = Modifier.weight(1f)) {
-                    Text("Up", style = MaterialTheme.typography.labelSmall)
-                }
-                TextButton(onClick = { sendRaw(intArrayOf(0x1b, 0x5b, 0x42)) }, modifier = Modifier.weight(1f)) {
-                    Text("Down", style = MaterialTheme.typography.labelSmall)
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            Button(onClick = {
+            fun disconnect() {
                 val gwClient = gw
                 if (gwClient != null) {
                     // Gateway session: no SSH tail to persist; just end it.
@@ -1129,7 +1090,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                     connected = false
                     hadSession = true
                     error = ""
-                    return@Button
+                    return
                 }
                 // Save the tail BEFORE closeAll wipes the buffer.
                 TerminalProfileStore.saveRestore(context, lastHost, lastPort, lastUser, SshTerminal.snapshot())
@@ -1138,7 +1099,20 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
                 connected = false
                 hadSession = false
                 error = ""
-            }, modifier = Modifier.fillMaxWidth()) { Text("Disconnect") }
+            }
+            TerminalPanel(
+                state = webState,
+                sendInput = { sendInputBytes(it) },
+                onResize = { cols, rows ->
+                    termGeom = cols to rows
+                    gw?.takeIf { it.isOpen }?.resize(cols, rows)
+                },
+                onSendRaw = { sendInputBytes(it) },
+                onDisconnect = ::disconnect,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            )
         }
     }
 
