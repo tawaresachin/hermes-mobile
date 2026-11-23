@@ -639,6 +639,11 @@ fun SettingsScreen(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 HermesAgentAboutRow(viewModel = viewModel)
+                // Debug-only: prove the detector against bundled WAVs on mac.apk.
+                if (com.hermes.mobile.BuildConfig.DEBUG) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    WakeWordSelfTestRow()
+                }
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Plain text buttons (no box)

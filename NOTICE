@@ -1,0 +1,28 @@
+Hermes Mobile — third-party notices
+
+This product includes the following third-party model assets and libraries.
+
+1. openWakeWord / pyopen-wakeword model assets (Apache-2.0)
+   Files: app/src/main/assets/wakeword/melspectrogram.tflite,
+          app/src/main/assets/wakeword/embedding_model.tflite,
+          app/src/main/assets/wakeword/hey_hermes.tflite
+   openWakeWord — Copyright 2020 David Scripka
+   pyopen-wakeword — Copyright 2024 Michael Hansen
+   Licensed under the Apache License, Version 2.0.
+   https://github.com/dscripka/openWakeWord
+   https://github.com/rhasspy/pyopen-wakeword
+
+   The hey_hermes classifier is a Hermes Agent bundled model trained with the
+   openWakeWord pipeline and distributed under the same Apache-2.0 terms.
+   melspectrogram.tflite is the upstream file with a 6-byte tensor
+   shape/signature metadata patch (dynamic [1,1] -> fixed [1,1760]) so the
+   Android TFLite Java interpreter can allocate it; weights are unchanged.
+
+2. TensorFlow Lite (Apache-2.0)
+   Library: org.tensorflow:tensorflow-lite (Android runtime)
+   Copyright 2017 The TensorFlow Authors
+   Licensed under the Apache License, Version 2.0.
+   https://www.tensorflow.org/
+
+A copy of the Apache License, Version 2.0 is available at:
+http://www.apache.org/licenses/LICENSE-2.0

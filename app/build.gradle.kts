@@ -176,6 +176,9 @@ dependencies {
     // Audio
     implementation("androidx.media:media:1.7.0")
 
+    // On-device wake word (melspectrogram -> embedding -> classifier)
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
