@@ -1585,6 +1585,7 @@ fun ChatScreen(
             transcribe = { b64 -> vm.transcribeVoice(b64) },
             onPartial = { text -> inputText = text },
             onFinal = { text ->
+                handsFree = false
                 if (text.isNotBlank()) {
                     vm.sendMessage(text.trim(), replyTo = pendingReply)
                     pendingReply = null
@@ -1597,7 +1598,8 @@ fun ChatScreen(
                 wakeTurnPending = false
                 WakeWordService.rearm(context)
                 vm.setError("Voice: $msg")
-            }
+            },
+            stopAfterFirst = true
         )
     }
 
@@ -2666,10 +2668,11 @@ private fun startHandsFreeDictation(
     transcribe: suspend (String) -> String,
     onPartial: (String) -> Unit,
     onFinal: (String) -> Unit,
-    onError: (String) -> Unit
+    onError: (String) -> Unit,
+    stopAfterFirst: Boolean = false
 ) {
     if (!android.speech.SpeechRecognizer.isRecognitionAvailable(context)) {
-        startFallbackDictation(transcribe, onFinal, onError)
+        startFallbackDictation(transcribe, onFinal, onError, stopAfterFirst = stopAfterFirst)
         return
     }
     // One recognizer at a time: kill the one-shot dictation first.
@@ -2717,15 +2720,26 @@ private fun startHandsFreeDictation(
                     ?.firstOrNull()
                     .orEmpty()
                 if (text.isNotBlank()) onFinal(text)
+                // A wake turn owns exactly one utterance. Leaving the recognizer
+                // alive would transcribe the next "Hey Hermes" as a command.
+                if (stopAfterFirst) {
+                    stopHandsFreeDictation()
+                    return
+                }
                 // Restart for the next utterance; a short delay avoids the
                 // ERROR_CLIENT that some services raise on instant restarts.
                 handsFreeHandler.postDelayed(restart, 300)
             }
             override fun onError(error: Int) {
                 if (!handsFreeActive) return
-                if (error == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-                    handsFreeActive = false
-                    onError("Microphone permission denied")
+                if (error == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
+                    stopAfterFirst
+                ) {
+                    stopHandsFreeDictation()
+                    onError(
+                        if (error == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS)
+                            "Microphone permission denied" else speechErrorText(error)
+                    )
                     return
                 }
                 // Silence, busy, client and network failures are all normal
