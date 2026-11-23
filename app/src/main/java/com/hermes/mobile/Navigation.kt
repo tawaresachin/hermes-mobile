@@ -27,6 +27,13 @@ import com.hermes.mobile.ui.screens.settings.SettingsScreen
 import com.hermes.mobile.ui.screens.terminal.TerminalScreen
 import com.hermes.mobile.ui.screens.voice.VoiceScreen
 import com.hermes.mobile.ui.theme.HermesPrimary
+import com.hermes.mobile.notifications.AppForeground
+import com.hermes.mobile.wake.WakeCoordinator
+import com.hermes.mobile.wake.WakeDisposition
+import com.hermes.mobile.wake.WakeSurface
+import com.hermes.mobile.wake.WakeWordBus
+import com.hermes.mobile.wake.WakeWordPrefs
+import com.hermes.mobile.wake.WakeWordService
 
 // ═══════════════════════════════════════════════════════════
 // Screen routes — PLAIN routes (no query args). Query-arg patterns
@@ -76,6 +83,41 @@ fun MainNavigation(
     val currentDestination = navBackStackEntry?.destination
     // Haptic feedback for tab switches
     val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
+    val wakeCoordinator = remember { WakeCoordinator() }
+
+    // Report which surface can consume a wake right now. Chat consumes it
+    // in place; every other screen hands it to the coordinator.
+    LaunchedEffect(currentDestination?.route) {
+        wakeCoordinator.onSurfaceChanged(
+            if (currentDestination?.route == Screen.Chat.route) WakeSurface.Chat
+            else WakeSurface.Elsewhere
+        )
+    }
+
+    // Single global consumer: every wake is routed exactly once.
+    val wakeSequence by WakeWordBus.wakes.collectAsState()
+    LaunchedEffect(wakeSequence) {
+        if (wakeSequence <= 0L) return@LaunchedEffect
+        WakeWordBus.consumeWake()
+        when (wakeCoordinator.decide(WakeWordPrefs.isEnabled(context), AppForeground.isForeground)) {
+            WakeDisposition.Ignore -> Unit
+            WakeDisposition.HandleInChat -> WakeWordBus.emitChatWake()
+            WakeDisposition.OpenChat -> {
+                WakeWordBus.emitChatWake()
+                openChat(navController, null)
+            }
+            WakeDisposition.ShowAlert -> WakeWordService.postWakeAlert(context)
+        }
+    }
+
+    // A wake-alert tap (or cold start from that tap) opens Chat and dictates.
+    val wakeIntentCount by WakeWordBus.wakeIntents.collectAsState()
+    LaunchedEffect(wakeIntentCount) {
+        if (wakeIntentCount <= 0L || !isLoggedIn) return@LaunchedEffect
+        openChat(navController, null)
+        WakeWordBus.emitChatWake()
+    }
 
     // Deep link from the "response ready" notification: open the session.
     LaunchedEffect(initialSessionId, isLoggedIn) {

@@ -33,6 +33,8 @@ class MainActivity : ComponentActivity() {
         com.hermes.mobile.wake.WakeWordService.reconcile(this)
         // Deep link from the "response ready" notification → open the session.
         val deepLinkSession = intent.getStringExtra(EXTRA_SESSION_ID)
+        // Full-screen wake alert / tap fallback → open Chat and dictate.
+        if (intent.getBooleanExtra(EXTRA_WAKE, false)) consumeWakeIntent()
         setContent {
             // Read saved dark theme preference (initial + reactive via listener)
             var isDarkTheme by remember {
@@ -83,7 +85,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_WAKE, false)) consumeWakeIntent()
+    }
+
+    /** Clear the transient alert and hand off to the global wake coordinator. */
+    private fun consumeWakeIntent() {
+        com.hermes.mobile.wake.WakeWordService.cancelWakeAlert(this)
+        // One-shot: a rotation must not re-read the extra and dictate twice.
+        intent.removeExtra(EXTRA_WAKE)
+        com.hermes.mobile.wake.WakeWordBus.publishWakeIntent()
+    }
+
     companion object {
         const val EXTRA_SESSION_ID = "session_id"
+        const val EXTRA_WAKE = "wake"
     }
 }

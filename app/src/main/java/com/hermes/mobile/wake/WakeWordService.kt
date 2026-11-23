@@ -52,6 +52,9 @@ class WakeWordService : Service() {
     private var focusGranted = false
     private var receiverRegistered = false
     private var deviceCallbackRegistered = false
+    // Turning wake off mid-turn must not cut off the spoken reply. The mic is
+    // already paused for the turn; finish it, then tear the service down.
+    private var stopAfterTurn = false
 
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
         when (change) {
@@ -111,7 +114,19 @@ class WakeWordService : Service() {
             ACTION_START -> startListening()
             ACTION_STOP -> {
                 WakeWordPrefs.setEnabled(this, false)
-                stopSelf()
+                WakeWordBus.publishEnabled(false)
+                // The alert belongs to the master switch, not to the in-progress
+                // turn — remove it even if teardown is deferred.
+                cancelWakeAlert(this)
+                if (controller.currentState() == WakeRunState.WaitingForTurn) {
+                    stopAfterTurn = true
+                    // Bounded fallback: a logout mid-turn can dispose ChatScreen
+                    // before its re-arm callback lands. Never linger as an orphan.
+                    handler.postDelayed({ if (stopAfterTurn) stopSelf() }, 30_000L)
+                    updateNotification()
+                } else {
+                    stopSelf()
+                }
             }
             ACTION_PAUSE -> pause(reasonFrom(intent))
             ACTION_RESUME -> resume(reasonFrom(intent))
@@ -141,6 +156,7 @@ class WakeWordService : Service() {
             deviceCallbackRegistered = false
         }
         WakeWordBus.publishEnabled(false)
+        cancelWakeAlert(this)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         scope.cancel()
         super.onDestroy()
@@ -183,6 +199,12 @@ class WakeWordService : Service() {
     }
 
     private fun rearm() {
+        // Disable mid-turn defers teardown until here; disabling while idle
+        // is handled by ACTION_STOP. Either way, never re-arm a disabled mic.
+        if (stopAfterTurn || !WakeWordPrefs.isEnabled(this)) {
+            stopSelf()
+            return
+        }
         if (controller.turnFinished() == WakeRunState.Listening) {
             requestFocus()
             if (focusGranted) startCaptureLocked() else controller.pause(WakePauseReason.AudioFocus)
@@ -195,6 +217,14 @@ class WakeWordService : Service() {
     }
 
     private fun setAppForeground(foreground: Boolean) {
+        // A permission revoked in Settings while the app was away takes
+        // effect on return: stop cleanly instead of leaving a dead mic alert.
+        if (foreground && (!hasMicrophone() || !hasNotifications())) {
+            WakeWordPrefs.setEnabled(this, false)
+            WakeWordBus.publishEnabled(false)
+            stopSelf()
+            return
+        }
         if (foreground || WakeWordPrefs.backgroundListening(this)) {
             resume(WakePauseReason.AppBackground)
         } else {
@@ -388,6 +418,15 @@ class WakeWordService : Service() {
                 ).apply { description = "Persistent control for on-device wake-word listening" }
             )
         }
+        if (nm.getNotificationChannel(WAKE_ALERT_CHANNEL_ID) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    WAKE_ALERT_CHANNEL_ID,
+                    "Hey Hermes is listening",
+                    NotificationManager.IMPORTANCE_HIGH,
+                ).apply { description = "Wake alert that opens Chat when Hermes hears you" }
+            )
+        }
     }
 
     private fun notification(status: String): android.app.Notification {
@@ -453,6 +492,8 @@ class WakeWordService : Service() {
         private const val EXTRA_ACTIVE = "active"
         private const val CHANNEL_ID = "wake_word"
         private const val NOTIFICATION_ID = 1101
+        private const val WAKE_ALERT_CHANNEL_ID = "wake_alert"
+        private const val WAKE_ALERT_ID = 1102
 
         private fun actionIntent(context: Context, action: String) =
             Intent(context, WakeWordService::class.java).setAction(action)
@@ -484,9 +525,9 @@ class WakeWordService : Service() {
         }
 
         fun rearm(context: Context) {
-            if (WakeWordPrefs.isEnabled(context)) {
-                context.startService(actionIntent(context, ACTION_REARM))
-            }
+            // Always deliver: a disable issued mid-turn needs this to trigger
+            // the deferred stop. The service decides whether to re-arm or stop.
+            context.startService(actionIntent(context, ACTION_REARM))
         }
 
         fun updateSensitivity(context: Context) {
@@ -529,6 +570,54 @@ class WakeWordService : Service() {
             if (WakeWordPrefs.isEnabled(context)) {
                 context.startService(actionIntent(context, ACTION_SIMULATE_WAKE))
             }
+        }
+
+        /**
+         * Raise the wake alert directly from the coordinator — no service
+         * start, so it works while the app is in the background. The wake
+         * extra hands straight off to dictation; the plain tap is the
+         * fallback when Android refuses the background activity start.
+         */
+        fun postWakeAlert(context: Context) {
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) return
+            val open = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(MainActivity.EXTRA_WAKE, true)
+            }
+            val pi = PendingIntent.getActivity(
+                context, 2, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val alert = NotificationCompat.Builder(context, WAKE_ALERT_CHANNEL_ID)
+                .setSmallIcon(R.drawable.hermes_logo_circle)
+                .setContentTitle("Hey Hermes — listening")
+                .setContentText("Tap to speak your command")
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory("assistant")
+                .setFullScreenIntent(pi, true)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .build()
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            // Ensure the high-importance channel exists even if the service
+            // was never created in this process (cold start, background).
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm.getNotificationChannel(WAKE_ALERT_CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        WAKE_ALERT_CHANNEL_ID,
+                        "Hey Hermes is listening",
+                        NotificationManager.IMPORTANCE_HIGH,
+                    ).apply { description = "Wake alert that opens Chat when Hermes hears you" }
+                )
+            }
+            nm.notify(WAKE_ALERT_ID, alert)
+        }
+
+        fun cancelWakeAlert(context: Context) {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(WAKE_ALERT_ID)
         }
     }
 }

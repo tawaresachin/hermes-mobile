@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.Build
 import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -59,6 +60,7 @@ import com.hermes.mobile.ui.preview.previewKindFor
 import com.hermes.mobile.ui.screens.voice.VoiceCapture
 import com.hermes.mobile.ui.screens.voice.encodeWav
 import com.hermes.mobile.ui.components.AttachSheet
+import com.hermes.mobile.ui.components.AutoPlayAudio
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.components.MessageActionSheet
 import com.hermes.mobile.ui.components.ModelPickerSheet
@@ -109,6 +111,19 @@ class ChatViewModel @Inject constructor(
     /** Gateway STT for hands-free fallback on devices with no speech service. */
     suspend fun transcribeVoice(base64Wav: String): String =
         audioRepo.transcribeFromBase64(base64Wav)
+
+    /** Gateway TTS for spoken wake replies; null result means synthesis failed. */
+    fun speakReply(text: String, onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                onResult(audioRepo.speakToDataUrl(text, model = _currentModel.value))
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Exception) {
+                onResult(null)
+            }
+        }
+    }
 
     // ── Session state ──
     private val _sessionId = MutableStateFlow<String?>(null)
@@ -1317,6 +1332,11 @@ fun ChatScreen(
     val wakeArmed by WakeWordBus.enabled.collectAsState()
     var wakeTurnPending by remember { mutableStateOf(false) }
     var wakeNewSessionPending by remember { mutableStateOf(false) }
+    // Snapshot of the assistant's streamed text, used for the spoken wake
+    // reply once the turn settles (the live field is cleared at that point).
+    var lastStreamingReply by remember { mutableStateOf("") }
+    // Non-null while a spoken wake reply is playing; re-arm waits for completion.
+    var ttsUrl by remember { mutableStateOf<String?>(null) }
     val serverCommands by vm.serverCommands.collectAsState()
     val queuedIds by vm.queuedIds.collectAsState()
     val connectionStatus by vm.connectionStatus.collectAsState()
@@ -1348,6 +1368,13 @@ fun ChatScreen(
         if (errorMessage != null)
             com.hermes.mobile.ui.haptics.Haptics.error(chatHaptics, context)
     }
+    // Remember the assistant's text while it streams so it can be spoken
+    // after the turn settles (when streamingContent is cleared).
+    LaunchedEffect(streamingContent, isStreaming) {
+        if (isStreaming && !streamingContent.isNullOrBlank()) {
+            lastStreamingReply = streamingContent!!.trim()
+        }
+    }
     var lastStreaming by remember { mutableStateOf(false) }
     LaunchedEffect(isStreaming) {
         val wasStreaming = lastStreaming
@@ -1357,8 +1384,57 @@ fun ChatScreen(
         }
         if (wasStreaming && !isStreaming) {
             com.hermes.mobile.ui.haptics.Haptics.success(chatHaptics, context)
-            WakeWordService.rearm(context)
-            wakeTurnPending = false
+            // Prefer the finalized message; the streaming snapshot can be
+            // cleared before this effect observes the end of the run.
+            val finalized = messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+                ?.content?.trim().takeUnless { it.isNullOrBlank() }
+            val reply = finalized ?: lastStreamingReply
+            val ringerMode =
+                (context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.ringerMode
+            val silent = ringerMode == AudioManager.RINGER_MODE_SILENT ||
+                ringerMode == AudioManager.RINGER_MODE_VIBRATE
+            if (wakeTurnPending && WakeWordPrefs.speakReplies(context) && !silent &&
+                reply.isNotBlank()
+            ) {
+                // Speak first; AutoPlayAudio re-arms on completion so the mic
+                // never competes with the device speaker. Synthesis failure
+                // must also re-arm or the mic stays paused forever.
+                vm.speakReply(reply) { url ->
+                    if (url == null) {
+                        wakeTurnPending = false
+                        WakeWordService.rearm(context)
+                    } else {
+                        ttsUrl = url
+                    }
+                }
+            } else {
+                // Silent/vibrate, speech disabled, or no reply: the turn owns
+                // no player, so re-arm here even when this was a wake turn.
+                WakeWordService.rearm(context)
+                wakeTurnPending = false
+            }
+        }
+    }
+
+    // Headless one-shot playback of a wake reply, then re-arm.
+    if (ttsUrl != null) {
+        AutoPlayAudio(
+            dataUrl = ttsUrl!!,
+            onFinished = {
+                ttsUrl = null
+                lastStreamingReply = ""
+                wakeTurnPending = false
+                WakeWordService.rearm(context)
+            },
+            onError = { vm.setError("Voice: $it") }
+        )
+    }
+    // Leaving Chat mid-playback skips onFinished; never leave the mic paused.
+    // Updated state avoids a second re-arm when ttsUrl clears on completion.
+    val ttsActiveOnExit by rememberUpdatedState(ttsUrl != null)
+    DisposableEffect(Unit) {
+        onDispose {
+            if (ttsActiveOnExit) WakeWordService.rearm(context)
         }
     }
     LaunchedEffect(lastDeletedMsg?.id) {
@@ -1606,6 +1682,9 @@ fun ChatScreen(
         stopHandsFreeDictation()
         handsFree = false
         pendingHandsFree = false
+        // Clear any reply text from the previous wake before dictating again.
+        ttsUrl = null
+        lastStreamingReply = ""
         wakeTurnPending = true
         if (ContextCompat.checkSelfPermission(
                 context, Manifest.permission.RECORD_AUDIO
@@ -1624,9 +1703,12 @@ fun ChatScreen(
         }
     }
 
+    // The app-scoped coordinator in MainNavigation is the sole consumer of
+    // WakeWordBus.wakes; it forwards the hand-off here as a consumable counter.
     LaunchedEffect(Unit) {
-        WakeWordBus.wakes.filter { it > 0 }.collect {
-            WakeWordBus.consumeWake()
+        WakeWordBus.chatWakes.collect { count ->
+            if (count <= 0L) return@collect
+            WakeWordBus.consumeChatWake()
             handleWake()
         }
     }
@@ -1646,9 +1728,12 @@ fun ChatScreen(
         val started = withTimeoutOrNull(10_000) {
             snapshotFlow { isStreaming }.first { it }
         }
-        if (started == true) snapshotFlow { isStreaming }.first { !it }
-        WakeWordService.rearm(context)
-        wakeTurnPending = false
+        if (started == null) {
+            // No command was spoken — re-arm and end the turn. When a turn
+            // does start, the isStreaming effect owns re-arm (after TTS).
+            WakeWordService.rearm(context)
+            wakeTurnPending = false
+        }
     }
 
     // Initialise session — read pending session once on creation. The id

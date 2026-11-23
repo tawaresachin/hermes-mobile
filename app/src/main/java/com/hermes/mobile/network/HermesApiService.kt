@@ -1739,8 +1739,9 @@ class HermesApiService @Inject constructor(
         val url = "$baseUrl/api/audio/speak"
         val requestJson = JSONObject()
         requestJson.put("text", text)
+        // The plugin's /api/audio/speak contract names the TTS voice "profile".
         if (model != null && model.isNotEmpty()) {
-            requestJson.put("model", model)
+            requestJson.put("profile", model)
         }
         val payload = requestJson.toString()
         return withContext(Dispatchers.IO) {

@@ -13,6 +13,8 @@ import androidx.compose.animation.VectorConverter
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -402,6 +404,21 @@ fun HomeScreen(
                             )
                         }
                     }
+                }
+            }
+            // DEBUG-only: exercise the global wake path from Home (Chat hidden).
+            if (com.hermes.mobile.BuildConfig.DEBUG) {
+                item(key = "debug_simulate_wake") {
+                    androidx.compose.material3.Text(
+                        text = "Simulate Hey Hermes wake",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                        color = com.hermes.mobile.ui.theme.HermesPrimary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { com.hermes.mobile.wake.WakeWordService.simulateWake(context) }
+                            .semantics { contentDescription = "Simulate Hey Hermes wake" }
+                            .padding(horizontal = 20.dp, vertical = 12.dp)
+                    )
                 }
             }
         }

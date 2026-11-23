@@ -65,6 +65,7 @@ fun SettingsScreen(
     var wakeSensitivity by remember { mutableStateOf(WakeWordPrefs.sensitivity(context)) }
     var wakeNewSession by remember { mutableStateOf(WakeWordPrefs.startNewSessionOnWake(context)) }
     var wakeBackground by remember { mutableStateOf(WakeWordPrefs.backgroundListening(context)) }
+    var wakeSpeakReplies by remember { mutableStateOf(WakeWordPrefs.speakReplies(context)) }
 
     fun enableWake() {
         WakeWordService.start(context)
@@ -636,6 +637,16 @@ fun SettingsScreen(
                     onCheckedChange = {
                         wakeBackground = it
                         WakeWordPrefs.setBackgroundListening(context, it)
+                    }
+                )
+                SettingsToggle(
+                    icon = Icons.Filled.VolumeUp,
+                    title = "Speak replies",
+                    subtitle = if (wakeSpeakReplies) "Hermes answers out loud after a wake" else "Replies stay on screen only",
+                    checked = wakeSpeakReplies,
+                    onCheckedChange = {
+                        wakeSpeakReplies = it
+                        WakeWordPrefs.setSpeakReplies(context, it)
                     }
                 )
                 Text(

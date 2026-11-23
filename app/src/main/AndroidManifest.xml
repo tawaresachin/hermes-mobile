@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Full-screen wake alert when a wake lands while Chat is hidden. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- In-app self-update: launch the system installer for a downloaded
          release APK (Settings → About → Update). One-time user grant via
          the "install unknown apps" screen Android shows itself. -->

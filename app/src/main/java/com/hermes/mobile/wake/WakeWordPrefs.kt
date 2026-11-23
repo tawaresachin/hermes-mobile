@@ -9,6 +9,7 @@ object WakeWordPrefs {
     private const val KEY_SENSITIVITY = "sensitivity"
     private const val KEY_NEW_SESSION = "new_session_on_wake"
     private const val KEY_BACKGROUND = "background_listening"
+    private const val KEY_SPEAK_REPLIES = "speak_replies"
 
     const val MIN_SENSITIVITY = 0.5f
     const val MAX_SENSITIVITY = 0.9f
@@ -37,8 +38,15 @@ object WakeWordPrefs {
         prefs(context).edit().putBoolean(KEY_NEW_SESSION, value).apply()
 
     fun backgroundListening(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_BACKGROUND, false)
+        prefs(context).getBoolean(KEY_BACKGROUND, true)
 
     fun setBackgroundListening(context: Context, value: Boolean) =
         prefs(context).edit().putBoolean(KEY_BACKGROUND, value).apply()
+
+    /** Speak each assistant reply after a hands-free wake turn (default on). */
+    fun speakReplies(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SPEAK_REPLIES, true)
+
+    fun setSpeakReplies(context: Context, value: Boolean) =
+        prefs(context).edit().putBoolean(KEY_SPEAK_REPLIES, value).apply()
 }

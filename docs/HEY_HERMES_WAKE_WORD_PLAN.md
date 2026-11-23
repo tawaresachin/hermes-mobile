@@ -76,3 +76,28 @@ pause while a turn owns the mic, resume when idle, optional new session).
 ## Attribution
 Bundled models: openWakeWord (Apache-2.0) + Hermes `hey_hermes.tflite`; include
 `NOTICE`/asset README with provenance.
+
+## Always-on mode (Settings toggle = master arm)
+
+Feasible, with these constraints and decisions:
+
+- **Master switch**: enabling "Hey Hermes" in Settings starts the microphone foreground
+  service immediately and persists. Any cold start of the app re-arms it automatically;
+  disabling stops the service and removes the notification. The Chat long-press remains a
+  manual session override, not a second button.
+- **Wake from anywhere**: a single app-scoped coordinator listens to wake events. If Chat
+  is visible it starts dictation directly; otherwise it posts a high-priority
+  "Hey Hermes — listening" notification with a full-screen intent to MainActivity
+  (assistant use case), which navigates to Chat and starts dictation. If the OS refuses
+  the background activity start, the notification tap is the fallback.
+- **Full voice turn**: wake → dictation auto-send → assistant stream → spoken reply through
+  the existing gateway TTS endpoint (reuse VoiceViewModel/AutoPlayAudio), then re-arm.
+  A "Speak replies" setting (default on) gates speech; silent mode still re-arms.
+- **Mic exclusivity**: detector pauses for dictation/voice screen/assistant turn and
+  resumes when idle (already modelled by WakeWordRunController).
+- **Limits**: Android 14+ restricts while-in-use mic services started from the background;
+  arming from Settings, a visible app start, or a foreground service already running is
+  allowed. Reboot auto-start is a separate, optional boot receiver (documented; may be
+  rejected by OEMs) — default off.
+- **Testing**: debug simulate-wake drives coordinator → Chat → dictation → TTS → re-arm,
+  plus a background/wake-notification case; unit tests for coordinator transitions.
