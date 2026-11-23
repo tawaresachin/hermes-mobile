@@ -41,7 +41,7 @@ import kotlinx.coroutines.flow.*
 // Input bar
 // ═══════════════════════════════════════════════════════════════
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun InputBar(
     inputText: String,
@@ -50,6 +50,8 @@ fun InputBar(
     onVoice: () -> Unit,
     handsFree: Boolean = false,
     onToggleHandsFree: () -> Unit = {},
+    wakeArmed: Boolean = false,
+    onToggleWake: () -> Unit = {},
     onEmoji: (String) -> Unit,
     onAttach: () -> Unit,
     pendingAttachments: List<PendingAttachment>,
@@ -204,21 +206,40 @@ fun InputBar(
                         )
                     }
 
-                    // ── 4. Hands-free voice toggle (waveform, keeps listening) ──
-                    IconButton(
-                        onClick = onToggleHandsFree,
+                    // ── 4. Hands-free voice: tap = continuous dictation,
+                    // hold = arm/disarm "Hey Hermes". One control, two modes —
+                    // no second wake-word button. ──
+                    Box(
+                        contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .size(40.dp)
+                            .clip(CircleShape)
+                            .combinedClickable(
+                                enabled = enabled,
+                                onClick = onToggleHandsFree,
+                                onLongClick = onToggleWake
+                            )
                             .semantics {
-                                contentDescription =
-                                    if (handsFree) "Stop hands-free voice" else "Hands-free voice"
-                            },
-                        enabled = enabled
+                                contentDescription = when {
+                                    wakeArmed -> "Listening for Hey Hermes. Tap to stop."
+                                    handsFree -> "Stop hands-free voice. Hold for Hey Hermes."
+                                    else -> "Hands-free voice. Hold for Hey Hermes."
+                                }
+                            }
                     ) {
                         WaveformIcon(
-                            active = handsFree,
+                            active = handsFree || wakeArmed,
                             modifier = Modifier.size(24.dp)
                         )
+                        if (wakeArmed) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 7.dp, end = 7.dp)
+                                    .size(7.dp)
+                                    .background(HermesPrimary, CircleShape)
+                            )
+                        }
                     }
 
                     // ── 5. Mic / Send (alternate in the same slot — like Telegram) ──

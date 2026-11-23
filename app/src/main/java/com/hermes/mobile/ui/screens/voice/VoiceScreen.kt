@@ -56,6 +56,7 @@ import com.hermes.mobile.ui.components.ModelPickerSheet
 import com.hermes.mobile.ui.components.ModelPickerSheetWithContext
 import com.hermes.mobile.ui.screens.chat.ApprovalCard
 import com.hermes.mobile.ui.theme.HermesPrimary
+import com.hermes.mobile.wake.WakeWordService
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -115,6 +116,11 @@ fun VoiceScreen() {
     }
     DisposableEffect(Unit) {
         onDispose { capture.release() } // the mic must never outlive the screen
+    }
+    // Voice mode owns the mic while it is on; wake detection must not race it.
+    DisposableEffect(conversationOn) {
+        if (conversationOn) WakeWordService.setVoiceActive(context, true)
+        onDispose { WakeWordService.setVoiceActive(context, false) }
     }
     // Only the listening phase holds the mic open; every other phase
     // (thinking, speaking, paused) releases it — including TTS playback.

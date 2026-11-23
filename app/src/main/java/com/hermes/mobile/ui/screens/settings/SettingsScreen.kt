@@ -1,8 +1,10 @@
 package com.hermes.mobile.ui.screens.settings
 
+import android.Manifest
 import android.content.Intent
 import java.io.File
 import android.net.Uri
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,15 +25,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ConnectionStatus
+import com.hermes.mobile.wake.WakeWordBus
+import com.hermes.mobile.wake.WakeWordPrefs
+import com.hermes.mobile.wake.WakeWordService
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.theme.*
 import com.journeyapps.barcodescanner.ScanContract
@@ -51,6 +59,63 @@ fun SettingsScreen(
     val chatFontManual by viewModel.chatFontManual.collectAsState()
     val scrollState = rememberScrollState()
     val context = LocalContext.current
+
+    LaunchedEffect(Unit) { WakeWordBus.publishEnabled(WakeWordPrefs.isEnabled(context)) }
+    val wakeEnabled by WakeWordBus.enabled.collectAsState()
+    var wakeSensitivity by remember { mutableStateOf(WakeWordPrefs.sensitivity(context)) }
+    var wakeNewSession by remember { mutableStateOf(WakeWordPrefs.startNewSessionOnWake(context)) }
+    var wakeBackground by remember { mutableStateOf(WakeWordPrefs.backgroundListening(context)) }
+
+    fun enableWake() {
+        WakeWordService.start(context)
+        WakeWordBus.publishEnabled(true)
+    }
+    fun disableWake() {
+        WakeWordService.stop(context)
+        WakeWordBus.publishEnabled(false)
+    }
+
+    val wakeNotificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) enableWake()
+        else {
+            viewModel.setError("Notifications are needed for the wake-word control")
+            WakeWordBus.publishEnabled(false)
+        }
+    }
+    val wakeMicLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            viewModel.setError("Microphone permission is needed for Hey Hermes")
+            WakeWordBus.publishEnabled(false)
+            return@rememberLauncherForActivityResult
+        }
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            wakeNotificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            enableWake()
+        }
+    }
+    fun requestWakePermissions() {
+        if (ContextCompat.checkSelfPermission(
+                context, Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            wakeMicLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            wakeNotificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            enableWake()
+        }
+    }
 
     // Load the host computer's keep-awake state on screen open (idempotent,
     // silent when not connected yet).
@@ -335,7 +400,10 @@ fun SettingsScreen(
                             }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        TextButton(onClick = { viewModel.logout() }) {
+                        TextButton(onClick = {
+                            WakeWordService.stop(context)
+                            viewModel.logout()
+                        }) {
                             Icon(Icons.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Log Out")
@@ -512,6 +580,87 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // ─── 6b. WAKE WORD (on-device, no audio leaves the phone) ───
+            SettingsSection("Wake word") {
+                SettingsToggle(
+                    icon = Icons.Filled.Mic,
+                    title = "Hey Hermes",
+                    subtitle = if (wakeEnabled) "Listening on this device" else "Off",
+                    checked = wakeEnabled,
+                    onCheckedChange = { on -> if (on) requestWakePermissions() else disableWake() }
+                )
+                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Sensitivity",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(
+                            "%.2f".format(wakeSensitivity),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = HermesPrimary
+                        )
+                    }
+                    Slider(
+                        value = wakeSensitivity,
+                        onValueChange = {
+                            wakeSensitivity = it
+                            WakeWordPrefs.setSensitivity(context, it)
+                            WakeWordService.updateSensitivity(context)
+                        },
+                        valueRange = WakeWordPrefs.MIN_SENSITIVITY..WakeWordPrefs.MAX_SENSITIVITY,
+                        steps = 4,
+                        colors = SliderDefaults.colors(
+                            thumbColor = HermesPrimary,
+                            activeTrackColor = HermesPrimary
+                        )
+                    )
+                }
+                SettingsToggle(
+                    icon = Icons.Filled.Chat,
+                    title = "Start a new chat when I say Hey Hermes",
+                    subtitle = if (wakeNewSession) "Fresh chat for each wake" else "Use the current chat",
+                    checked = wakeNewSession,
+                    onCheckedChange = {
+                        wakeNewSession = it
+                        WakeWordPrefs.setStartNewSessionOnWake(context, it)
+                    }
+                )
+                SettingsToggle(
+                    icon = Icons.Filled.Public,
+                    title = "Listen in the background",
+                    subtitle = if (wakeBackground) "Keeps listening when the app is closed" else "Only while Hermes is open",
+                    checked = wakeBackground,
+                    onCheckedChange = {
+                        wakeBackground = it
+                        WakeWordPrefs.setBackgroundListening(context, it)
+                    }
+                )
+                Text(
+                    text = "Privacy: wake audio is processed on this device only. " +
+                        "No audio is stored, uploaded, or logged.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+                if (com.hermes.mobile.BuildConfig.DEBUG) {
+                    WakeWordSelfTestRow()
+                    Text(
+                        text = "Simulate wake",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = HermesPrimary,
+                        modifier = Modifier
+                            .clickable { WakeWordService.simulateWake(context) }
+                            .semantics { contentDescription = "Simulate Hey Hermes wake" }
+                            .padding(vertical = 8.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             // ─── 7. SERVER (update + cron jobs + skills, live from gateway) ───
             SettingsSection("Server") {
                 ServerListsPanel(viewModel = viewModel, uiState = uiState)
@@ -639,11 +788,6 @@ fun SettingsScreen(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 HermesAgentAboutRow(viewModel = viewModel)
-                // Debug-only: prove the detector against bundled WAVs on mac.apk.
-                if (com.hermes.mobile.BuildConfig.DEBUG) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    WakeWordSelfTestRow()
-                }
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Plain text buttons (no box)

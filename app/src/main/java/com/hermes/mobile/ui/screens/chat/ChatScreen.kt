@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -65,6 +66,10 @@ import com.hermes.mobile.ui.components.ModelPickerSheetWithContext
 import com.hermes.mobile.ui.components.ReplyBar
 import com.hermes.mobile.R
 import com.hermes.mobile.ui.theme.*
+import com.hermes.mobile.wake.WakePauseReason
+import com.hermes.mobile.wake.WakeWordBus
+import com.hermes.mobile.wake.WakeWordPrefs
+import com.hermes.mobile.wake.WakeWordService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -1300,6 +1305,7 @@ fun ChatScreen(
         onDispose {
             stopActiveDictation()
             stopHandsFreeDictation()
+            WakeWordService.resume(context, WakePauseReason.Dictation)
             // Stop the 5s response poller when leaving the chat.
             vm.stopResponsePolling()
         }
@@ -1308,6 +1314,9 @@ fun ChatScreen(
     val messages by vm.messages.collectAsState()
     val streamingContent by vm.streamingContent.collectAsState()
     val isStreaming by vm.isStreaming.collectAsState()
+    val wakeArmed by WakeWordBus.enabled.collectAsState()
+    var wakeTurnPending by remember { mutableStateOf(false) }
+    var wakeNewSessionPending by remember { mutableStateOf(false) }
     val serverCommands by vm.serverCommands.collectAsState()
     val queuedIds by vm.queuedIds.collectAsState()
     val connectionStatus by vm.connectionStatus.collectAsState()
@@ -1343,8 +1352,14 @@ fun ChatScreen(
     LaunchedEffect(isStreaming) {
         val wasStreaming = lastStreaming
         lastStreaming = isStreaming
-        if (wasStreaming && !isStreaming)
+        if (!wasStreaming && isStreaming) {
+            WakeWordService.pause(context, WakePauseReason.AssistantTurn)
+        }
+        if (wasStreaming && !isStreaming) {
             com.hermes.mobile.ui.haptics.Haptics.success(chatHaptics, context)
+            WakeWordService.rearm(context)
+            wakeTurnPending = false
+        }
     }
     LaunchedEffect(lastDeletedMsg?.id) {
         val msg = lastDeletedMsg ?: return@LaunchedEffect
@@ -1488,6 +1503,7 @@ fun ChatScreen(
         pendingHandsFree = false
         if (granted) {
             if (wasHandsFree) {
+                WakeWordService.pause(context, WakePauseReason.Dictation)
                 handsFree = true
                 startHandsFreeDictation(
                     context = context,
@@ -1503,6 +1519,7 @@ fun ChatScreen(
                     },
                     onError = { msg ->
                         handsFree = false
+                        WakeWordService.resume(context, WakePauseReason.Dictation)
                         vm.setError("Voice: $msg")
                     }
                 )
@@ -1524,6 +1541,114 @@ fun ChatScreen(
         } else {
             vm.setError("Microphone permission denied")
         }
+    }
+
+    // Chat is the primary place to arm wake: one tap, with the same
+    // permission gate as Settings, then the foreground service takes over.
+    val wakeArmLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val mic = grants[Manifest.permission.RECORD_AUDIO] == true
+        val notifications = Build.VERSION.SDK_INT < 33 ||
+            grants[Manifest.permission.POST_NOTIFICATIONS] == true
+        if (mic && notifications) {
+            WakeWordService.start(context)
+        } else {
+            wakeTurnPending = false
+            vm.setError(
+                if (!mic) "Microphone permission is needed for Hey Hermes"
+                else "Notifications are needed for Hey Hermes"
+            )
+        }
+    }
+    fun requestWakeArm() {
+        val needMic = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO
+        ) != PackageManager.PERMISSION_GRANTED
+        val needNotifications = Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+            context, Manifest.permission.POST_NOTIFICATIONS
+        ) != PackageManager.PERMISSION_GRANTED
+        if (!needMic && !needNotifications) {
+            WakeWordService.start(context)
+            return
+        }
+        wakeArmLauncher.launch(buildList {
+            if (needMic) add(Manifest.permission.RECORD_AUDIO)
+            if (needNotifications) add(Manifest.permission.POST_NOTIFICATIONS)
+        }.toTypedArray())
+    }
+
+    fun startWakeDictation() {
+        handsFree = true
+        startHandsFreeDictation(
+            context = context,
+            transcribe = { b64 -> vm.transcribeVoice(b64) },
+            onPartial = { text -> inputText = text },
+            onFinal = { text ->
+                if (text.isNotBlank()) {
+                    vm.sendMessage(text.trim(), replyTo = pendingReply)
+                    pendingReply = null
+                    sessionIdState?.let { DraftStore.clear(it) }
+                }
+                inputText = ""
+            },
+            onError = { msg ->
+                handsFree = false
+                wakeTurnPending = false
+                WakeWordService.rearm(context)
+                vm.setError("Voice: $msg")
+            }
+        )
+    }
+
+    fun handleWake() {
+        com.hermes.mobile.ui.haptics.Haptics.press(chatHaptics)
+        stopHandsFreeDictation()
+        handsFree = false
+        pendingHandsFree = false
+        wakeTurnPending = true
+        if (ContextCompat.checkSelfPermission(
+                context, Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            wakeTurnPending = false
+            vm.setError("Microphone permission is needed for hands-free voice")
+            WakeWordService.rearm(context)
+            return
+        }
+        if (WakeWordPrefs.startNewSessionOnWake(context)) {
+            wakeNewSessionPending = true
+            vm.newChat()
+        } else {
+            startWakeDictation()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        WakeWordBus.wakes.filter { it > 0 }.collect {
+            WakeWordBus.consumeWake()
+            handleWake()
+        }
+    }
+
+    LaunchedEffect(wakeNewSessionPending) {
+        if (!wakeNewSessionPending) return@LaunchedEffect
+        val previous = sessionIdState
+        withTimeoutOrNull(3_000) {
+            snapshotFlow { sessionIdState }.first { it != null && it != previous }
+        }
+        wakeNewSessionPending = false
+        startWakeDictation()
+    }
+
+    LaunchedEffect(wakeTurnPending) {
+        if (!wakeTurnPending) return@LaunchedEffect
+        val started = withTimeoutOrNull(10_000) {
+            snapshotFlow { isStreaming }.first { it }
+        }
+        if (started == true) snapshotFlow { isStreaming }.first { !it }
+        WakeWordService.rearm(context)
+        wakeTurnPending = false
     }
 
     // Initialise session — read pending session once on creation. The id
@@ -2181,6 +2306,7 @@ fun ChatScreen(
             },
             onVoice = {
                 // Request mic permission, then start inline voice dictation
+                WakeWordService.pause(context, WakePauseReason.Dictation)
                 stopHandsFreeDictation()
                 handsFree = false
                 if (ContextCompat.checkSelfPermission(
@@ -2190,6 +2316,7 @@ fun ChatScreen(
                         context = context,
                         transcribe = { b64 -> vm.transcribeVoice(b64) },
                         onFinalText = { text ->
+                            WakeWordService.resume(context, WakePauseReason.Dictation)
                             if (text.isNotBlank()) {
                                 inputText = text
                                 vm.sendMessage(text.trim(), replyTo = pendingReply)
@@ -2197,20 +2324,28 @@ fun ChatScreen(
                                 inputText = ""
                             }
                         },
-                        onError = { msg -> vm.setError("Voice: $msg") }
+                        onError = { msg ->
+                            WakeWordService.resume(context, WakePauseReason.Dictation)
+                            vm.setError("Voice: $msg")
+                        }
                     )
                 } else {
+                    WakeWordService.resume(context, WakePauseReason.Dictation)
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
             },
             handsFree = handsFree,
+            wakeArmed = wakeArmed,
+            onToggleWake = { if (wakeArmed) WakeWordService.stop(context) else requestWakeArm() },
             onToggleHandsFree = {
                 if (handsFree) {
                     stopHandsFreeDictation()
                     handsFree = false
+                    WakeWordService.resume(context, WakePauseReason.Dictation)
                 } else if (ContextCompat.checkSelfPermission(
                         context, Manifest.permission.RECORD_AUDIO
                     ) == PackageManager.PERMISSION_GRANTED) {
+                    WakeWordService.pause(context, WakePauseReason.Dictation)
                     handsFree = true
                     startHandsFreeDictation(
                         context = context,
@@ -2226,6 +2361,7 @@ fun ChatScreen(
                         },
                         onError = { msg ->
                             handsFree = false
+                            WakeWordService.resume(context, WakePauseReason.Dictation)
                             vm.setError("Voice: $msg")
                         }
                     )

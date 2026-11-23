@@ -15,6 +15,7 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- Android 14+ requires this for local network access -->
 
     <!-- Android 11+ package visibility: required to detect Tailscale via getPackageInfo -->
@@ -41,6 +42,11 @@
             android:name=".notifications.ResponseWatcherService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".wake.WakeWordService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- Attachment viewer fallback: expose cache files to the system
              viewer via content:// URIs (no storage permission needed). -->

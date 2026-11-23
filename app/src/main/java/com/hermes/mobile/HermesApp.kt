@@ -40,10 +40,20 @@ class HermesApp : Application(), ImageLoaderFactory {
         // Foreground tracking for the response-notification (only ping when
         // the user is NOT looking at the app).
         registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
-            override fun onActivityStarted(activity: android.app.Activity) =
+            override fun onActivityStarted(activity: android.app.Activity) {
                 com.hermes.mobile.notifications.AppForeground.onActivityStarted()
-            override fun onActivityStopped(activity: android.app.Activity) =
+                com.hermes.mobile.wake.WakeWordService.setAppForeground(
+                    activity.applicationContext,
+                    com.hermes.mobile.notifications.AppForeground.isForeground
+                )
+            }
+            override fun onActivityStopped(activity: android.app.Activity) {
                 com.hermes.mobile.notifications.AppForeground.onActivityStopped()
+                com.hermes.mobile.wake.WakeWordService.setAppForeground(
+                    activity.applicationContext,
+                    com.hermes.mobile.notifications.AppForeground.isForeground
+                )
+            }
             override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
             override fun onActivityResumed(activity: android.app.Activity) {}
             override fun onActivityPaused(activity: android.app.Activity) {}

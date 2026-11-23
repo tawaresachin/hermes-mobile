@@ -29,6 +29,8 @@ class MainActivity : ComponentActivity() {
         ) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 42)
         }
+        // Re-arm a previously enabled wake word now that we are foreground.
+        com.hermes.mobile.wake.WakeWordService.reconcile(this)
         // Deep link from the "response ready" notification → open the session.
         val deepLinkSession = intent.getStringExtra(EXTRA_SESSION_ID)
         setContent {
