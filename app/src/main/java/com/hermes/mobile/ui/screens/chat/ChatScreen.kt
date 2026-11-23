@@ -66,6 +66,7 @@ import com.hermes.mobile.ui.components.ModelPickerSheetWithContext
 import com.hermes.mobile.ui.components.ReplyBar
 import com.hermes.mobile.R
 import com.hermes.mobile.ui.theme.*
+import com.hermes.mobile.wake.WakeDictationTracker
 import com.hermes.mobile.wake.WakePauseReason
 import com.hermes.mobile.wake.WakeWordBus
 import com.hermes.mobile.wake.WakeWordService
@@ -1580,10 +1581,14 @@ fun ChatScreen(
 
     fun startWakeDictation() {
         handsFree = true
+        val silenceTracker = WakeDictationTracker()
         startHandsFreeDictation(
             context = context,
             transcribe = { b64 -> vm.transcribeVoice(b64) },
-            onPartial = { text -> inputText = text },
+            onPartial = { text ->
+                if (text.isNotBlank()) silenceTracker.onSpeech()
+                inputText = text
+            },
             onFinal = { text ->
                 handsFree = false
                 if (text.isNotBlank()) {
@@ -1597,9 +1602,10 @@ fun ChatScreen(
                 handsFree = false
                 wakeTurnPending = false
                 WakeWordService.rearm(context)
-                vm.setError("Voice: $msg")
+                vm.setError(if (msg == WakeDictationTracker.STOPPED_LABEL) msg else "Voice: $msg")
             },
-            stopAfterFirst = true
+            stopAfterFirst = true,
+            silenceTracker = silenceTracker,
         )
     }
 
@@ -1635,7 +1641,9 @@ fun ChatScreen(
 
     LaunchedEffect(wakeTurnPending) {
         if (!wakeTurnPending) return@LaunchedEffect
-        val started = withTimeoutOrNull(10_000) {
+        // Two silent recognizer attempts can take longer than one timeout;
+        // the fallback re-arms only if no command ever started.
+        val started = withTimeoutOrNull(20_000) {
             snapshotFlow { isStreaming }.first { it }
         }
         if (started == null) {
@@ -2569,6 +2577,10 @@ private fun speechErrorText(error: Int): String = when (error) {
     else -> "Voice error ($error)"
 }
 
+private fun isSilentSpeechError(error: Int) =
+    error == android.speech.SpeechRecognizer.ERROR_NO_MATCH ||
+        error == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+
 private fun startVoiceDictation(
     context: android.content.Context,
     transcribe: suspend (String) -> String,
@@ -2669,7 +2681,8 @@ private fun startHandsFreeDictation(
     onPartial: (String) -> Unit,
     onFinal: (String) -> Unit,
     onError: (String) -> Unit,
-    stopAfterFirst: Boolean = false
+    stopAfterFirst: Boolean = false,
+    silenceTracker: WakeDictationTracker? = null,
 ) {
     if (!android.speech.SpeechRecognizer.isRecognitionAvailable(context)) {
         startFallbackDictation(transcribe, onFinal, onError, stopAfterFirst = stopAfterFirst)
@@ -2710,7 +2723,10 @@ private fun startHandsFreeDictation(
                     ?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
                     ?.takeIf { it.isNotBlank() }
-                    ?.let(onPartial)
+                    ?.let { text ->
+                        silenceTracker?.onSpeech()
+                        onPartial(text)
+                    }
             }
             override fun onResults(results: android.os.Bundle?) {
                 if (!handsFreeActive) return
@@ -2719,7 +2735,20 @@ private fun startHandsFreeDictation(
                     ?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
                     .orEmpty()
-                if (text.isNotBlank()) onFinal(text)
+                if (text.isNotBlank()) {
+                    silenceTracker?.onSpeech()
+                    onFinal(text)
+                } else if (silenceTracker != null) {
+                    // An empty final is a silent attempt. Only the second
+                    // consecutive one ends the wake turn.
+                    if (silenceTracker.onSilent()) {
+                        stopHandsFreeDictation()
+                        onError(WakeDictationTracker.STOPPED_LABEL)
+                    } else {
+                        handsFreeHandler.postDelayed(restart, 400)
+                    }
+                    return
+                }
                 // A wake turn owns exactly one utterance. Leaving the recognizer
                 // alive would transcribe the next "Hey Hermes" as a command.
                 if (stopAfterFirst) {
@@ -2732,14 +2761,23 @@ private fun startHandsFreeDictation(
             }
             override fun onError(error: Int) {
                 if (!handsFreeActive) return
-                if (error == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
-                    stopAfterFirst
-                ) {
+                if (error == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
                     stopHandsFreeDictation()
-                    onError(
-                        if (error == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS)
-                            "Microphone permission denied" else speechErrorText(error)
-                    )
+                    onError("Microphone permission denied")
+                    return
+                }
+                if (stopAfterFirst) {
+                    if (silenceTracker != null && isSilentSpeechError(error)) {
+                        if (silenceTracker.onSilent()) {
+                            stopHandsFreeDictation()
+                            onError(WakeDictationTracker.STOPPED_LABEL)
+                        } else {
+                            handsFreeHandler.postDelayed(restart, 400)
+                        }
+                        return
+                    }
+                    stopHandsFreeDictation()
+                    onError(speechErrorText(error))
                     return
                 }
                 // Silence, busy, client and network failures are all normal

@@ -6,6 +6,8 @@ import java.io.File
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings as AndroidSettings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
@@ -37,6 +39,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.data.model.ConnectionStatus
+import com.hermes.mobile.wake.WakeDiagnostics
 import com.hermes.mobile.wake.WakeWordBus
 import com.hermes.mobile.wake.WakeWordPrefs
 import com.hermes.mobile.wake.WakeWordService
@@ -62,7 +65,10 @@ fun SettingsScreen(
 
     LaunchedEffect(Unit) { WakeWordBus.publishEnabled(WakeWordPrefs.isEnabled(context)) }
     val wakeEnabled by WakeWordBus.enabled.collectAsState()
+    val wakeDiagnostics by WakeWordBus.diagnostics.collectAsState()
     var wakeSensitivity by remember { mutableStateOf(WakeWordPrefs.sensitivity(context)) }
+    var wakeSound by remember { mutableStateOf(WakeWordPrefs.wakeSoundEnabled(context)) }
+    var wakeDiagnosticsExpanded by remember { mutableStateOf(false) }
 
     fun enableWake() {
         WakeWordService.start(context)
@@ -523,7 +529,7 @@ fun SettingsScreen(
                 SettingsToggle(
                     icon = Icons.Filled.Mic,
                     title = "Hey Hermes",
-                    subtitle = if (wakeEnabled) "Listening" else "Off",
+                    subtitle = if (wakeEnabled) "Listening for \"Hey Hermes\"" else "Off",
                     checked = wakeEnabled,
                     onCheckedChange = { on -> if (on) requestWakePermissions() else disableWake() }
                 )
@@ -534,7 +540,7 @@ fun SettingsScreen(
                         valueText = "%.2f".format(wakeSensitivity),
                         value = wakeSensitivity,
                         valueRange = WakeWordPrefs.MIN_SENSITIVITY..WakeWordPrefs.MAX_SENSITIVITY,
-                        steps = 4,
+                        steps = 11,
                         onValueChange = {
                             wakeSensitivity = it
                             WakeWordPrefs.setSensitivity(context, it)
@@ -543,24 +549,39 @@ fun SettingsScreen(
                     )
                 }
                 Text(
-                    text = "On-device only — no audio leaves your phone. " +
-                        "A mic notification shows while listening.",
+                    text = "On-device only — no audio leaves your phone. Android requires a mic notification while listening: it cannot hear the phrase without the microphone.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
-                if (com.hermes.mobile.BuildConfig.DEBUG) {
-                    WakeWordSelfTestRow()
-                    Text(
-                        text = "Simulate wake",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = HermesPrimary,
-                        modifier = Modifier
-                            .clickable { WakeWordService.simulateWake(context) }
-                            .semantics { contentDescription = "Simulate Hey Hermes wake" }
-                            .padding(vertical = 8.dp)
-                    )
-                }
+                WakeDiagnosticsPanel(
+                    expanded = wakeDiagnosticsExpanded,
+                    onExpandedChange = { wakeDiagnosticsExpanded = it },
+                    diagnostics = wakeDiagnostics,
+                    wakeSound = wakeSound,
+                    onWakeSoundChange = {
+                        wakeSound = it
+                        WakeWordPrefs.setWakeSoundEnabled(context, it)
+                    },
+                    onTestMic = { WakeWordService.testMic(context) },
+                    onSimulateWake = { WakeWordService.simulateWake(context) },
+                    onBatteryOptimization = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            val pm = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+                            if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
+                                val request = Intent(AndroidSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                                    .setData(Uri.parse("package:${context.packageName}"))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                val details = Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                    .setData(Uri.parse("package:${context.packageName}"))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                runCatching { context.startActivity(request) }
+                                    .onFailure { context.startActivity(details) }
+                            }
+                        }
+                    },
+                )
+                if (com.hermes.mobile.BuildConfig.DEBUG) WakeWordSelfTestRow()
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -994,5 +1015,114 @@ private fun ConnectionStatusHeader(
                 color = ErrorRed.copy(alpha = 0.8f)
             )
         }
+    }
+}
+
+@Composable
+private fun WakeDiagnosticsPanel(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    diagnostics: WakeDiagnostics,
+    wakeSound: Boolean,
+    onWakeSoundChange: (Boolean) -> Unit,
+    onTestMic: () -> Unit,
+    onSimulateWake: () -> Unit,
+    onBatteryOptimization: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .clickable { onExpandedChange(!expanded) }
+                .semantics { contentDescription = "Wake diagnostics" }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Wake diagnostics",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "${diagnostics.state} · RMS ${diagnostics.rms}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse wake diagnostics" else "Expand wake diagnostics",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        if (expanded) {
+            WakeDiagnosticLine("Source", diagnostics.source)
+            WakeDiagnosticLine("Max score", "%.4f".format(diagnostics.maxScore))
+            WakeDiagnosticLine("Fires", diagnostics.fires.toString())
+            WakeDiagnosticLine("Last result / error", diagnostics.lastError)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "Wake sound",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Switch(
+                    checked = wakeSound,
+                    onCheckedChange = onWakeSoundChange,
+                    modifier = Modifier.semantics { contentDescription = "Wake sound" },
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text(
+                    text = "Test mic",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = HermesPrimary,
+                    modifier = Modifier.clickable(onClick = onTestMic)
+                        .semantics { contentDescription = "Test wake microphone" },
+                )
+                Text(
+                    text = "Simulate wake",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = HermesPrimary,
+                    modifier = Modifier.clickable(onClick = onSimulateWake)
+                        .semantics { contentDescription = "Simulate Hey Hermes wake" },
+                )
+                Text(
+                    text = "Battery optimization",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = HermesPrimary,
+                    modifier = Modifier.clickable(onClick = onBatteryOptimization)
+                        .semantics { contentDescription = "Exempt Hermes from battery optimization" },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WakeDiagnosticLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(start = 12.dp),
+        )
     }
 }

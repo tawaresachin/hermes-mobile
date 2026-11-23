@@ -4,6 +4,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/** A snapshot of what the wake mic is actually doing, surfaced in Settings. */
+data class WakeDiagnostics(
+    val state: String = "Off",
+    val source: String = "—",
+    val rms: Int = 0,
+    val maxScore: Float = 0f,
+    val fires: Int = 0,
+    val lastError: String = "—",
+    val revision: Long = 0L,
+)
+
 /** Same-process signals between the foreground service and Compose UI.
  *  Every signal is a StateFlow counter so a cold-start event replays to a
  *  collector that subscribes after the event was published. */
@@ -23,7 +34,13 @@ object WakeWordBus {
     private val _chatWakes = MutableStateFlow(0L)
     val chatWakes: StateFlow<Long> = _chatWakes.asStateFlow()
 
+    /** Live capture facts for the release-visible diagnostics panel. */
+    private val _diagnostics = MutableStateFlow(WakeDiagnostics())
+    val diagnostics: StateFlow<WakeDiagnostics> = _diagnostics.asStateFlow()
+
     fun publishEnabled(value: Boolean) { _enabled.value = value }
+
+    fun publishDiagnostics(value: WakeDiagnostics) { _diagnostics.value = value }
 
     /** Called by the detector and by DEBUG's simulate-wake action. */
     fun emitWake() { _wakes.value += 1 }
