@@ -1072,7 +1072,9 @@ class SettingsViewModel @Inject constructor(
                             errorDetail = "Server is reachable but rejected this API key. Re-scan the QR or fix the key."
                         ) else it.copy(
                             connectionStatus = ConnectionStatus.ERROR,
-                            errorDetail = "Can't reach the server at this URL. Check the address/port (Tailscale IP:8642) and that the gateway is running."
+                            // Say WHICH address we tried — a Tailscale vs LAN
+                            // hint beats a bare "can't reach".
+                            errorDetail = "Can't reach $normalizedUrl — if this is a Tailscale address, start Tailscale on both devices; otherwise use the Same Wi-Fi address."
                         )
                     }
                 } else {
@@ -1098,11 +1100,11 @@ class SettingsViewModel @Inject constructor(
             } catch (e: Exception) {
                 val errorMsg = e.message ?: "Unknown error"
                 val actionableMsg = when {
-                    errorMsg.contains("timeout") -> "Connection timed out. Check the server URL and that the Hermes gateway is running."
-                    errorMsg.contains("refused") -> "Connection refused. Is the Hermes gateway running at this address?"
+                    errorMsg.contains("timeout") -> "Can't reach $normalizedUrl — connection timed out. Check the gateway is running."
+                    errorMsg.contains("refused") -> "Can't reach $normalizedUrl — connection refused. Is the gateway running at this address?"
                     errorMsg.contains("401") -> "API key rejected. Check the key in Settings → Account, or scan a fresh QR."
                     errorMsg.contains("403") -> "Access denied. Check your API key in Settings → Account."
-                    else -> "Connection failed. Check the URL and API key, or scan a fresh QR."
+                    else -> "Can't reach $normalizedUrl — check the URL and API key, or scan a fresh QR."
                 }
                 _uiState.update {
                     it.copy(connectionStatus = ConnectionStatus.ERROR, errorDetail = actionableMsg)

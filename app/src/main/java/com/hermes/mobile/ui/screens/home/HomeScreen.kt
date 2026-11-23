@@ -557,7 +557,7 @@ internal fun HomeHeader(
                 ConnectionStatus.CONNECTED -> "Connected"
                 ConnectionStatus.CONNECTING -> "Connecting…"
                 ConnectionStatus.DISCONNECTED -> "Disconnected"
-                ConnectionStatus.ERROR -> "Connection Error"
+                ConnectionStatus.ERROR -> if (serverUrl.isBlank()) "Connection Error" else "Can't reach $serverUrl"
             }
             Box(
                 modifier = Modifier
