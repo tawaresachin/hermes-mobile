@@ -27,6 +27,7 @@ import android.os.Vibrator
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.hermes.mobile.DiagLog
 import com.hermes.mobile.MainActivity
 import com.hermes.mobile.R
 import java.util.concurrent.ExecutorService
@@ -64,6 +65,8 @@ class WakeWordService : Service() {
     private var rms = 0
     private var fires = 0
     private var lastError = "—"
+    private var statusReason = ""
+    @Volatile private var startPending = false
     private var diagnosticsRevision = 0L
     private var heardYouUntil = 0L
     // Detector scores survive re-arm so the phrase that fired stays visible.
@@ -105,9 +108,25 @@ class WakeWordService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // A microphone FGS must call startForeground before Android's start
+        // window closes. Do it first; any throw becomes the visible reason.
+        if (intent?.action == ACTION_START) {
+            val failure = runCatching { postForeground(notification("Starting…")) }.exceptionOrNull()
+            if (failure != null) {
+                val reason = "${failure.javaClass.name}: ${failure.message ?: "no message"}"
+                DiagLog.e("WAKE", "startForeground failed: $reason")
+                failStart(reason)
+                return START_NOT_STICKY
+            }
+            startPending = true
+            statusReason = "starting microphone"
+            DiagLog.i("WAKE", "ACTION_START: foreground microphone service posted")
+        }
         when (intent?.action) {
             ACTION_START -> startListening()
             ACTION_STOP -> {
+                startPending = false
+                statusReason = ""
                 WakeWordPrefs.setEnabled(this, false)
                 WakeWordBus.publishEnabled(false)
                 // The alert belongs to the master switch, not to the in-progress
@@ -139,6 +158,15 @@ class WakeWordService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        // A service killed behind the app's back must not leave a false "On".
+        if (WakeWordPrefs.isEnabled(this)) {
+            DiagLog.e("WAKE", "service destroyed while still enabled")
+            statusReason = "wake service stopped"
+            WakeWordBus.publishStartFailed(statusReason)
+        } else {
+            statusReason = ""
+        }
+        startPending = false
         handler.removeCallbacksAndMessages(null)
         cancelRetry()
         controller.stop()
@@ -153,6 +181,7 @@ class WakeWordService : Service() {
             runCatching { audioManager?.unregisterAudioDeviceCallback(deviceCallback) }
             deviceCallbackRegistered = false
         }
+        WakeWordPrefs.setEnabled(this, false)
         WakeWordBus.publishEnabled(false)
         publishDiagnostics()
         cancelWakeAlert(this)
@@ -161,15 +190,18 @@ class WakeWordService : Service() {
     }
 
     private fun startListening() {
-        if (!hasMicrophone() || !hasNotifications()) {
-            disableAndStop()
+        // Notifications are requested but never required: an Android 13+
+        // microphone FGS runs even when its notification is hidden.
+        DiagLog.i("WAKE", "startListening: mic=${hasMicrophone()} notifications=${hasNotifications()} (optional)")
+        if (!hasMicrophone()) {
+            failStart("microphone permission revoked")
             return
         }
         if (!WakeWordPrefs.isEnabled(this)) {
+            startPending = false
             stopSelf()
             return
         }
-        postForeground(notification("Listening"))
         if (controller.currentState() == WakeRunState.Idle) controller.start()
         if (controller.currentState() == WakeRunState.Listening) startCaptureLocked()
         updateNotification()
@@ -178,6 +210,8 @@ class WakeWordService : Service() {
     private fun pause(reason: WakePauseReason) {
         if (controller.currentState() == WakeRunState.Idle) return
         controller.pause(reason)
+        statusReason = WakeStatusText.pauseReason(reason.name)
+        DiagLog.i("WAKE", "paused: ${statusReason}")
         cancelRetry()
         stopCaptureLocked()
         updateNotification()
@@ -185,7 +219,10 @@ class WakeWordService : Service() {
 
     private fun resume(reason: WakePauseReason) {
         val state = controller.resume(reason)
-        if (state == WakeRunState.Listening) startCaptureLocked()
+        if (state == WakeRunState.Listening) {
+            statusReason = ""
+            startCaptureLocked()
+        }
         updateNotification()
     }
 
@@ -207,8 +244,8 @@ class WakeWordService : Service() {
     private fun setAppForeground(foreground: Boolean) {
         // A permission revoked in Settings while the app was away takes
         // effect on return: stop cleanly instead of leaving a dead mic alert.
-        if (foreground && (!hasMicrophone() || !hasNotifications())) {
-            disableAndStop()
+        if (foreground && !hasMicrophone()) {
+            failStart("microphone permission revoked")
             return
         }
         // One toggle means always armed: the foreground service keeps the mic
@@ -216,9 +253,10 @@ class WakeWordService : Service() {
         if (WakeWordPrefs.isEnabled(this)) resume(WakePauseReason.AppBackground)
     }
 
-    private fun onScreenOn(@Suppress("UNUSED_PARAMETER") on: Boolean) {
-        // Keep listening across screen-off too; the single toggle owns it.
-        if (WakeWordPrefs.isEnabled(this)) resume(WakePauseReason.ScreenOff)
+    private fun onScreenOn(on: Boolean) {
+        // A paused screen is a real "not listening" state, not a silent gap.
+        if (!WakeWordPrefs.isEnabled(this)) return
+        if (on) resume(WakePauseReason.ScreenOff) else pause(WakePauseReason.ScreenOff)
     }
 
     private fun onRouteChanged() {
@@ -323,7 +361,7 @@ class WakeWordService : Service() {
         if (controller.currentState() != WakeRunState.Listening) return
         cancelRetry()
         if (!hasMicrophone()) {
-            disableAndStop()
+            failStart("microphone permission revoked")
             return
         }
         if (captureExecutor.isShutdown) return
@@ -340,8 +378,14 @@ class WakeWordService : Service() {
         if (opened == null) {
             if (isCurrentCapture(seq)) {
                 lastError = result.attempts
+                statusReason = WakeStatusText.captureReason(result.attempts) ?: "no usable microphone"
+                DiagLog.e("WAKE", "capture open failed: ${result.attempts}")
                 publishDiagnostics()
                 clearPending(seq)
+                if (startPending) {
+                    failStart(statusReason)
+                    return
+                }
                 handler.post { if (isCurrentCapture(seq)) scheduleRetry() }
             }
             return
@@ -360,9 +404,15 @@ class WakeWordService : Service() {
         } catch (t: Throwable) {
             runCatching { opened.recorder.release() }
             if (isCurrentCapture(seq)) {
-                lastError = "Wake detector failed: ${t.javaClass.simpleName}"
+                lastError = "Wake detector failed: ${t.javaClass.simpleName}: ${t.message}"
+                statusReason = "detector init failed"
+                DiagLog.e("WAKE", "detector init failed: ${t.javaClass.name}: ${t.message}")
                 publishDiagnostics()
                 clearPending(seq)
+                if (startPending) {
+                    failStart(statusReason)
+                    return
+                }
                 handler.post { if (isCurrentCapture(seq)) scheduleRetry() }
             }
             return
@@ -377,7 +427,13 @@ class WakeWordService : Service() {
                 activeConfig = opened.config
                 rms = opened.rms
                 lastError = "—"
+                statusReason = ""
                 accepted = true
+                DiagLog.i("WAKE", "listening on ${opened.config.label}, probe RMS ${opened.rms}")
+                if (startPending) {
+                    startPending = false
+                    WakeWordBus.publishStartListening()
+                }
                 publishDiagnostics()
             }
         }
@@ -405,7 +461,11 @@ class WakeWordService : Service() {
                     opened.recorder.read(source, filled, source.size - filled)
                 }.getOrDefault(-1)
                 if (read < 0) {
-                    if (isCurrentCapture(seq)) lastError = "Microphone read failed"
+                    if (isCurrentCapture(seq)) {
+                        lastError = "Microphone read failed"
+                        statusReason = "microphone read failed"
+                        DiagLog.e("WAKE", "microphone read failed on ${opened.config.label}")
+                    }
                     break
                 }
                 if (read > 0) {
@@ -451,6 +511,7 @@ class WakeWordService : Service() {
     private fun scheduleRetry() {
         cancelRetry()
         if (!WakeWordPrefs.isEnabled(this) || controller.currentState() != WakeRunState.Listening) return
+        statusReason = "retrying microphone"
         val retry = Runnable {
             retryRunnable = null
             if (WakeWordPrefs.isEnabled(this) && controller.currentState() == WakeRunState.Listening) {
@@ -543,6 +604,7 @@ class WakeWordService : Service() {
                 maxScore = rollingMaxScore(),
                 fires = fires,
                 lastError = lastError,
+                statusReason = statusReason,
                 revision = diagnosticsRevision,
             )
         )
@@ -615,9 +677,15 @@ class WakeWordService : Service() {
         }
     }
 
-    private fun disableAndStop() {
+    /** One failure path: persist off, name the reason, and stop the service. */
+    private fun failStart(reason: String) {
+        DiagLog.e("WAKE", "wake start failed: $reason")
+        startPending = false
+        statusReason = reason
+        publishDiagnostics()
         WakeWordPrefs.setEnabled(this, false)
         WakeWordBus.publishEnabled(false)
+        WakeWordBus.publishStartFailed(reason)
         stopSelf()
     }
 
@@ -695,8 +763,10 @@ class WakeWordService : Service() {
                 WakeRunState.Idle -> "Stopping…"
             }
         }
+        // POST_NOTIFICATIONS is optional: a denial must not crash the mic loop.
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, notification(status))
+        runCatching { nm.notify(NOTIFICATION_ID, notification(status)) }
+            .onFailure { DiagLog.w("WAKE", "notification update failed: ${it.javaClass.name}: ${it.message}") }
     }
 
     private fun reasonFrom(intent: Intent): WakePauseReason =
@@ -786,12 +856,11 @@ class WakeWordService : Service() {
             val mic = ContextCompat.checkSelfPermission(
                 context, Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
-            val notifications = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
-                context, Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!mic || !notifications) {
+            if (!mic) {
                 WakeWordPrefs.setEnabled(context, false)
                 WakeWordBus.publishEnabled(false)
+                WakeWordBus.publishStartFailed("microphone permission revoked")
+                DiagLog.e("WAKE", "reconcile: microphone permission missing")
                 return
             }
             WakeWordBus.publishEnabled(true)

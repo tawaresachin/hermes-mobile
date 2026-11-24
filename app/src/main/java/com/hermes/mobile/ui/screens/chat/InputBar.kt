@@ -228,7 +228,7 @@ fun InputBar(
                             }
                     ) {
                         WaveformIcon(
-                            active = handsFree || wakeArmed,
+                            active = handsFree,
                             modifier = Modifier.size(24.dp)
                         )
                         if (wakeArmed) {

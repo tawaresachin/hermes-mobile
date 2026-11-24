@@ -18,7 +18,7 @@ object WakeCaptureConfig {
     const val SOURCE_VOICE_RECOGNITION = 1
 
     data class CaptureConfig(val source: Int, val sampleRate: Int) {
-        val label: String get() = "${sourceLabel(source)} @ ${sampleRate / 1000} kHz"
+        val label: String get() = "${sourceLabel(source)} ${sampleRate / 1000} kHz"
 
         companion object {
             fun sourceLabel(source: Int): String = when (source) {

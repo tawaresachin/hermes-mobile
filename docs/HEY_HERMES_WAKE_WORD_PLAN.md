@@ -35,7 +35,7 @@ pause while a turn owns the mic, resume when idle, optional new session).
    microphone permission gate, battery-optimisation hint. Default **off**.
 
 ## Security & privacy
-- Explicit opt-in only; no wake service without RECORD_AUDIO + POST_NOTIFICATIONS.
+- Explicit opt-in only; RECORD_AUDIO is required, POST_NOTIFICATIONS is requested but optional (the mic notification may be hidden).
 - Visible foreground notification whenever the mic is open; stop action.
 - No audio leaves the device until a wake fires; then only the command goes through
   the existing STT path (device or gateway).
