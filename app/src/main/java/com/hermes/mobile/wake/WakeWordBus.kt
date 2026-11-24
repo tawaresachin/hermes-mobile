@@ -16,13 +16,6 @@ data class WakeDiagnostics(
     val revision: Long = 0L,
 )
 
-/** Service's answer to one enable request. A revision makes it replay-safe. */
-data class WakeStartAck(
-    val listening: Boolean = false,
-    val reason: String = "",
-    val revision: Long = 0L,
-)
-
 /** Same-process signals between the foreground service and Compose UI.
  *  Every signal is a StateFlow counter so a cold-start event replays to a
  *  collector that subscribes after the event was published. */
@@ -42,24 +35,13 @@ object WakeWordBus {
     private val _chatWakes = MutableStateFlow(0L)
     val chatWakes: StateFlow<Long> = _chatWakes.asStateFlow()
 
-    /** Live capture facts for the release-visible status line. */
+    /** Live capture facts for the DEBUG-only panel. */
     private val _diagnostics = MutableStateFlow(WakeDiagnostics())
     val diagnostics: StateFlow<WakeDiagnostics> = _diagnostics.asStateFlow()
-
-    private val _startAck = MutableStateFlow(WakeStartAck())
-    val startAck: StateFlow<WakeStartAck> = _startAck.asStateFlow()
 
     fun publishEnabled(value: Boolean) { _enabled.value = value }
 
     fun publishDiagnostics(value: WakeDiagnostics) { _diagnostics.value = value }
-
-    fun publishStartListening() {
-        _startAck.value = WakeStartAck(true, "", _startAck.value.revision + 1)
-    }
-
-    fun publishStartFailed(reason: String) {
-        _startAck.value = WakeStartAck(false, reason, _startAck.value.revision + 1)
-    }
 
     /** Called by the detector and by DEBUG's simulate-wake action. */
     fun emitWake() { _wakes.value += 1 }

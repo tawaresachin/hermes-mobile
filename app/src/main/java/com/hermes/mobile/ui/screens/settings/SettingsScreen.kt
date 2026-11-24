@@ -39,10 +39,6 @@ import androidx.lifecycle.viewModelScope
 import com.hermes.mobile.DiagLog
 import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.wake.WakeDiagnostics
-import com.hermes.mobile.wake.WakePermissionGate
-import com.hermes.mobile.wake.WakePermissionStep
-import com.hermes.mobile.wake.WakeStartGate
-import com.hermes.mobile.wake.WakeStatusText
 import com.hermes.mobile.wake.WakeWordBus
 import com.hermes.mobile.wake.WakeWordPrefs
 import com.hermes.mobile.wake.WakeWordService
@@ -51,7 +47,6 @@ import com.hermes.mobile.ui.theme.*
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -67,124 +62,35 @@ fun SettingsScreen(
     val scrollState = rememberScrollState()
     val context = LocalContext.current
 
-    LaunchedEffect(Unit) { WakeWordBus.publishEnabled(WakeWordPrefs.isEnabled(context)) }
-    val wakeEnabled by WakeWordBus.enabled.collectAsState()
+    val wakeChange by WakeWordBus.enabled.collectAsState()
+    var wakeEnabled by remember { mutableStateOf(WakeWordPrefs.isEnabled(context)) }
+    LaunchedEffect(wakeChange) { wakeEnabled = WakeWordPrefs.isEnabled(context) }
     val wakeDiagnostics by WakeWordBus.diagnostics.collectAsState()
-    val wakeAck by WakeWordBus.startAck.collectAsState()
-    val startGate = remember { WakeStartGate() }
-    var startRequest by remember { mutableStateOf(0L) }
-    var ackRevisionAtStart by remember { mutableStateOf(0L) }
-    var wakeAttempted by remember { mutableStateOf(WakeWordPrefs.isEnabled(context)) }
-    var statusFailure by remember { mutableStateOf<String?>(null) }
-    var notificationsDenied by remember {
-        mutableStateOf(Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
-            context, Manifest.permission.POST_NOTIFICATIONS
-        ) != PackageManager.PERMISSION_GRANTED)
-    }
     var wakeSensitivity by remember { mutableStateOf(WakeWordPrefs.sensitivity(context)) }
     var wakeDiagnosticsExpanded by remember { mutableStateOf(false) }
-
-    fun applyStartResult(result: WakeStartGate.Result) {
-        startRequest = 0L
-        startGate.cancel()
-        if (result.listening) {
-            statusFailure = null
-        } else {
-            statusFailure = result.reason
-            WakeWordService.stop(context)
-        }
-    }
-
-    fun beginWake() {
-        statusFailure = null
-        wakeAttempted = true
-        ackRevisionAtStart = wakeAck.revision
-        startRequest = startGate.begin(android.os.SystemClock.elapsedRealtime())
-        val failure = runCatching { WakeWordService.start(context) }.exceptionOrNull()
-        if (failure != null) {
-            val reason = "${failure.javaClass.name}: ${failure.message ?: "no message"}"
-            DiagLog.e("WAKE", "startForegroundService failed: $reason")
-            applyStartResult(WakeStartGate.Result(false, reason))
-        }
-    }
-
-    fun disableWake() {
-        startRequest = 0L
-        startGate.cancel()
-        statusFailure = null
-        wakeAttempted = false
-        WakeWordService.stop(context)
-        WakeWordBus.publishEnabled(false)
-    }
-
-    // A toggle is not proof: only the service reporting a live mic keeps it on.
-    LaunchedEffect(wakeAck.revision) {
-        if (startRequest == 0L || wakeAck.revision <= ackRevisionAtStart) return@LaunchedEffect
-        val result = startGate.acknowledge(
-            startRequest,
-            wakeAck.listening,
-            wakeAck.reason.ifBlank { null },
-            android.os.SystemClock.elapsedRealtime(),
-        )
-        if (result != null) applyStartResult(result)
-    }
-    LaunchedEffect(startRequest) {
-        if (startRequest == 0L) return@LaunchedEffect
-        delay(WakeStartGate.DEFAULT_TIMEOUT_MS)
-        val current = WakeWordBus.diagnostics.value
-        val detail = current.statusReason.ifBlank {
-            WakeStatusText.captureReason(current.lastError) ?: ""
-        }
-        val result = startGate.timeout(
-            startRequest,
-            android.os.SystemClock.elapsedRealtime(),
-            detail,
-        )
-        if (result != null) applyStartResult(result)
-    }
-
-    val wakeNotificationLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        // An Android 13+ microphone FGS runs without this permission; its
-        // notification may just be hidden. Keep going either way.
-        notificationsDenied = !granted
-        DiagLog.i("WAKE", "POST_NOTIFICATIONS granted=$granted (not required)")
-        beginWake()
-    }
-    fun requestNotificationsOrStart() {
-        val granted = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
+    val notificationsDenied = Build.VERSION.SDK_INT >= 33 &&
+        ContextCompat.checkSelfPermission(
             context, Manifest.permission.POST_NOTIFICATIONS
-        ) == PackageManager.PERMISSION_GRANTED
-        if (granted) beginWake()
-        else wakeNotificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-    }
+        ) != PackageManager.PERMISSION_GRANTED
+
     val wakeMicLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (!granted) {
-            wakeAttempted = true
-            statusFailure = "microphone permission denied"
-            WakeWordBus.publishEnabled(false)
-            DiagLog.e("WAKE", "RECORD_AUDIO denied")
-            return@rememberLauncherForActivityResult
-        }
-        requestNotificationsOrStart()
+        // A denial never turns the switch off: the service keeps retrying and
+        // its notification names the missing permission.
+        if (!granted) DiagLog.e("WAKE", "RECORD_AUDIO denied; wake stays enabled")
     }
-    fun requestWakePermissions() {
+
+    fun enableWake() {
+        WakeWordService.start(context)
         val mic = ContextCompat.checkSelfPermission(
             context, Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
-        val notifications = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
-            context, Manifest.permission.POST_NOTIFICATIONS
-        ) == PackageManager.PERMISSION_GRANTED
-        DiagLog.i("WAKE", "enable requested: mic=$mic notifications=$notifications")
-        when (WakePermissionGate.next(mic, notifications, Build.VERSION.SDK_INT)) {
-            WakePermissionStep.Microphone -> wakeMicLauncher.launch(Manifest.permission.RECORD_AUDIO)
-            WakePermissionStep.Notifications ->
-                wakeNotificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            WakePermissionStep.Start -> beginWake()
-        }
+        if (!mic) wakeMicLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    fun disableWake() {
+        WakeWordService.stop(context)
     }
 
     // Load the host computer's keep-awake state on screen open (idempotent,
@@ -595,39 +501,10 @@ fun SettingsScreen(
                 SettingsToggle(
                     icon = Icons.Filled.Mic,
                     title = "Hey Hermes",
-                    subtitle = if (wakeEnabled) "Listening for \"Hey Hermes\"" else "Off",
+                    subtitle = if (wakeEnabled) "On" else "Off",
                     checked = wakeEnabled,
-                    onCheckedChange = { on -> if (on) requestWakePermissions() else disableWake() }
+                    onCheckedChange = { on -> if (on) enableWake() else disableWake() }
                 )
-                if (wakeAttempted) {
-                    val live = wakeEnabled && wakeDiagnostics.state == "Listening" &&
-                        wakeDiagnostics.source != "—"
-                    val line = if (live) {
-                        "Listening · ${wakeDiagnostics.source} · level ${wakeDiagnostics.rms}"
-                    } else {
-                        val reason = statusFailure
-                            ?: wakeDiagnostics.statusReason.ifBlank { null }
-                            ?: WakeStatusText.captureReason(wakeDiagnostics.lastError)
-                            ?: if (wakeEnabled) "starting microphone" else "not started"
-                        "Not listening · $reason"
-                    }
-                    Text(
-                        text = line,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (live) HermesPrimary else MaterialTheme.colorScheme.error,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 2.dp)
-                            .then(
-                                if (live) Modifier else Modifier.clickable {
-                                    statusFailure = null
-                                    requestWakePermissions()
-                                }
-                            ),
-                    )
-                }
                 if (wakeEnabled) {
                     SettingsSlider(
                         icon = Icons.Filled.Tune,

@@ -221,7 +221,7 @@ fun InputBar(
                             )
                             .semantics {
                                 contentDescription = when {
-                                    wakeArmed -> "Listening for \"Hey Hermes\". Tap to stop."
+                                    wakeArmed -> "Hey Hermes on. Tap to stop."
                                     handsFree -> "Stop hands-free voice. Hold for Hey Hermes."
                                     else -> "Hands-free voice. Hold for Hey Hermes."
                                 }
