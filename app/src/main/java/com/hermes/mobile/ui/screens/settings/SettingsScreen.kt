@@ -6,8 +6,6 @@ import java.io.File
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.PowerManager
-import android.provider.Settings as AndroidSettings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
@@ -67,7 +65,6 @@ fun SettingsScreen(
     val wakeEnabled by WakeWordBus.enabled.collectAsState()
     val wakeDiagnostics by WakeWordBus.diagnostics.collectAsState()
     var wakeSensitivity by remember { mutableStateOf(WakeWordPrefs.sensitivity(context)) }
-    var wakeSound by remember { mutableStateOf(WakeWordPrefs.wakeSoundEnabled(context)) }
     var wakeDiagnosticsExpanded by remember { mutableStateOf(false) }
 
     fun enableWake() {
@@ -549,39 +546,21 @@ fun SettingsScreen(
                     )
                 }
                 Text(
-                    text = "On-device only — no audio leaves your phone. Android requires a mic notification while listening: it cannot hear the phrase without the microphone.",
+                    text = "Android requires a mic notification so Hermes can hear \"Hey Hermes\".",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
-                WakeDiagnosticsPanel(
-                    expanded = wakeDiagnosticsExpanded,
-                    onExpandedChange = { wakeDiagnosticsExpanded = it },
-                    diagnostics = wakeDiagnostics,
-                    wakeSound = wakeSound,
-                    onWakeSoundChange = {
-                        wakeSound = it
-                        WakeWordPrefs.setWakeSoundEnabled(context, it)
-                    },
-                    onTestMic = { WakeWordService.testMic(context) },
-                    onSimulateWake = { WakeWordService.simulateWake(context) },
-                    onBatteryOptimization = {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            val pm = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
-                            if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
-                                val request = Intent(AndroidSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                                    .setData(Uri.parse("package:${context.packageName}"))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                val details = Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                                    .setData(Uri.parse("package:${context.packageName}"))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                runCatching { context.startActivity(request) }
-                                    .onFailure { context.startActivity(details) }
-                            }
-                        }
-                    },
-                )
-                if (com.hermes.mobile.BuildConfig.DEBUG) WakeWordSelfTestRow()
+                if (com.hermes.mobile.BuildConfig.DEBUG) {
+                    WakeDiagnosticsPanel(
+                        expanded = wakeDiagnosticsExpanded,
+                        onExpandedChange = { wakeDiagnosticsExpanded = it },
+                        diagnostics = wakeDiagnostics,
+                        onTestMic = { WakeWordService.testMic(context) },
+                        onSimulateWake = { WakeWordService.simulateWake(context) },
+                    )
+                    WakeWordSelfTestRow()
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -1023,11 +1002,8 @@ private fun WakeDiagnosticsPanel(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     diagnostics: WakeDiagnostics,
-    wakeSound: Boolean,
-    onWakeSoundChange: (Boolean) -> Unit,
     onTestMic: () -> Unit,
     onSimulateWake: () -> Unit,
-    onBatteryOptimization: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -1062,22 +1038,6 @@ private fun WakeDiagnosticsPanel(
             WakeDiagnosticLine("Fires", diagnostics.fires.toString())
             WakeDiagnosticLine("Last result / error", diagnostics.lastError)
             Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = "Wake sound",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Switch(
-                    checked = wakeSound,
-                    onCheckedChange = onWakeSoundChange,
-                    modifier = Modifier.semantics { contentDescription = "Wake sound" },
-                )
-            }
-            Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
@@ -1094,13 +1054,6 @@ private fun WakeDiagnosticsPanel(
                     color = HermesPrimary,
                     modifier = Modifier.clickable(onClick = onSimulateWake)
                         .semantics { contentDescription = "Simulate Hey Hermes wake" },
-                )
-                Text(
-                    text = "Battery optimization",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = HermesPrimary,
-                    modifier = Modifier.clickable(onClick = onBatteryOptimization)
-                        .semantics { contentDescription = "Exempt Hermes from battery optimization" },
                 )
             }
         }

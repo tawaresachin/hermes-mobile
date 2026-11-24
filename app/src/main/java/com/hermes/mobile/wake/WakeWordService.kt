@@ -594,7 +594,6 @@ class WakeWordService : Service() {
     }
 
     private fun playChime() {
-        if (!WakeWordPrefs.wakeSoundEnabled(this)) return
         val ringer = audioManager?.ringerMode
         if (ringer == AudioManager.RINGER_MODE_SILENT || ringer == AudioManager.RINGER_MODE_VIBRATE) return
         runCatching {

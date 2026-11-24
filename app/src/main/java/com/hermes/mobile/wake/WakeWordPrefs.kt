@@ -7,9 +7,7 @@ object WakeWordPrefs {
     private const val PREFS_NAME = "hermes_wake_word"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_SENSITIVITY = "sensitivity"
-    private const val KEY_WAKE_SOUND = "wake_sound"
 
-    const val DEFAULT_WAKE_SOUND = true
     const val MIN_SENSITIVITY = 0.30f
     const val MAX_SENSITIVITY = 0.9f
     const val DEFAULT_SENSITIVITY = WakeWordStateMachine.DEFAULT_SENSITIVITY
@@ -29,10 +27,4 @@ object WakeWordPrefs {
 
     fun setSensitivity(context: Context, value: Float) =
         prefs(context).edit().putFloat(KEY_SENSITIVITY, value.coerceIn(MIN_SENSITIVITY, MAX_SENSITIVITY)).apply()
-
-    fun wakeSoundEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_WAKE_SOUND, DEFAULT_WAKE_SOUND)
-
-    fun setWakeSoundEnabled(context: Context, enabled: Boolean) =
-        prefs(context).edit().putBoolean(KEY_WAKE_SOUND, enabled).apply()
 }
