@@ -14,7 +14,7 @@ class AppUpdateCheckerTest {
     fun `tag maps to the release-script versionCode formula`() {
         assertEquals(52, AppUpdateChecker.versionCodeFromTag("v0.0.52"))
         assertEquals(52, AppUpdateChecker.versionCodeFromTag("0.0.52"))
-        assertEquals(1_002_003, AppUpdateChecker.versionCodeFromTag("v1.2.3"))
+        assertEquals(10_203, AppUpdateChecker.versionCodeFromTag("v1.2.3"))
         assertEquals(0, AppUpdateChecker.versionCodeFromTag(""))
         assertEquals(0, AppUpdateChecker.versionCodeFromTag("garbage"))
     }
@@ -26,6 +26,10 @@ class AppUpdateCheckerTest {
             AppUpdateChecker.versionCodeFromTag("v0.0.9"))
         assertFalse(AppUpdateChecker.versionCodeFromTag("v0.0.52") >
             AppUpdateChecker.versionCodeFromTag("v0.0.52"))   // equal = up to date
+        // The installed 0.1.32 is code 132 and tag v0.1.32 must map to 132 too,
+        // not 1032 (the old 1e6/1e3 formula) — otherwise About offers an update.
+        assertEquals(132, AppUpdateChecker.versionCodeFromTag("v0.1.32"))
+        assertEquals(132, AppUpdateChecker.versionCodeFromTag("0.1.32"))
         assertTrue(AppUpdateChecker.versionCodeFromTag("v0.1.0") >
             AppUpdateChecker.versionCodeFromTag("v0.0.99"))
     }

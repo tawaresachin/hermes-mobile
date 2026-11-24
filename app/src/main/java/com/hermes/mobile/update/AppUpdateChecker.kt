@@ -267,11 +267,14 @@ class AppUpdateChecker @Inject constructor(
         private const val KEY_SUMS_URL = "sumsUrl"
         private const val KEY_NOTES = "notes"
 
-        /** mirrors scripts/release.sh: CODE = MA*1000000 + MI*1000 + PA */
+        /** Mirrors scripts/release.sh exactly: CODE = MA*10000 + MI*100 + PA.
+         *  (The old 1e6/1e3 lanes did not match the release script, so an
+         *  installed 0.1.32 read as code 132 while the tag 0.1.32 read as
+         *  1032 — the About row showed "Update" for the same version.) */
         fun versionCodeFromTag(tag: String): Int = try {
             val p = tag.removePrefix("v").split(".")
-            (p.getOrNull(0)?.toIntOrNull() ?: 0) * 1_000_000 +
-                (p.getOrNull(1)?.toIntOrNull() ?: 0) * 1_000 +
+            (p.getOrNull(0)?.toIntOrNull() ?: 0) * 10_000 +
+                (p.getOrNull(1)?.toIntOrNull() ?: 0) * 100 +
                 (p.getOrNull(2)?.toIntOrNull() ?: 0)
         } catch (e: Exception) { 0 }
 
