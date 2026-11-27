@@ -55,15 +55,19 @@ fun FileAttachmentRow(
         )
         // Telegram: download affordance on every file bubble — actually saves
         // to Downloads and opens (was decorative-only → "download not working").
-        Icon(
-            imageVector = Icons.Filled.Download,
-            contentDescription = "Download",
-            modifier = Modifier.size(28.dp)
-                .clip(CircleShape)
-                .clickable(enabled = onDownload != null) { onDownload?.invoke() }
-                .padding(5.dp)
-                .size(18.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
+        // IconButton keeps the 48dp minimum touch target; the old 18dp
+        // trailing size made the download affordance nearly untappable.
+        IconButton(
+            onClick = { onDownload?.invoke() },
+            enabled = onDownload != null,
+            modifier = Modifier.size(40.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Download,
+                contentDescription = "Download",
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
     }
 }

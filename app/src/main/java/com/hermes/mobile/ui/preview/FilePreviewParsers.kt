@@ -130,8 +130,12 @@ private val saxFactory: SAXParserFactory = SAXParserFactory.newInstance().apply 
     runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
 }
 
-private fun sax(xml: ByteArray, handler: DefaultHandler) =
+private fun sax(xml: ByteArray, handler: DefaultHandler) {
+    // Android's Harmony SAX parser ignores disallow-doctype-decl; reject the
+    // dangerous construct outright instead of relying on parser defaults.
+    if (String(xml, Charsets.ISO_8859_1).contains("<!DOCTYPE", ignoreCase = true)) return
     saxFactory.newSAXParser().parse(ByteArrayInputStream(xml), handler)
+}
 
 /** Attribute lookup by LOCAL name — with namespaces off the parser keeps
  * prefixes (w:val, r:id), so getValue("val") misses them. */
@@ -145,12 +149,36 @@ private fun Attributes.local(name: String): String? {
 
 data class Sheet(val name: String, val rows: List<List<String>>)
 
+private const val MAX_UNZIPPED_BYTES = 128L * 1024 * 1024
+private const val MAX_ZIP_ENTRIES = 4096
+
+/** Bounded read: a hostile OOXML must not be able to inflate 1 KB into GBs. */
+private fun readCapped(input: java.io.InputStream, max: Long): ByteArray? {
+    if (max <= 0) return null
+    val out = java.io.ByteArrayOutputStream()
+    val buf = ByteArray(64 * 1024)
+    var total = 0L
+    while (true) {
+        val n = input.read(buf)
+        if (n < 0) break
+        total += n
+        if (total > max) return null
+        out.write(buf, 0, n)
+    }
+    return out.toByteArray()
+}
+
 private fun unzip(bytes: ByteArray): Map<String, ByteArray> {
     val out = HashMap<String, ByteArray>()
+    var total = 0L
+    var entries = 0
     ZipInputStream(ByteArrayInputStream(bytes)).use { z ->
         while (true) {
             val e = z.nextEntry ?: break
-            out[e.name] = z.readBytes()
+            if (++entries > MAX_ZIP_ENTRIES) return emptyMap()
+            val data = readCapped(z, MAX_UNZIPPED_BYTES - total) ?: return emptyMap()
+            total += data.size
+            out[e.name] = data
         }
     }
     return out

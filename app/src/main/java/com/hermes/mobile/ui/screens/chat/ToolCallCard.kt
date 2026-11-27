@@ -33,7 +33,9 @@ fun ToolCallCard(toolCall: ToolCallInfo) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
-            .clickable(enabled = hasResult) { expanded = !expanded },
+            // Args alone (a successful write/patch with no textual result) are
+            // still worth expanding.
+            .clickable(enabled = hasResult || hasArgs) { expanded = !expanded },
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(
             containerColor = when (toolCall.status) {
@@ -108,15 +110,15 @@ fun ToolCallCard(toolCall: ToolCallInfo) {
                 )
             }
 
-            // Arguments (truncated preview)
-            if (hasArgs && !expanded) {
+            // Arguments: one-line preview collapsed, a few lines expanded.
+            if (hasArgs) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = toolCall.arguments,
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = if (expanded) 6 else 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }

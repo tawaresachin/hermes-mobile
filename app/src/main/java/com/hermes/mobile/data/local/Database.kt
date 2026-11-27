@@ -97,6 +97,14 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE sessionId = :sessionId")
     suspend fun deleteSessionMessages(sessionId: String)
 
+    /** Atomic transcript replace: a failure mid-import rolls the delete back
+     * instead of leaving the session empty for the next 10 s. */
+    @Transaction
+    suspend fun replaceSessionMessages(sessionId: String, messages: List<Message>) {
+        deleteSessionMessages(sessionId)
+        messages.forEach { insertMessage(it) }
+    }
+
     @Query("SELECT COUNT(*) as cnt, COALESCE(SUM(tokens), 0) as totalTokens FROM messages")
     suspend fun countAndTokenSum(): MessageDao.MessageCountSum
 

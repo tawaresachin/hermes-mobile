@@ -71,6 +71,11 @@ object ResponseMedia {
         val media = MEDIA_RE.findAll(text).map { it.groupValues[1] }.toList()
         if (media.isEmpty()) return ExtractedMedia(text, null, null, null)
         val first = media.first()
+        // The server validates too, but the client must never build a file
+        // URL for a relative or dot-dot path a prompt-injected model emitted.
+        if (!first.startsWith("/") || first.contains("..")) {
+            return ExtractedMedia(text, null, null, null)
+        }
         val url = "/api/mobile/file?path=" + URLEncoder.encode(first, "UTF-8")
         return ExtractedMedia(
             cleanText = scrub(text),

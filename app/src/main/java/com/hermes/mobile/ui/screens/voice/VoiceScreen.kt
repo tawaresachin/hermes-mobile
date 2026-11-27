@@ -328,7 +328,15 @@ fun VoiceScreen() {
             val micDenied = ActivityCompat.checkSelfPermission(
                 context, Manifest.permission.RECORD_AUDIO
             ) != PackageManager.PERMISSION_GRANTED
-            if (!conversationOn && convStatus != null && micDenied) {
+            // Only a HARD denial needs the settings detour. After an ordinary
+            // first denial Android still shows the dialog, so sending the user
+            // to system settings there contradicts Start conversation.
+            val canAskAgain = activity?.let {
+                ActivityCompat.shouldShowRequestPermissionRationale(
+                    it, Manifest.permission.RECORD_AUDIO
+                )
+            } ?: true
+            if (!conversationOn && convStatus != null && micDenied && !canAskAgain) {
                 TextButton(onClick = {
                     context.startActivity(
                         Intent(

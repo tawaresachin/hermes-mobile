@@ -126,6 +126,10 @@ class ResponseWatcherService : Service() {
         // "is typing…" notification in place. Two ids left the typing
         // notification visible on top of the reply (user bug report).
         private const val NOTIF_ID_ONGOING = 1001
+        // The ready reply must OUTLIVE the foreground service: onDestroy calls
+        // stopForeground(true), which removes NOTIF_ID_ONGOING by id. Posting
+        // the reply there made it flash and disappear the instant stop() ran.
+        private const val NOTIF_ID_READY = 1003
         // Approval prompts are a SEPARATE row: they must survive the typing
         // notification being replaced and outlive the reply (the decision is
         // still pending after the run finishes or fails).
@@ -153,6 +157,8 @@ class ResponseWatcherService : Service() {
             if (sessionId.isBlank()) return
             readyPosted = false
             ensureChannel(context)
+            // A new turn supersedes an untapped reply from the previous one.
+            runCatching { NotificationManagerCompat.from(context).cancel(NOTIF_ID_READY) }
             val intent = Intent(context, ResponseWatcherService::class.java)
                 .putExtra(EXTRA_SESSION_ID, sessionId)
                 .putExtra(EXTRA_QUERY, query)
@@ -230,7 +236,7 @@ class ResponseWatcherService : Service() {
                 }
             } catch (_: Exception) { }
             try {
-                NotificationManagerCompat.from(context).notify(NOTIF_ID_ONGOING, notif)
+                NotificationManagerCompat.from(context).notify(NOTIF_ID_READY, notif)
             } catch (_: SecurityException) { }
         }
 

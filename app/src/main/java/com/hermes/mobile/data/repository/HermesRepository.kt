@@ -225,7 +225,6 @@ class HermesRepository @Inject constructor(
     private suspend fun refreshTranscriptFromServer(localId: String, serverId: String) {
         val msgs = apiService.fetchSessionMessages(serverId) ?: return
         if (msgs.isEmpty()) return
-        messageDao.deleteSessionMessages(localId)
         importRows(localId, msgs)
     }
 
@@ -234,6 +233,7 @@ class HermesRepository @Inject constructor(
      * (system + tool rows are server plumbing, not conversation). */
     private suspend fun importRows(sessionId: String, msgs: List<org.json.JSONObject>) {
         try {
+            val rows = ArrayList<Message>(msgs.size)
             for (m in msgs) {
                 val role = when (m.optString("role")) {
                     "user" -> MessageRole.USER
@@ -247,7 +247,7 @@ class HermesRepository @Inject constructor(
                 val tsSec = m.optDouble("timestamp", 0.0)
                 val ts = if (tsSec > 1_000_000_000.0) (tsSec * 1000).toLong()
                          else System.currentTimeMillis()
-                messageDao.insertMessage(
+                rows.add(
                     Message(
                         sessionId = sessionId,
                         role = role,
@@ -258,6 +258,7 @@ class HermesRepository @Inject constructor(
                     )
                 )
             }
+            messageDao.replaceSessionMessages(sessionId, rows)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {

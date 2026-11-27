@@ -547,6 +547,12 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     }
 
     val trust = remember { TrustPrompt() }
+    // A host-key prompt can be on screen when the tab is switched away. The
+    // sshj transport thread is blocked on this latch; without an explicit
+    // answer it holds the connect guard for the full 90 s with no UI.
+    DisposableEffect(trust) {
+        onDispose { if (trust.showing.value) trust.respond(false) }
+    }
 
     // A Connect that was in flight when the composition was disposed
     // (tab switch / rotation) cancelled its coroutine; the guard and

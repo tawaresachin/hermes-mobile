@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -192,14 +193,16 @@ fun ReplyBar(
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "Cancel reply",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .width(20.dp)
-                    .clickable(onClick = onCancel)
-            )
+            // 20dp was a thin strip in the reply bar; IconButton keeps the
+            // platform's 48dp minimum target.
+            IconButton(onClick = onCancel, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "Cancel reply",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }

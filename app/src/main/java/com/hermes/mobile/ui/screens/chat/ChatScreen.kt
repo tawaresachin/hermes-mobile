@@ -1176,6 +1176,13 @@ class ChatViewModel @Inject constructor(
         /** Regenerate: delete the assistant reply and resend the user
          *  message that preceded it. */
         fun regenerate(message: Message) {
+            // Regenerating mid-stream queued a second run behind the live one
+            // and the old terminal handler then re-persisted the reply the
+            // user was trying to replace.
+            if (_isStreaming.value) {
+                _errorMessage.value = "Wait for the current reply to finish before regenerating."
+                return
+            }
             val list = _messages.value
             val idx = list.indexOfFirst { it.id == message.id }
             if (idx <= 0) return
@@ -1375,6 +1382,9 @@ fun ChatScreen(
     }
 
     var inputText by remember { mutableStateOf("") }
+    // Which session's draft currently occupies the composer. Distinguishes a
+    // real session switch from the null→id transition after cold start.
+    var draftSession by remember { mutableStateOf<String?>(null) }
     // Hands-free voice: continuous recognizer, auto-sends each utterance.
     var handsFree by remember { mutableStateOf(false) }
     var pendingHandsFree by remember { mutableStateOf(false) }
@@ -1667,10 +1677,19 @@ fun ChatScreen(
 
     // Load models when session ID is available + restore the draft
     LaunchedEffect(sessionIdState) {
-        if (sessionIdState != null) {
+        val sid = sessionIdState
+        if (sid != null) {
             vm.loadModels()
             DraftStore.init(context)
-            inputText = DraftStore.get(sessionIdState!!)
+            // Cold start: the user can type before initSession resolves, and
+            // the old code replaced that text with an empty draft the moment
+            // the id arrived. Only restore when the composer is still blank
+            // on the first binding; a real session switch always restores.
+            when {
+                draftSession == null -> if (inputText.isBlank()) inputText = DraftStore.get(sid)
+                draftSession != sid -> inputText = DraftStore.get(sid)
+            }
+            draftSession = sid
             // Start the 5s server-response poller — the session always
             // catches up with responses the stream missed.
             vm.startResponsePolling()

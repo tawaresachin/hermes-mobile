@@ -117,10 +117,15 @@ fun ProvidersCard(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                             Icon(Icons.Filled.Edit, "Edit", modifier = Modifier.size(18.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        IconButton(onClick = { confirmDelete = id },
-                            modifier = Modifier.size(36.dp).minimumInteractiveComponentSize()) {
-                            Icon(Icons.Filled.DeleteOutline, "Delete", modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // The default provider backs every new chat; deleting it
+                        // leaves the gateway without a routable provider. The
+                        // user must choose another default first.
+                        if (!isDefault) {
+                            IconButton(onClick = { confirmDelete = id },
+                                modifier = Modifier.size(36.dp).minimumInteractiveComponentSize()) {
+                                Icon(Icons.Filled.DeleteOutline, "Delete", modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -252,8 +257,11 @@ private fun ProviderEditorSheet(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 trailingIcon = {
                     IconButton(onClick = { showKey = !showKey }) {
-                        Icon(if (showKey) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                            null, modifier = Modifier.size(18.dp))
+                        Icon(
+                            if (showKey) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                            contentDescription = if (showKey) "Hide API key" else "Show API key",
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 },
                 modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp))

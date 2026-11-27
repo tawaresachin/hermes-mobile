@@ -978,7 +978,10 @@ private fun ConnectionStatusHeader(
                                 ) {
                     Icon(
                         Icons.Filled.Refresh,
-                        contentDescription = "Test connection",
+                        // This re-reads bridge status; the "Test" button below
+                        // performs the auth/key test. Same label for both was
+                        // ambiguous to TalkBack and to sighted users.
+                        contentDescription = "Refresh connection status",
                         modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
