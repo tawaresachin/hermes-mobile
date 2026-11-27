@@ -1,8 +1,12 @@
 package com.hermes.mobile.ui.screens.voice
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import android.database.ContentObserver
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -128,16 +132,23 @@ fun VoiceScreen() {
         if (convPhase == ConversationPhase.Listening) capture.start() else capture.stop()
     }
     val view = LocalView.current
-    DisposableEffect(conversationOn) {
-        view.keepScreenOn = conversationOn
+    DisposableEffect(conversationOn, convPhase) {
+        // Paused can last as long as the gateway is down; holding the display
+        // awake through it burned battery for no benefit.
+        view.keepScreenOn = conversationOn && convPhase != ConversationPhase.Paused
         onDispose { view.keepScreenOn = false }
     }
     // Android allows capture only in the foreground, so backgrounding ends
-    // the mode instead of pretending to keep listening.
+    // the mode instead of pretending to keep listening. A configuration
+    // change (rotation) also fires ON_STOP, but the screen is coming right
+    // back — killing a live conversation there was a silent UX loss.
     val lifecycleOwner = LocalLifecycleOwner.current
+    val activity = remember(context) { context.findActivity() }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
+            if (event == Lifecycle.Event.ON_STOP &&
+                activity?.isChangingConfigurations != true
+            ) {
                 vm.stopOnScreenExit()
             }
         }
@@ -311,6 +322,22 @@ fun VoiceScreen() {
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
+            // Permanently denied mic permission: the system dialog will never
+            // reappear, so the only fix is app settings — give the user a
+            // one-tap route instead of a dead "Start conversation" button.
+            val micDenied = ActivityCompat.checkSelfPermission(
+                context, Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+            if (!conversationOn && convStatus != null && micDenied) {
+                TextButton(onClick = {
+                    context.startActivity(
+                        Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.fromParts("package", context.packageName, null)
+                        )
+                    )
+                }) { Text("Open app settings") }
+            }
             // The run's approval is answered right here: leaving for Chat
             // ends the mode (the mic goes with this screen).
             pendingApproval?.let { approval ->
@@ -662,4 +689,14 @@ private fun readReduceMotion(context: Context): Boolean = try {
     ) == 0f
 } catch (_: Exception) {
     false
+}
+
+/** Walk the context wrappers to the hosting Activity (null in previews). */
+private fun Context.findActivity(): Activity? {
+    var ctx: Context = this
+    while (ctx is ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
 }

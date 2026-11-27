@@ -151,7 +151,9 @@ data class HomeUiState(
     val serverBaseUrl: String = "",
     val isLoading: Boolean = false,
     val error: String? = null,
-    val sessions: List<Session> = emptyList()
+    val sessions: List<Session> = emptyList(),
+    /** Full server-synced count; [sessions] is capped to the recent 10. */
+    val sessionTotal: Int = 0
 )
 
 // ─── ViewModel ───
@@ -168,6 +170,9 @@ class HomeViewModel @Inject constructor(
     // (14ms vs 167ms); the DISPLAYED value is the median of the last 5
     // samples so tapping 'Connected' shows a stable number.
     private val latencyHistory = ArrayDeque<Long>()
+    // Home is the first screen after pairing; without this, "Recent sessions"
+    // stayed empty until the user opened Sessions (the only sync trigger).
+    private var sessionSyncInFlight = false
 
     private fun medianOf(values: List<Long>): Long {
         if (values.isEmpty()) return 0L
@@ -196,7 +201,9 @@ class HomeViewModel @Inject constructor(
     private fun observeSessions() {
         viewModelScope.launch {
             repository.allSessions.collect { sessions ->
-                _uiState.update { state -> state.copy(sessions = sessions.take(10)) }
+                _uiState.update { state ->
+                    state.copy(sessions = sessions.take(10), sessionTotal = sessions.size)
+                }
             }
         }
     }
@@ -236,6 +243,20 @@ class HomeViewModel @Inject constructor(
                         connectionLatency = latency
                     )
                 }
+                if (status == ConnectionStatus.CONNECTED && !sessionSyncInFlight) {
+                    sessionSyncInFlight = true
+                    viewModelScope.launch {
+                        try {
+                            repository.syncAllSessionsFromServer()
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            // Offline/transient: the next resume retries.
+                        } finally {
+                            sessionSyncInFlight = false
+                        }
+                    }
+                }
             } else {
                 // No config saved yet — show disconnected state
                 _uiState.update { state ->
@@ -270,6 +291,12 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             repository.deleteSession(sessionId)
         }
+    }
+
+    /** Dismiss the transient error banner (creation failures used to stick
+     * until the ViewModel died). */
+    fun clearError() {
+        _uiState.update { it.copy(error = null) }
     }
 
     fun renameSession(sessionId: String, title: String) {
@@ -352,12 +379,32 @@ fun HomeScreen(
 
             // ── Error surface (e.g. session creation failure) ──
             uiState.error?.let { err ->
-                Text(
-                    text = err,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = err,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(vertical = 4.dp)
+                    )
+                    IconButton(
+                        onClick = { viewModel.clearError() },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Dismiss error",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
             }
 
             // ── Scrollable: recent sessions list ──
@@ -371,7 +418,7 @@ fun HomeScreen(
                 // ── Recent Sessions ──
                 item(key = "recent_header") {
                     RecentSessionsHeader(
-                        sessionCount = uiState.sessions.size,
+                        sessionCount = uiState.sessionTotal,
                         onSeeAll = onNavigateToSessions
                     )
                 }
@@ -389,7 +436,7 @@ fun HomeScreen(
                         SwipeableSessionItem(
                             session = session,
                             onClick = { onNavigateToChat(session.id) },
-                            onDelete = { viewModel.deleteSession(session.id) },
+                            onDelete = { deleteTarget = session },
                             onRename = { renameTarget = session },
                             onMenuDelete = { deleteTarget = session }
                         )
@@ -799,14 +846,16 @@ private fun SwipeableSessionItem(
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { dismissValue ->
-            // Allow EVERY transition (Settled spring-back AND EndToStart)
-            // — returning false for Settled is the classic bug that leaves
-            // the row stuck half-swiped, with the delete icon covering the
-            // row's trailing timestamp.
+            // Never destroy a conversation from a gesture alone: a full
+            // EndToStart swipe asks the same confirmation dialog as the menu.
+            // Returning false springs the row back so the list stays stable
+            // while the dialog is open.
             if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
                 onDelete()
+                false
+            } else {
+                true
             }
-            true
         }
     )
 

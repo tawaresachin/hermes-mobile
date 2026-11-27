@@ -59,6 +59,8 @@ data class CapabilitySectionState(
     val status: CapabilitySectionStatus = CapabilitySectionStatus.IDLE,
     val items: List<CapabilityItem> = emptyList(),
     val error: String? = null,
+    /** Transient failure from the last toggle (server rejection). */
+    val toggleError: String? = null,
 )
 
 @Immutable
@@ -514,9 +516,18 @@ class SettingsViewModel @Inject constructor(
      *  the CURRENT state (a manifest refresh may have landed in flight).
      *  A rejection (unknown skill, essential skill, unreachable gateway,
      *  500) applies nothing — the switch stays as the server knows it. */
+    /** Per-skill single-flight marker: a double-tap used to send enable and
+     *  disable concurrently, so the last RESPONSE (not the last tap) won. */
+    private val skillTogglesInFlight = mutableSetOf<String>()
+
     fun toggleSkill(name: String, enabled: Boolean) {
+        if (!skillTogglesInFlight.add(name)) return
         viewModelScope.launch {
-            val ok = repository.toggleSkill(name, enabled)
+            val ok = try {
+                repository.toggleSkill(name, enabled)
+            } finally {
+                skillTogglesInFlight.remove(name)
+            }
             _uiState.update { st ->
                 if (!ok) return@update st
                 val disabled = st.disabledSkills.toMutableSet()
@@ -529,18 +540,30 @@ class SettingsViewModel @Inject constructor(
     /** Toggle a skill from the Capabilities inspector. Replaces one immutable
      *  row — no JSONObject copy/round-trip on Main (ME-9). */
     fun toggleCapabilitySkill(name: String, enabled: Boolean) {
+        if (!skillTogglesInFlight.add(name)) return
         viewModelScope.launch {
-            val ok = repository.toggleSkill(name, enabled)
-            if (!ok) return@launch
+            val ok = try {
+                repository.toggleSkill(name, enabled)
+            } finally {
+                skillTogglesInFlight.remove(name)
+            }
             _uiState.update { st ->
                 val skills = st.capabilities.skills
                 st.copy(
                     capabilities = st.capabilities.copy(
-                        skills = skills.copy(
-                            items = skills.items.map {
-                                if (it.name == name) it.copy(enabled = enabled) else it
-                            }
-                        )
+                        skills = if (!ok) {
+                            skills.copy(
+                                toggleError = "Could not ${if (enabled) "enable" else "disable"} " +
+                                    "$name on the server."
+                            )
+                        } else {
+                            skills.copy(
+                                toggleError = null,
+                                items = skills.items.map {
+                                    if (it.name == name) it.copy(enabled = enabled) else it
+                                }
+                            )
+                        }
                     )
                 )
             }

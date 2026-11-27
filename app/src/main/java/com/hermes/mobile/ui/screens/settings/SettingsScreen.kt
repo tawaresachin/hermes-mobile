@@ -185,6 +185,7 @@ fun SettingsScreen(
     }
     // QR mode selector dialog
     var showQrDialog by remember { mutableStateOf(false) }
+    var showLogoutConfirm by remember { mutableStateOf(false) }
     // E2E setup help dialog
     var showSetupHelp by remember { mutableStateOf(false) }
 
@@ -376,13 +377,34 @@ fun SettingsScreen(
                             }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        TextButton(onClick = {
-                            WakeWordService.stop(context)
-                            viewModel.logout()
-                        }) {
+                        TextButton(onClick = { showLogoutConfirm = true }) {
                             Icon(Icons.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Log Out")
+                        }
+                        if (showLogoutConfirm) {
+                            AlertDialog(
+                                onDismissRequest = { showLogoutConfirm = false },
+                                title = { Text("Log out?") },
+                                text = {
+                                    Text(
+                                        "This forgets the server address and API key. " +
+                                            "Wake word stops and chat history stays on this device."
+                                    )
+                                },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        showLogoutConfirm = false
+                                        WakeWordService.stop(context)
+                                        viewModel.logout()
+                                    }) { Text("Log out") }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { showLogoutConfirm = false }) {
+                                        Text("Cancel")
+                                    }
+                                }
+                            )
                         }
                     }
                 } else {

@@ -1,6 +1,7 @@
 package com.hermes.mobile.wake
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -296,6 +297,7 @@ class WakeWordService : Service() {
      * samples. A phone that rejects 16 kHz or returns silence from MIC falls
      * through to the next configuration instead of pausing silently.
      */
+    @SuppressLint("MissingPermission") // callers gate on hasMicrophone() (RECORD_AUDIO)
     private fun openCapture(probeSamples: Int): OpenResult {
         val attempts = mutableListOf<String>()
         for (config in WakeCaptureConfig.ORDERED) {
@@ -449,6 +451,10 @@ class WakeWordService : Service() {
         val needsResample = opened.config.sampleRate != WakeCaptureConfig.TARGET_RATE
         var filled = 0
         var ticks = 0
+        // A recorder that accepts the read but never produces a sample (seen
+        // on some OEMs after a route change) used to spin this loop at full
+        // CPU forever; the mic stayed open and the UI said "Listening".
+        var zeroReads = 0
         try {
             while (isCurrentCapture(seq) && controller.currentState() == WakeRunState.Listening &&
                 recorder === opened.recorder
@@ -464,6 +470,20 @@ class WakeWordService : Service() {
                     }
                     break
                 }
+                if (read == 0) {
+                    zeroReads++
+                    if (zeroReads >= 100) { // ~3 s of empty reads
+                        if (isCurrentCapture(seq)) {
+                            lastError = "Microphone stopped producing samples"
+                            statusReason = "microphone stalled"
+                            DiagLog.e("WAKE", "microphone stalled on ${opened.config.label}")
+                        }
+                        break
+                    }
+                    Thread.sleep(20)
+                    continue
+                }
+                zeroReads = 0
                 if (read > 0) {
                     filled += read
                     if (filled == source.size) {

@@ -45,6 +45,12 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # A release is only worth shipping if the code still passes its tests.
+      # assembleRelease compiles but never runs unit tests, so this gate must
+      # be explicit and must precede the build/publish steps.
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
       # The release APK MUST be signed with the release key. Without a
       # signingConfig AGP silently emits an UNSIGNED apk under the release
       # filename, and a debug-signed apk breaks in-place updates for users.
@@ -65,14 +71,35 @@ jobs:
             { echo "::error::KEYSTORE_PASSWORD / KEY_PASSWORD secrets are not set"; exit 1; }
           ./gradlew :app:assembleRelease --no-daemon
 
-      - name: Verify the APK is release-signed
+      - name: Verify artifact identity and release signature
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          APK=$(find app/build/outputs/apk/release -name '*.apk')
+          set -euo pipefail
+          # Exactly one APK: a stale/split artifact must never be published by
+          # accident, and `find` returning several lines would poison the
+          # apksigner/gh commands below.
+          mapfile -t APKS < <(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk')
+          [ "${#APKS[@]}" -eq 1 ] || { echo "::error::expected exactly one APK, found ${#APKS[@]}"; ls -l app/build/outputs/apk/release; exit 1; }
+          APK="${APKS[0]}"
+          echo "APK=$APK"
+
+          # The tag, the built versionName and the filename must agree; the
+          # self-updater compares versionCode, so a mismatched tag would ship
+          # an APK that can never offer itself as an update.
+          AAPT="$ANDROID_HOME/build-tools/34.0.0/aapt"
+          BUILT_VERSION=$("$AAPT" dump badging "$APK" | sed -n "s/^package: name='[^']*' versionCode='[0-9]*' versionName='\([^']*\)'.*/\1/p")
+          echo "built versionName=$BUILT_VERSION tag=$TAG"
+          [ "v$BUILT_VERSION" = "$TAG" ] || { echo "::error::tag $TAG does not match built versionName $BUILT_VERSION"; exit 1; }
+
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
-          "$APKSIGNER" verify --print-certs "$APK"
-          if "$APKSIGNER" verify --print-certs "$APK" | grep -q "CN=Android Debug"; then
-            echo "::error::$APK is debug-signed"; exit 1
-          fi
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK")
+          echo "$CERTS"
+          echo "$CERTS" | grep -qi "CN=Android Debug" && { echo "::error::$APK is debug-signed"; exit 1; } || true
+          # Pin the actual release certificate. "not debug" alone would accept
+          # any other key, which silently breaks in-place updates for users.
+          echo "$CERTS" | grep -qi "SHA-256 digest: 1f37c684cc00ccdaff76ec66b0fee0a76e251011008c36d58500df38054d7e2e" \
+            || { echo "::error::APK is not signed with the Hermes release key"; exit 1; }
 
       # The mobile self-updater refuses to install without SHA256SUMS.
       - name: Generate SHA256SUMS

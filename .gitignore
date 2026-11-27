@@ -41,3 +41,9 @@ qa_evidence/
 qa_evidence_*/
 craft_anything_qa_audit_report.md
 craft_anything_remediation_verification.md
+
+# Local review harness artifacts
+.claude-cli/
+.opencode-xdg/
+.review/
+.kotlin/

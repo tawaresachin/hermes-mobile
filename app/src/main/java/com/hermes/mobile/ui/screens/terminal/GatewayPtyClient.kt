@@ -39,6 +39,8 @@ class GatewayPtyClient(private val baseUrl: String, private val apiKey: String) 
     private val main = Handler(Looper.getMainLooper())
     private var ws: WebSocket? = null
     private val promptFilter = GatewayPromptFilter()
+    private val replay = PtyReplayBuffer()
+    @Volatile private var callback: Callback? = null
 
     companion object {
         // One live gateway shell per process, mirroring SshTerminal's
@@ -50,8 +52,22 @@ class GatewayPtyClient(private val baseUrl: String, private val apiKey: String) 
     @Volatile var isOpen: Boolean = false
         private set
 
+    /** True when this live shell belongs to the currently configured server.
+     * A pairing change must not re-attach a shell from the old gateway. */
+    fun matches(base: String, key: String): Boolean =
+        baseUrl.trimEnd('/') == base.trimEnd('/') && apiKey == key
+
     /** Connect + spawn the gateway shell at the given PTY geometry. */
     fun connect(cols: Int, rows: Int, cb: Callback) {
+        callback = cb
+        if (isOpen && ws != null) {
+            // Already live: never spawn a second shell for the same screen.
+            resize(cols, rows)
+            return
+        }
+        // A socket that is still connecting is replaced, never stacked.
+        ws?.cancel()
+        ws = null
         current = this
         val url = baseUrl.trimEnd('/')
         val wsUrl = url.replaceFirst("http://", "ws://")
@@ -65,19 +81,28 @@ class GatewayPtyClient(private val baseUrl: String, private val apiKey: String) 
                 webSocket.send(JSONObject()
                     .put("t", "hello").put("cols", cols).put("rows", rows)
                     .toString())
-                post { cb.onOpen() }
+                post { callback?.onOpen() }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
                     val f = JSONObject(text)
                     when (f.optString("t")) {
-                        "out" -> post {
+                        "out" -> {
+                            // Decode + record off the main thread: a large
+                            // `cat` must not push base64 work onto UI.
                             val raw = java.util.Base64.getDecoder().decode(f.getString("d"))
-                            cb.onOut(promptFilter.feed(raw))
+                            replay.add(raw)
+                            val bytes = promptFilter.feed(raw)
+                            post { callback?.onOut(bytes) }
                         }
-                        "exit" -> post { cb.onExit(f.optInt("code", 0)) }
-                        "err" -> post { cb.onErr(f.optString("m", "gateway error")) }
+                        "exit" -> {
+                            isOpen = false
+                            webSocket.close(1000, null)
+                            if (current === this@GatewayPtyClient) current = null
+                            post { callback?.onExit(f.optInt("code", 0)) }
+                        }
+                        "err" -> post { callback?.onErr(f.optString("m", "gateway error")) }
                     }
                 } catch (_: Exception) {
                     // A malformed server frame never kills the session.
@@ -90,18 +115,31 @@ class GatewayPtyClient(private val baseUrl: String, private val apiKey: String) 
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 isOpen = false
-                post { cb.onExit(code) }
+                if (current === this@GatewayPtyClient) current = null
+                post { callback?.onExit(code) }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 isOpen = false
-                post { cb.onErr(t.message ?: "gateway connection failed") }
+                if (current === this@GatewayPtyClient) current = null
+                post { callback?.onErr(t.message ?: "gateway connection failed") }
             }
         })
     }
 
+    /** Adopt a live shell from a previous composition (rotation / tab switch).
+     * Replays the recent output tail so the new WebView is not blank. Does
+     * NOT fire onOpen: the screen is already in terminal mode and must not
+     * print the welcome banner twice. */
+    fun attach(cb: Callback) {
+        callback = cb
+        val snapshot = replay.snapshot()
+        if (snapshot.isNotEmpty()) post { cb.onOut(snapshot) }
+    }
+
     /** stdin bytes (the PTY echoes them; the gateway's shell owns the rest). */
     fun send(bytes: ByteArray) {
+        if (!isOpen) return
         ws?.send(JSONObject()
             .put("t", "in")
             .put("d", java.util.Base64.getEncoder().encodeToString(bytes))
@@ -117,9 +155,17 @@ class GatewayPtyClient(private val baseUrl: String, private val apiKey: String) 
     }
 
     fun close() {
+        // Null the callback BEFORE closing: the close handshake posts onExit
+        // asynchronously, and a user-initiated Disconnect must not surface as
+        // "Shell exited (1000)" on a screen that already left the session.
+        callback = null
         ws?.close(1000, "user")
         ws = null
         isOpen = false
+        replay.clear()
+        if (current === this@GatewayPtyClient) current = null
+        try { http.dispatcher.executorService.shutdown() } catch (_: Exception) { }
+        try { http.connectionPool.evictAll() } catch (_: Exception) { }
     }
 
     private fun post(block: () -> Unit) {

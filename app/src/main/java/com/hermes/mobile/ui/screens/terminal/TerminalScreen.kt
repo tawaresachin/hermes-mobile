@@ -415,7 +415,9 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
         }
     }
     // Re-attach to a live session (tab switch / rotation):
-    var connected by remember { mutableStateOf(SshTerminal.alive) }
+    var connected by remember {
+        mutableStateOf(SshTerminal.alive || GatewayPtyClient.alive())
+    }
     val webState = remember { TerminalWebViewState() }
     var running by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
@@ -429,7 +431,9 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
     // SSH is tucked behind an Advanced toggle so the common case is a tap.
     var connSource by remember { mutableStateOf("gateway") }
     var showAdvanced by remember { mutableStateOf(false) }
-    var gw by remember { mutableStateOf<GatewayPtyClient?>(null) }
+    var gw by remember {
+        mutableStateOf(GatewayPtyClient.current?.takeIf { it.isOpen })
+    }
     // Live identity from the gateway's /api/mobile/pty/info, refreshed on
     // every connect/reconnect. Null until it arrives (or on failure).
     var gatewayInfo by remember { mutableStateOf<GatewayPtyInfo?>(null) }
@@ -448,6 +452,76 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
             s.outputStream.flush()
         } catch (_: Exception) {
         }
+    }
+
+    // Callback bound to one gateway client. Shared by a fresh connect and a
+    // re-attach so a rotation cannot leave the new screen without output.
+    fun gatewayCallback(client: GatewayPtyClient) = object : GatewayPtyClient.Callback {
+        override fun onOpen() {
+            running = false
+            SshTerminal.closeAll()          // one source at a time
+            lastHost = ""
+            lastPort = 0
+            lastUser = ""
+            hadSession = true
+            connected = true
+            webState.clear()
+            // One-time Hermes-styled header (gold/cyan/text from the
+            // active CLI skin). The shell's real prompt follows it.
+            webState.writeText(
+                "\u001b[38;2;255;191;0m  >  Hermes Gateway Shell\u001b[0m\r\n" +
+                    "\u001b[38;2;255;248;220m  Type \u001b[38;2;17;168;205m" +
+                    "hermes\u001b[38;2;255;248;220m to launch the CLI.\u001b[0m\r\n\r\n"
+            )
+            webState.focus()
+            error = ""
+        }
+
+        override fun onOut(bytes: ByteArray) {
+            if (!client.isOpen) return      // closed under us
+            if (gw != client) return        // superseded: frames die here
+            // Raw bytes: xterm decodes UTF-8 across frame boundaries.
+            webState.writeBytes(bytes)
+        }
+
+        override fun onExit(code: Int) {
+            // Ownership guard: a late close/exit frame from a REPLACED
+            // client (user reconnected fast) must not clobber the
+            // session that now owns the [gw] slot.
+            if (gw != client) return
+            gw = null
+            connected = false
+            running = false
+            error = "Shell exited ($code)."
+        }
+
+        override fun onErr(message: String) {
+            if (gw != client) return
+            gw = null
+            connected = false
+            running = false
+            error = message
+        }
+    }
+
+    // Adopt a gateway shell that outlived the previous composition (rotation
+    // or tab switch). The WebView is new, so replay its recent tail; the
+    // screen must not print the welcome banner twice or spawn a second PTY.
+    LaunchedEffect(Unit) {
+        val existing = GatewayPtyClient.current ?: return@LaunchedEffect
+        if (!existing.isOpen) return@LaunchedEffect
+        val creds = HermesApiService.staticPtyCredentials(context)
+        if (creds == null || !existing.matches(creds.first, creds.second)) {
+            existing.close()
+            return@LaunchedEffect
+        }
+        gw = existing
+        connected = true
+        running = false
+        error = ""
+        gatewayInfo = fetchGatewayPtyInfo(creds.first, creds.second)
+        existing.attach(gatewayCallback(existing))
+        webState.geometry()?.let { (c, r) -> existing.resize(c, r) }
     }
 
     // Gateway connect: no host/port/user form — the credentials come
@@ -469,53 +543,7 @@ fun TerminalScreen(paddingValues: PaddingValues = PaddingValues(0.dp)) {
         val client = GatewayPtyClient(base, key)
         gw = client
         running = true
-        client.connect(cols, rows, object : GatewayPtyClient.Callback {
-            override fun onOpen() {
-                running = false
-                SshTerminal.closeAll()          // one source at a time
-                lastHost = ""
-                lastPort = 0
-                lastUser = ""
-                hadSession = true
-                connected = true
-                webState.clear()
-                // One-time Hermes-styled header (gold/cyan/text from the
-                // active CLI skin). The shell's real prompt follows it.
-                webState.writeText(
-                    "\u001b[38;2;255;191;0m  >  Hermes Gateway Shell\u001b[0m\r\n" +
-                        "\u001b[38;2;255;248;220m  Type \u001b[38;2;17;168;205m" +
-                        "hermes\u001b[38;2;255;248;220m to launch the CLI.\u001b[0m\r\n\r\n"
-                )
-                webState.focus()
-                error = ""
-            }
-
-            override fun onOut(bytes: ByteArray) {
-                if (!client.isOpen) return      // closed under us
-                if (gw != client) return        // superseded: frames die here
-                // Raw bytes: xterm decodes UTF-8 across frame boundaries.
-                webState.writeBytes(bytes)
-            }
-
-            override fun onExit(code: Int) {
-                // Ownership guard: a late close/exit frame from a REPLACED
-                // client (user reconnected fast) must not clobber the
-                // session that now owns the [gw] slot.
-                if (gw != client) return
-                gw = null
-                connected = false
-                running = false
-                error = "Shell exited ($code)."
-            }
-
-            override fun onErr(message: String) {
-                if (gw != client) return
-                gw = null
-                connected = false
-                running = false
-                error = message
-            }
-        })
+        client.connect(cols, rows, gatewayCallback(client))
     }
 
     val trust = remember { TrustPrompt() }

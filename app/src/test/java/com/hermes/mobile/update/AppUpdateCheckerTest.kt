@@ -33,4 +33,11 @@ class AppUpdateCheckerTest {
         assertTrue(AppUpdateChecker.versionCodeFromTag("v0.1.0") >
             AppUpdateChecker.versionCodeFromTag("v0.0.99"))
     }
+
+    @Test
+    fun `semver metadata and prerelease are stripped`() {
+        assertEquals(133, AppUpdateChecker.versionCodeFromTag("v0.1.33+build5"))
+        assertEquals(133, AppUpdateChecker.versionCodeFromTag("v0.1.33-rc.1"))
+        assertEquals(133, AppUpdateChecker.versionCodeFromTag("0.1.33-rc.1+meta"))
+    }
 }

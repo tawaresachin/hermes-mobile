@@ -219,6 +219,7 @@ private fun CapabilitySkillsSection(
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         SectionHeading("Skills", Icons.Filled.Psychology, MaterialTheme.colorScheme.primary)
+        state.toggleError?.let { SectionNote(it, isError = true) }
         when (state.status) {
             CapabilitySectionStatus.IDLE -> SectionNote("Not loaded yet")
             CapabilitySectionStatus.FAILED -> SectionNote(

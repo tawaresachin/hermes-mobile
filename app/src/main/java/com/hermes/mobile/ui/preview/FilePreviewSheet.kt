@@ -166,9 +166,18 @@ fun FilePreviewSheet(
                     Icon(Icons.Filled.OpenInNew, contentDescription = "Open externally",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                IconButton(onClick = { shareToApp(context, title, state) }, modifier = Modifier.size(36.dp)) {
+                // Share only exists for text/markdown. Tapping it on a PDF,
+                // sheet or image used to do nothing at all; disabled state is
+                // honest, and Open externally stays available.
+                val canShare = state is PreviewState.Text || state is PreviewState.Markdown
+                IconButton(
+                    onClick = { shareToApp(context, title, state) },
+                    modifier = Modifier.size(36.dp),
+                    enabled = canShare
+                ) {
                     Icon(Icons.Filled.Share, contentDescription = "Share",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                            alpha = if (canShare) 1f else 0.35f))
                 }
             }
             HorizontalDivider()
@@ -209,22 +218,26 @@ private fun TextBody(body: String, monospace: Boolean) {
 
 @Composable
 private fun HtmlBody(html: String) {
-    // JS allowed for self-contained pages; file:// / http navigation blocked.
+    // Attachment HTML is untrusted (agent output / prompt injection). Scripts
+    // must not run and nothing may be fetched from the network: a page could
+    // otherwise exfiltrate the agent's data through fetch().
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
             WebView(ctx).apply {
-                settings.javaScriptEnabled = true
+                settings.javaScriptEnabled = false
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
                 settings.domStorageEnabled = false
+                settings.blockNetworkLoads = true
                 webViewClient = object : android.webkit.WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView?,
                         request: android.webkit.WebResourceRequest?): Boolean = true
                 }
                 loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
             }
-        }
+        },
+        onRelease = { it.destroy() }
     )
 }
 

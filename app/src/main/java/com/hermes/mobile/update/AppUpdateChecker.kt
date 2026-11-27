@@ -83,7 +83,13 @@ class AppUpdateChecker @Inject constructor(
 
     /** True while inside the 12h throttle window with a cached verdict. */
     val cachedFresh: Boolean
-        get() = System.currentTimeMillis() - prefs.getLong(KEY_CHECKED_AT, 0L) < CHECK_INTERVAL_MS
+        get() {
+            // Guard the lower bound too: a clock moved backwards used to make
+            // the difference negative and keep a stale verdict "fresh" until
+            // the clock caught up.
+            val age = System.currentTimeMillis() - prefs.getLong(KEY_CHECKED_AT, 0L)
+            return age in 0..CHECK_INTERVAL_MS
+        }
 
     init {
         // Seed instantly from the last persisted check — About renders
@@ -159,7 +165,11 @@ class AppUpdateChecker @Inject constructor(
     suspend fun downloadAndInstall() {
         val url = prefs.getString(KEY_APK_URL, "").orEmpty()
         val sumsUrl = prefs.getString(KEY_SUMS_URL, "").orEmpty()
-        val latest = _state.value.latest
+        // Read the version from the SAME persisted snapshot as url/sumsUrl:
+        // mixing in-memory latest with persisted URLs could pair a new name
+        // with a stale download link.
+        val latest = prefs.getString(KEY_LATEST, "").orEmpty()
+            .ifBlank { _state.value.latest }
         if (url.isEmpty() || latest.isEmpty()) {
             _state.value = _state.value.copy(error = "nothing to download — check first")
             return
@@ -178,8 +188,14 @@ class AppUpdateChecker @Inject constructor(
                         .header("User-Agent", "Hermes-Mobile").build()
                     http.newCall(req).execute().use { res ->
                         if (!res.isSuccessful) return@use null
+                        val wanted = "Hermes-Mobile-v$latest.apk"
                         res.body?.string()?.lineSequence()
-                            ?.firstOrNull { it.contains("Hermes-Mobile-v$latest.apk") }
+                            // SHA256SUMS is "<hash>  <filename>"; match the
+                            // filename token EXACTLY. contains() could pick a
+                            // different asset whose name embeds this one.
+                            ?.firstOrNull { line ->
+                                line.trim().split(Regex("\\s+")).lastOrNull() == wanted
+                            }
                             ?.trim()?.substringBefore(' ')?.lowercase()
                             ?.takeIf { it.length == 64 }
                     }
@@ -221,13 +237,23 @@ class AppUpdateChecker @Inject constructor(
                 }
             }
             _state.value = _state.value.copy(downloading = false, progress = 1f)
-            launchInstaller(apk)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             apk.delete()
             _state.value = _state.value.copy(
                 downloading = false, progress = 0f, error = e.message ?: "download failed")
+            return
+        }
+        // Launch OUTSIDE the download try/catch: a missing/denied installer is
+        // not a download failure, and the verified APK must survive so the
+        // user can open it after granting "install unknown apps".
+        try {
+            launchInstaller(apk)
+        } catch (e: Exception) {
+            _state.value = _state.value.copy(
+                error = "Could not open the installer. Allow installs for Hermes in " +
+                    "Android settings, then tap Update again.")
         }
     }
 
@@ -272,7 +298,12 @@ class AppUpdateChecker @Inject constructor(
          *  installed 0.1.32 read as code 132 while the tag 0.1.32 read as
          *  1032 — the About row showed "Update" for the same version.) */
         fun versionCodeFromTag(tag: String): Int = try {
-            val p = tag.removePrefix("v").split(".")
+            // Strip SemVer pre-release/build metadata first: "0.1.33+build5"
+            // and "0.1.33-rc.1" must both read as 133, not 100.
+            val core = tag.removePrefix("v")
+                .substringBefore('-')
+                .substringBefore('+')
+            val p = core.split(".")
             (p.getOrNull(0)?.toIntOrNull() ?: 0) * 10_000 +
                 (p.getOrNull(1)?.toIntOrNull() ?: 0) * 100 +
                 (p.getOrNull(2)?.toIntOrNull() ?: 0)

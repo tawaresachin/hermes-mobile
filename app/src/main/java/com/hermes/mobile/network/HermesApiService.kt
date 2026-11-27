@@ -261,13 +261,18 @@ class HermesApiService @Inject constructor(
         if (prev == cfg) {
             return
         }
+        // commit(), not apply(): the auth interceptor reads base_url on the
+        // very next request. An async write could briefly leave it blank, and
+        // a blank base host is treated as "do not send the key" (closing the
+        // old leak-to-any-host window, but also requiring the URL to be
+        // visible immediately).
         prefs.edit()
             .putString(KEY_BASE_URL, cfg.baseUrl)
-            .apply()
+            .commit()
         secretPrefs.edit()
             .putString(KEY_API_KEY, cfg.apiKey.orEmpty())
             .putString(KEY_SETUP_TOKEN, cfg.setupToken.orEmpty())
-            .apply()
+            .commit()
         // Invalidate the interceptor's in-memory key cache so
         // the next request picks up the fresh key without a
         // SharedPreferences round-trip.
@@ -277,8 +282,8 @@ class HermesApiService @Inject constructor(
     /** Forget the pairing entirely (logout). */
     fun clearConfig() {
         config = null
-        prefs.edit().remove(KEY_BASE_URL).apply()
-        secretPrefs.edit().remove(KEY_API_KEY).remove(KEY_SETUP_TOKEN).apply()
+        prefs.edit().remove(KEY_BASE_URL).commit()
+        secretPrefs.edit().remove(KEY_API_KEY).remove(KEY_SETUP_TOKEN).commit()
         authInterceptor.refreshKeyCache()
     }
 
@@ -1051,6 +1056,11 @@ class HermesApiService @Inject constructor(
         val hidden: Boolean,
     )
 
+    private fun JSONObject.stringOrEmpty(key: String): String {
+        val v = opt(key) ?: return ""
+        return if (v == JSONObject.NULL) "" else v.toString()
+    }
+
     /** Returns (sessions, complete) — complete=false means the list may be
      * truncated (page cap hit or mid-pagination error), so the caller must
      * NOT purge local sessions missing from it. */
@@ -1062,12 +1072,14 @@ class HermesApiService @Inject constructor(
             try {
                 var offset = 0
                 for (page in 0 until 5) {
+                    var stop = false
+                    var failed = false
                     val request = Request.Builder()
                         .url("$baseUrl/api/sessions?limit=200&offset=$offset").get().build()
                     client.newCall(request).execute().use { response ->
-                        if (!response.isSuccessful) return@use
-                        val json = JSONObject(response.body?.string() ?: return@use)
-                        val arr = json.optJSONArray("data") ?: return@use
+                        if (!response.isSuccessful) { failed = true; return@use }
+                        val json = JSONObject(response.body?.string() ?: run { failed = true; return@use })
+                        val arr = json.optJSONArray("data") ?: run { failed = true; return@use }
                         for (i in 0 until arr.length()) {
                             val s = arr.optJSONObject(i) ?: continue
                             val id = s.optString("id", "")
@@ -1075,10 +1087,13 @@ class HermesApiService @Inject constructor(
                             out.add(
                                 ServerSession(
                                     id = id,
-                                    title = s.optString("title", "")
-                                        .ifBlank { s.optString("preview", "").take(60) },
-                                    model = s.optString("model", ""),
-                                    source = s.optString("source", ""),
+                                    // org.json optString() renders JSON null as
+                                    // the literal "null"; a CLI session with no
+                                    // title used to show a row titled "null".
+                                    title = s.stringOrEmpty("title")
+                                        .ifBlank { s.stringOrEmpty("preview").take(60) },
+                                    model = s.stringOrEmpty("model"),
+                                    source = s.stringOrEmpty("source"),
                                     messageCount = s.optInt("message_count", 0),
                                     startedAtSec = s.optDouble("started_at", 0.0),
                                     lastActiveSec = s.optDouble("last_active", 0.0),
@@ -1089,11 +1104,17 @@ class HermesApiService @Inject constructor(
                         }
                         if (!json.optBoolean("has_more", false) || arr.length() == 0) {
                             complete = true
-                            offset = -1
-                            return@use
+                            stop = true
                         }
                     }
-                    if (offset < 0) break
+                    // A failed page must abort the WHOLE walk: continuing at the
+                    // next offset would skip a whole page of sessions, and if a
+                    // later page says has_more=false the result would be marked
+                    // complete — letting the caller purge live local sessions
+                    // that merely fell into the hole. Partial data is fine;
+                    // incomplete data marked complete is data loss.
+                    if (failed) break
+                    if (stop) break
                     offset += 200
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {

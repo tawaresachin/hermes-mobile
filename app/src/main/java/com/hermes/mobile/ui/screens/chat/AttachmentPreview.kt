@@ -16,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -86,7 +88,12 @@ fun AttachmentPreview(
             }
             // Mark up button — only for images (Cursor-style visual direction)
             if (onMarkup != null && attachment.attachType == "image") {
-                IconButton(onClick = onMarkup, modifier = Modifier.size(32.dp)) {
+                IconButton(
+                    onClick = onMarkup,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .semantics { contentDescription = "Mark up image" }
+                ) {
                     Text("✏️", fontSize = 16.sp)
                 }
             }

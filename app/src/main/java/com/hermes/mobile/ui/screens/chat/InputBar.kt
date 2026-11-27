@@ -66,7 +66,12 @@ fun InputBar(
     // ── Slash command state ──
     var commandsSheetOpen by remember { mutableStateOf(false) }
     var commandSearch by remember { mutableStateOf("") }
-    val showSlashCommands = inputText.startsWith("/") && inputText.length <= 30
+    // The picker is for choosing a command, not for editing its arguments:
+    // once the user types a space the first token is settled and the list
+    // must get out of the way (it used to cover the chat while the user typed
+    // "/model <name>" or "/title <text>").
+    val showSlashCommands = inputText.startsWith("/") &&
+        inputText.length <= 30 && !inputText.contains(' ')
 
     val onCommandSelected: (String) -> Unit = { cmd ->
         onInputChange(cmd)

@@ -186,4 +186,16 @@ class TerminalAnsiTest {
         // two colored runs → two spans
         assertEquals(2, out.spanStyles.size)
     }
+
+    @Test
+    fun overBudgetCsiDropsOnlyTheSequence() {
+        // 40 params blow the 32-param budget. The guard must skip this
+        // sequence, not the rest of the stream: bytes after it are real
+        // output and used to be discarded (blank terminal tail).
+        val sb = StringBuilder("\u001B[")
+        repeat(40) { sb.append("1;") }
+        sb.append("mHello")
+        val out = TerminalAnsi.render(sb.toString())
+        assertEquals("Hello", out.text)
+    }
 }

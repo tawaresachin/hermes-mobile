@@ -78,10 +78,12 @@ class AuthInterceptor @Inject constructor(
             throw IOException("Cleartext gateway traffic is limited to private hosts")
         }
         val apiKey = readApiKey()
-        // baseHost == null means we are not configured yet (no key either);
-        // keep the historical behaviour there rather than silently dropping auth.
+        // Only send the key when we KNOW the configured host. A null base
+        // host used to mean "attach to anything": during pairing (or with a
+        // partially migrated config) an image/attachment URL could receive
+        // the bearer token before base_url was persisted.
         val baseHost = configuredHost()
-        val sameServer = baseHost == null ||
+        val sameServer = baseHost != null &&
             originalRequest.url.host.equals(baseHost, ignoreCase = true)
 
         return if (apiKey.isNotBlank() && sameServer) {

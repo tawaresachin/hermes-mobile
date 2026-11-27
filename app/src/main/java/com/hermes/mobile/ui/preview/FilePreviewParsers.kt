@@ -82,7 +82,12 @@ fun prettyJson(text: String): String = try {
     } catch (_: Exception) { text }
 }
 
+private const val MAX_JSON_DEPTH = 200
+
 private fun appendJson(sb: StringBuilder, v: Any, depth: Int) {
+    // Hostile/deep JSON used to recurse until StackOverflowError, failing the
+    // whole preview. Cap the depth and fall back to the raw node.
+    if (depth > MAX_JSON_DEPTH) { sb.append(v.toString()); return }
     val pad = "  ".repeat(depth + 1)
     when (v) {
         is org.json.JSONObject -> {

@@ -90,13 +90,40 @@ class HermesRepository @Inject constructor(
     suspend fun setSessionArchived(sessionId: String, archived: Boolean) {
         sessionDao.setArchived(sessionId, archived)
         serverIdOrSelf(sessionId)?.let { sid ->
-            try { apiService.setSessionArchived(sid, archived) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            // Remember the user's intent BEFORE the network call: a failed
+            // PATCH (offline / gateway restart) must not let the next sync
+            // overwrite the local flag with stale server truth.
+            archivePendingPrefs.edit().putBoolean(sid, archived).apply()
+            try {
+                if (apiService.setSessionArchived(sid, archived)) {
+                    archivePendingPrefs.edit().remove(sid).apply()
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) {
-                // Best-effort — offline archive sync must not crash the caller,
-                // but it used to vanish silently.
-                DiagLog.e("REPO", "setSessionArchived failed: $e")
+                DiagLog.e("REPO", "setSessionArchived failed (will retry): $e")
             }
+        }
+    }
+
+    private val archivePendingPrefs by lazy {
+        context.getSharedPreferences("hermes_archive_pending", Context.MODE_PRIVATE)
+    }
+
+    private fun pendingArchiveFor(serverId: String): Boolean? =
+        if (archivePendingPrefs.contains(serverId)) {
+            archivePendingPrefs.getBoolean(serverId, false)
+        } else null
+
+    /** Best-effort replay of archive intents that failed while offline. */
+    private suspend fun retryPendingArchives() {
+        val pending = archivePendingPrefs.all.entries
+            .filter { it.value is Boolean }
+            .map { it.key to (it.value as Boolean) }
+        for ((sid, want) in pending) {
+            val ok = try { apiService.setSessionArchived(sid, want) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { false }
+            if (ok) archivePendingPrefs.edit().remove(sid).apply()
         }
     }
 
@@ -252,6 +279,7 @@ class HermesRepository @Inject constructor(
     suspend fun syncAllSessionsFromServer(): Int {
         // First, land any server deletes deferred by a process kill.
         flushPendingDeleteGrace()
+        retryPendingArchives()
         val (remote, complete) = apiService.fetchServerSessions()
         if (remote.isEmpty()) return 0
         var changed = 0
@@ -289,8 +317,9 @@ class HermesRepository @Inject constructor(
                     // Server-backed sessions: the archive flag round-trips
                     // through PATCH, so server truth wins (un-archive works).
                     // UUID rows that never reached the server: keep local.
-                    archived = if (mappedLocal != null || apiService.isSynced(localId)) s.archived
-                               else (existing?.archived ?: s.archived),
+                    archived = pendingArchiveFor(s.id)
+                        ?: if (mappedLocal != null || apiService.isSynced(localId)) s.archived
+                           else (existing?.archived ?: s.archived),
                 )
             )
             if (existing == null || existing.title != newTitle) {

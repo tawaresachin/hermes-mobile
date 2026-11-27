@@ -102,6 +102,9 @@ class RunController @Inject constructor(
         /** Latest agent lifecycle note (rate-limit wait / retry countdown)
          * surfaced so a long provider backoff never reads as a dead chat. */
         val statusNote: String? = null,
+        /** Wall-clock start, used to reject a stale transcript tail when a
+         * run vanishes before persisting its own reply. */
+        val startedAtMs: Long = 0L,
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -117,6 +120,9 @@ class RunController @Inject constructor(
      * snapshot is only a throttled view of this. Cleaned on every terminal. */
     private val streamBuilders = ConcurrentHashMap<String, StringBuilder>()
     private val streamEmitAt = ConcurrentHashMap<String, Long>()
+    /** Serializes the SSE-terminal and poll-terminal paths. Without this,
+     * both could observe the live turn and finalize/persist it twice. */
+    private val finishLock = Any()
 
     fun liveTurn(sessionId: String): LiveTurn? = _turns.value[sessionId]
     fun isBusy(sessionId: String): Boolean = _turns.value.containsKey(sessionId)
@@ -197,39 +203,49 @@ class RunController @Inject constructor(
         scope.launch {
             // A new attempt invalidates the previous failure for this session.
             admitErrors.remove(sessionId)
-            // 1. Local rows first — instant feedback, survives everything.
             var uid = userMsgId
-            if (uid == null) {
-                uid = insertUserRow(sessionId, displayText ?: query, attachmentUrl, attachType, replyTo)
-            } else {
-                try { messageDao.updateMessageStatus(uid, MessageStatus.SENT) }
-                catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { }
-            }
-            val placeholder = messageDao.insertMessage(
-                Message(sessionId = sessionId, role = MessageRole.ASSISTANT,
-                    content = "", isStreaming = true)
-            )
+            var placeholder: Long? = null
+            var runId = ""
+            var safeModel = model
+            var applyTerse = true
+            try {
+                // 1. Local rows first — instant feedback, survives everything.
+                if (uid == null) {
+                    uid = insertUserRow(sessionId, displayText ?: query, attachmentUrl, attachType, replyTo)
+                } else {
+                    try { messageDao.updateMessageStatus(uid, MessageStatus.SENT) }
+                    catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { }
+                }
+                placeholder = messageDao.insertMessage(
+                    Message(sessionId = sessionId, role = MessageRole.ASSISTANT,
+                        content = "", isStreaming = true)
+                )
 
-            // 2. Wire text: quote + media note ride inside the user message.
-            val wire = TurnText.wireQuery(query, replyTo, attachmentUrl, attachType, attachmentPath)
+                // 2. Wire text: quote + media note ride inside the user message.
+                val wire = TurnText.wireQuery(query, replyTo, attachmentUrl, attachType, attachmentPath)
 
-            // 3. Token Optimizer: terse directive only where it pays (learned
-            //    per model). Rides as `instructions` — /v1/runs extracts it as
-            //    the ephemeral system prompt, same as the chat path's system msg.
-            val safeModel = model.ifBlank { api.fetchDefaultModelId() }  // cached
-            val applyTerse = api.terseDecision(safeModel)
-            val serverId = api.serverIdFor(sessionId)?.takeIf { it.isNotBlank() } ?: sessionId
+                // 3. Token Optimizer: terse directive only where it pays (learned
+                //    per model). Rides as `instructions` — /v1/runs extracts it as
+                //    the ephemeral system prompt, same as the chat path's system msg.
+                //    A blank model with no reachable model list throws here; that
+                //    must delete the ghost bubbles, not escape the coroutine and
+                //    kill the process.
+                safeModel = model.ifBlank { api.fetchDefaultModelId() }  // cached
+                applyTerse = api.terseDecision(safeModel)
+                val serverId = api.serverIdFor(sessionId)?.takeIf { it.isNotBlank() } ?: sessionId
 
-            val runId = try {
-                api.startRun(serverId, wire, safeModel, provider,
+                runId = api.startRun(serverId, wire, safeModel, provider,
                     TurnText.buildInstructions(applyTerse, api.isSwarmForSession(sessionId)))
-            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) {
-                // Admission failed — no server work exists. Clean the ghost.
-                try {
-                    messageDao.deleteMessage(placeholder)
-                    messageDao.updateMessageStatus(uid, MessageStatus.FAILED)
-                } catch (e2: kotlinx.coroutines.CancellationException) { throw e2 } catch (_: Exception) { }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Admission/setup failed — no server work exists. Clean the ghost.
+                placeholder?.let { pid ->
+                    try { messageDao.deleteMessage(pid) } catch (_: Exception) { }
+                }
+                uid?.let { id ->
+                    try { messageDao.updateMessageStatus(id, MessageStatus.FAILED) } catch (_: Exception) { }
+                }
                 val reason = e.message ?: "Could not reach the server."
                 admitErrors[sessionId] = reason
                 onAdmitError(reason)
@@ -240,8 +256,9 @@ class RunController @Inject constructor(
             reconnectBudget[sessionId] = 3
             _turns.update {
                 it + (sessionId to LiveTurn(
-                    sessionId = sessionId, runId = runId, assistantMsgId = placeholder,
-                    userMsgId = uid, query = query, model = safeModel, applyTerse = applyTerse))
+                    sessionId = sessionId, runId = runId, assistantMsgId = placeholder!!,
+                    userMsgId = uid, query = query, model = safeModel, applyTerse = applyTerse,
+                    startedAtMs = System.currentTimeMillis()))
             }
             // Ongoing "is typing…" watcher — survives screen changes; the
             // completion path replaces it with the reply notification.
@@ -454,15 +471,18 @@ class RunController @Inject constructor(
     /** Persist the final bubble + bookkeeping. Idempotent per session: the
      * SSE terminal event and the poll fallback can race; first writer wins. */
     private fun finish(sessionId: String, output: String, usageIn: Long, usageOut: Long, failed: String?) {
-        val turn = _turns.value[sessionId] ?: return  // already settled
-        _turns.update { it - sessionId }
-        eventSources.remove(sessionId)?.cancel()
-        pollJobs.remove(sessionId)?.cancel()
-        reconnectBudget.remove(sessionId)
-        val acc = accumulated(sessionId, turn)
-        streamBuilders.remove(sessionId); streamEmitAt.remove(sessionId)
-        api.clearActiveRun(sessionId)
-        scope.launch { finalizeTurn(turn, output, usageIn, usageOut, failed, acc) }
+        val pair = synchronized(finishLock) {
+            val turn = _turns.value[sessionId] ?: return  // already settled
+            _turns.update { it - sessionId }
+            eventSources.remove(sessionId)?.cancel()
+            pollJobs.remove(sessionId)?.cancel()
+            reconnectBudget.remove(sessionId)
+            val acc = accumulated(sessionId, turn)
+            streamBuilders.remove(sessionId); streamEmitAt.remove(sessionId)
+            api.clearActiveRun(sessionId)
+            turn to acc
+        }
+        scope.launch { finalizeTurn(pair.first, output, usageIn, usageOut, failed, pair.second) }
     }
 
     private suspend fun finalizeTurn(
@@ -524,6 +544,7 @@ class RunController @Inject constructor(
      * settle the placeholder with whatever the agent actually saved. */
     private suspend fun settleFromTranscript(sessionId: String) {
         val turn = _turns.value[sessionId] ?: return
+        val acc = accumulated(sessionId, turn)
         _turns.update { it - sessionId }
         eventSources.remove(sessionId)?.cancel()
         pollJobs.remove(sessionId)?.cancel()
@@ -531,10 +552,12 @@ class RunController @Inject constructor(
         streamBuilders.remove(sessionId); streamEmitAt.remove(sessionId)
         api.clearActiveRun(sessionId)
         val serverId = api.serverIdFor(sessionId)?.takeIf { it.isNotBlank() } ?: sessionId
-        val msgs = api.fetchSessionMessages(serverId)
-        val tail = msgs?.lastOrNull { it.optString("role") == "assistant" }
-        val content = tail?.optString("content", "").orEmpty()
-        finalizeTurn(turn, content, 0, 0, failed = null)
+        val msgs = api.fetchSessionMessages(serverId).orEmpty()
+        // Only a reply persisted AT/AFTER this turn started may settle it.
+        // Taking the last assistant row blindly duplicated the previous
+        // answer when the vanished run had not persisted its own yet.
+        val content = latestFinalAssistantSince(msgs, turn.startedAtMs)?.optString("content", "").orEmpty()
+        finalizeTurn(turn, content, 0, 0, failed = null, accumulatedText = acc)
     }
 
     // ── Controls (Telegram parity: stop / steer / approve) ──────────────
@@ -690,4 +713,18 @@ class RunController @Inject constructor(
             catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { }
         }
     }
+}
+
+/** Newest final assistant message persisted at/after [sinceMs]. */
+internal fun latestFinalAssistantSince(
+    messages: List<JSONObject>,
+    sinceMs: Long,
+): JSONObject? = messages.lastOrNull { m ->
+    val ts = m.optDouble("timestamp", 0.0)
+    // Gateway transcripts use epoch SECONDS; accept millis too so a future
+    // server can't silently turn every turn into "no answer".
+    val tsMs = if (ts < 1e11) ts * 1000.0 else ts
+    m.optString("role") == "assistant" &&
+        !m.optBoolean("is_streaming", false) &&
+        tsMs >= sinceMs.toDouble()
 }

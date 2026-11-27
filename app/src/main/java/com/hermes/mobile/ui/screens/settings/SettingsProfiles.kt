@@ -185,7 +185,10 @@ fun ProfilesCard(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                             Icon(Icons.Filled.Edit, "Edit", modifier = Modifier.size(18.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        if (!profile.isDefault) {
+                        // Never delete the ACTIVE profile from the phone: the
+                        // gateway would be left without the bot it is told to
+                        // use. Switch to another profile first (star icon).
+                        if (!profile.isDefault && !isActive) {
                             IconButton(onClick = { confirmDelete = name },
                                 modifier = Modifier.size(36.dp).minimumInteractiveComponentSize()) {
                                 Icon(Icons.Filled.DeleteOutline, "Delete", modifier = Modifier.size(18.dp),

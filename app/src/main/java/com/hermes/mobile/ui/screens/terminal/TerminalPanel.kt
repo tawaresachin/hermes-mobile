@@ -357,7 +357,9 @@ internal fun TerminalControlBar(
  * Live terminal surface: xterm.js in a WebView (screen grid, scrollback,
  * alternate screen, selection) plus a Compose find/copy toolbar.
  */
-@SuppressLint("SetJavaScriptEnabled")
+@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
+// JavascriptInterface is a lint false positive here: every TerminalBridge
+// method is annotated, but lint 8.7 loses the type through remember{}.
 @Composable
 fun TerminalPanel(
     state: TerminalWebViewState,

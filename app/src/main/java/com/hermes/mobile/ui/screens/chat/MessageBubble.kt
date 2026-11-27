@@ -557,9 +557,13 @@ fun MessageBubble(
                             )
                         }
                     }
-                    // ── Telegram-style: timestamp + edit indicator + delivery ticks ──
-                    if (!isFirstInGroup || !isLastInGroup) {
-                        // Show timestamp for non-grouped or mid-group messages
+                    // ── Telegram-style: timestamp + edit indicator ──
+                    // Timestamp belongs to the LAST bubble of a group (and to
+                    // a standalone bubble, where first == last). The old
+                    // `!isFirst || !isLast` was false exactly for standalone
+                    // messages, so a one-off question/reply — the most common
+                    // shape — never showed a time at all.
+                    if (isLastInGroup) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -582,7 +586,7 @@ fun MessageBubble(
                                 color = if (isUser) Color.White.copy(alpha = 0.65f)
                                 else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                             )
-                            if (message.isStreaming) {
+                            if (isStreaming) {
                                 // Tiny streaming indicator
                                 Spacer(modifier = Modifier.width(2.dp))
                                 Box(
@@ -591,14 +595,10 @@ fun MessageBubble(
                                         .background(HermesPrimary, CircleShape)
                                 )
                             }
-                            if (isUser && !isStreaming) {
-                                // Delivery status ticks (Telegram style)
-                                Spacer(modifier = Modifier.width(2.dp))
-                                StatusTick(
-                                    status = message.status ?: MessageStatus.READ,
-                                    tint = if (isUser) Color.White.copy(alpha = 0.65f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                                )
-                            }
+                            // Delivery ticks are rendered once above (always
+                            // visible on finished user messages); repeating
+                            // them here drew two checkmarks on grouped
+                            // bubbles.
                         }
                     }
                 }

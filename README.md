@@ -91,7 +91,7 @@ QR carries the address your phone can reach.
 
 ```bash
 ./gradlew :app:assembleDebug        # APK → app/build/outputs/apk/debug/
-./gradlew :app:testDebugUnitTest    # 62 unit tests
+./gradlew :app:testDebugUnitTest    # 165 unit tests
 ```
 
 JDK 17+, Android SDK 35, Kotlin + Jetpack Compose (Material 3). Architecture: single Activity,

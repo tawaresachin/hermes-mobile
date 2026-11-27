@@ -370,9 +370,15 @@ class SessionsViewModel @Inject constructor(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {
-                // If restore fails (e.g. database error), fall back to
-                // creating a fresh session so the user isn't left stranded.
-                repository.createSession()
+                // Never paper over a failed restore with a NEW empty session:
+                // the user asked for their conversation back, and a blank row
+                // both loses the transcript and looks like success.
+                _snackbarEvent.emit(
+                    SnackbarMessage(
+                        text = "Could not restore the conversation. Try again.",
+                        actionLabel = null
+                    )
+                )
             }
         }
     }
@@ -882,9 +888,10 @@ private fun SessionCard(
     source: String? = null,
     needsInput: Boolean = false
 ) {
-    val dateText = remember(session.updatedAt) {
-        formatTimestamp(session.updatedAt)
-    }
+    // No remember() here: keyed only by updatedAt, the label stayed frozen at
+    // whatever "now/5m/2h" it computed first. This recomputes on the 10 s
+    // list emission and on every other recomposition.
+    val dateText = formatTimestamp(session.updatedAt)
 
     val titleText = remember(session.title) {
         if (session.title.isNullOrBlank()) "Untitled Session" else session.title!!

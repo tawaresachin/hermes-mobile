@@ -171,7 +171,17 @@ object TerminalAnsi {
                                 b == ';' || b == ':' -> {
                                     params.add(if (sawDigit) cur else 0)
                                     cur = 0; sawDigit = false; i++
-                                    if (params.size > 32) { i = n; malformed = true }
+                                    if (params.size > 32) {
+                                        // Over-budget SGR: drop THIS sequence
+                                        // only. Jumping to end-of-input used
+                                        // to discard every later byte too,
+                                        // blanking legitimate output after a
+                                        // hostile/malformed color run.
+                                        while (i < n && raw[i] !in '@'..'~') i++
+                                        if (i < n) i++
+                                        malformed = true
+                                        break
+                                    }
                                 }
                                 b in '@'..'~' -> {
                                     finalByte = b
