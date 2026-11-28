@@ -333,10 +333,28 @@ private fun KanbanBoardView(
             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
         ) {
             board.columns.forEach { column ->
-                if (column.tasks.isNotEmpty()) {
-                    item(key = "header_${column.key}") {
-                        KanbanStageHeader(column)
+                // Render every stage — an empty stage must be visible as a
+                // "No tasks" band, otherwise "empty" is indistinguishable
+                // from "stage missing".
+                item(key = "header_${column.key}") {
+                    KanbanStageHeader(column)
+                }
+                if (column.tasks.isEmpty()) {
+                    item(key = "empty_${column.key}") {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(
+                                "No tasks in this stage",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            )
+                        }
                     }
+                } else {
                     items(column.tasks, key = { it.id }) { task ->
                         KanbanTaskCardView(task, onClick = { onTaskClick(task.id) })
                     }
@@ -394,7 +412,7 @@ private fun KanbanTaskCardView(task: KanbanTaskCard, onClick: () -> Unit) {
                     shape = RoundedCornerShape(6.dp),
                 ) {
                     Text(
-                        kanbanStatusLabel(task.status).uppercase().take(4),
+                        kanbanStatusLabel(task.status),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = stageColor,
@@ -501,7 +519,7 @@ private fun KanbanChildCardView(child: KanbanChildCard, onClick: () -> Unit) {
         ) {
             Surface(color = stageColor.copy(alpha = 0.18f), shape = RoundedCornerShape(4.dp)) {
                 Text(
-                    kanbanStatusLabel(child.status).uppercase().take(5),
+                    kanbanStatusLabel(child.status),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = stageColor,
@@ -682,8 +700,19 @@ private fun TaskDetailSheet(
                     onAction("archive", null)
                 }
                 if (task.status != "running") {
-                    ActionButton("Delete", Icons.Filled.Delete, busy) {
-                        confirmDelete = true
+                    OutlinedButton(
+                        onClick = { confirmDelete = true },
+                        enabled = !busy,
+                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                            contentColor = ErrorRed,
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp, ErrorRed.copy(alpha = 0.5f)),
+                    ) {
+                        Icon(Icons.Filled.Delete, contentDescription = null,
+                            modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Delete")
                     }
                 }
             }
