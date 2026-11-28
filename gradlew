@@ -119,6 +119,10 @@ CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
 
 
 # Determine the Java command to use to start the JVM.
+# The macOS /usr/bin/java stub cannot run Gradle, so use the locally installed JDK.
+if [ -z "$JAVA_HOME" ] && [ -x "$HOME/.sdkman/candidates/java/current/bin/java" ] ; then
+    JAVA_HOME=$HOME/.sdkman/candidates/java/current
+fi
 if [ -n "$JAVA_HOME" ] ; then
     if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
         # IBM's JDK on AIX uses strange locations for the executables

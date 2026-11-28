@@ -197,6 +197,7 @@ data class SettingsUiState(
     val profilesError: String? = null,
     val activeProfile: AgentProfile? = null,
     val capabilities: CapabilitiesState = CapabilitiesState(),
+    val learningGraph: LearningGraphState = LearningGraphState(),
     // Agent-side Kanban mode (toolset + gateway dispatcher)
     val kanban: KanbanMode = KanbanMode(),
     val kanbanLoading: Boolean = false,
@@ -222,6 +223,8 @@ class SettingsViewModel @Inject constructor(
     // expand/reload/server must never overwrite the current one (ME-8).
     private var capabilitiesJob: Job? = null
     private var capabilitiesGeneration = 0
+    private var learningGraphJob: Job? = null
+    private var learningGraphGeneration = 0
     private var profilesJob: Job? = null
     private var profilesGeneration = 0
 
@@ -230,6 +233,9 @@ class SettingsViewModel @Inject constructor(
         capabilitiesGeneration++
         capabilitiesJob?.cancel()
         capabilitiesJob = null
+        learningGraphGeneration++
+        learningGraphJob?.cancel()
+        learningGraphJob = null
         profilesGeneration++
         profilesJob?.cancel()
         profilesJob = null
@@ -241,6 +247,7 @@ class SettingsViewModel @Inject constructor(
                 profilesLoaded = false,
                 profilesError = null,
                 capabilities = CapabilitiesState(),
+                learningGraph = LearningGraphState(),
                 jobs = emptyList(),
                 skills = emptyList(),
                 disabledSkills = emptySet(),
@@ -790,6 +797,9 @@ class SettingsViewModel @Inject constructor(
             if (generation != profilesGeneration) return@launch
             val o = res.body
             val ok = o?.optBoolean("ok", false) == true
+            val previousProfile = _uiState.value.activeProfile?.name
+            val nextProfile = if (ok) parseActiveAgentProfile(active) else null
+            val scopeChanged = nextProfile?.name != previousProfile
             _uiState.update {
                 if (!ok) it.copy(
                     profilesLoading = false,
@@ -797,10 +807,17 @@ class SettingsViewModel @Inject constructor(
                         ?: gatewayError(res.status, "/api/mobile/agent-profiles"))
                 else it.copy(
                     profiles = parseAgentProfiles(o),
-                    activeProfile = parseActiveAgentProfile(active),
+                    activeProfile = nextProfile,
                     profilesLoading = false,
                     profilesLoaded = true,
                 )
+            }
+            // Capabilities and the graph are profile-scoped; refresh cards the
+            // user has already opened instead of leaving stale rows visible.
+            if (ok && scopeChanged && _uiState.value.let {
+                    it.capabilities.loaded || it.learningGraph.status != LearningGraphStatus.IDLE }) {
+                loadCapabilities()
+                loadLearningGraph()
             }
         }
     }
@@ -930,6 +947,17 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(capabilities = it.capabilities.copy(loading = false)) }
     }
 
+    /** Cancel an in-flight graph load when the card collapses. */
+    fun cancelLearningGraphLoad() {
+        learningGraphGeneration++
+        learningGraphJob?.cancel()
+        learningGraphJob = null
+        _uiState.update { it.copy(learningGraph = it.learningGraph.copy(loading = false)) }
+    }
+
+    private fun activeProfileName(): String? =
+        _uiState.value.activeProfile?.name?.takeIf { it.isNotBlank() }
+
     private suspend fun fetchCapabilitySection(
         route: String,
         arrayKey: String,
@@ -981,9 +1009,10 @@ class SettingsViewModel @Inject constructor(
         val generation = ++capabilitiesGeneration
         capabilitiesJob = viewModelScope.launch(Dispatchers.Default) {
             val key = repository.getSavedConfig()?.baseUrl.orEmpty()
+            val profile = activeProfileName()
             _uiState.update { it.copy(capabilities = CapabilitiesState(serverKey = key, loading = true)) }
 
-            val all = try { repository.getJson("/api/mobile/capabilities/all") }
+            val all = try { repository.getJson("/api/mobile/capabilities/all", profile) }
                 catch (e: kotlinx.coroutines.CancellationException) { throw e }
                 catch (_: Exception) { null }
             currentCoroutineContext().ensureActive()
@@ -1006,10 +1035,10 @@ class SettingsViewModel @Inject constructor(
                 )
             } else {
                 val results = listOf(
-                    async { fetchCapabilitySection(routes[0], keys[0]) { repository.listCapabilitiesPlugins() } },
-                    async { fetchCapabilitySection(routes[1], keys[1]) { repository.listCapabilitiesMcpServers() } },
-                    async { fetchCapabilitySection(routes[2], keys[2]) { repository.listCapabilitiesProjects() } },
-                    async { fetchCapabilitySection(routes[3], keys[3]) { repository.listCapabilitiesSkills() } },
+                    async { fetchCapabilitySection(routes[0], keys[0]) { repository.listCapabilitiesPlugins(profile) } },
+                    async { fetchCapabilitySection(routes[1], keys[1]) { repository.listCapabilitiesMcpServers(profile) } },
+                    async { fetchCapabilitySection(routes[2], keys[2]) { repository.listCapabilitiesProjects(profile) } },
+                    async { fetchCapabilitySection(routes[3], keys[3]) { repository.listCapabilitiesSkills(profile) } },
                 ).awaitAll()
                 currentCoroutineContext().ensureActive()
                 val anyLoaded = results.count { it.ok }
@@ -1023,6 +1052,51 @@ class SettingsViewModel @Inject constructor(
             }
             if (generation != capabilitiesGeneration || !isActive) return@launch
             _uiState.update { it.copy(capabilities = next.copy(loading = false)) }
+        }
+    }
+
+    /** Read-only host learning graph. Failure is explicit: an unavailable
+     *  route is never rendered as an empty graph. */
+    fun loadLearningGraph() {
+        learningGraphJob?.cancel()
+        val generation = ++learningGraphGeneration
+        learningGraphJob = viewModelScope.launch(Dispatchers.Default) {
+            val key = repository.getSavedConfig()?.baseUrl.orEmpty()
+            val profile = activeProfileName()
+            _uiState.update {
+                it.copy(learningGraph = LearningGraphState(serverKey = key, profile = profile, loading = true))
+            }
+
+            val res = try { repository.getLearningGraph(profile) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { FetchResult<JSONObject>(null, 0) }
+            currentCoroutineContext().ensureActive()
+            val body = res.body
+            val serverError = body?.optString("error")?.takeIf { it.isNotBlank() }
+            val error = when {
+                res.status == 404 ->
+                    "Not Supported by Local Agent — /api/mobile/learning/graph is missing. Update the hermes-mobile plugin."
+                res.status == 503 || serverError?.contains("unavailable", ignoreCase = true) == true ->
+                    "Not Supported by Local Agent — this host cannot build a learning graph (${serverError ?: "HTTP 503"})."
+                body?.optBoolean("ok", false) != true ->
+                    serverError ?: gatewayError(res.status, "/api/mobile/learning/graph")
+                else -> null
+            }
+            val data = if (error == null && body != null) parseLearningGraph(body) else null
+            if (generation != learningGraphGeneration || !isActive) return@launch
+            _uiState.update {
+                it.copy(learningGraph = LearningGraphState(
+                    serverKey = key,
+                    profile = profile,
+                    loading = false,
+                    status = if (data != null) LearningGraphStatus.LOADED else LearningGraphStatus.FAILED,
+                    error = error,
+                    nodes = data?.nodes.orEmpty(),
+                    edges = data?.edges.orEmpty(),
+                    clusters = data?.clusters.orEmpty(),
+                    stats = data?.stats.orEmpty(),
+                ))
+            }
         }
     }
 

@@ -85,4 +85,30 @@ class SettingsMappersTest {
         assertEquals("default", profile.displayName)
         assertEquals("desc", profile.description)
     }
+
+    @Test
+    fun learningGraphMapsHostPayloadAndKeepsMissingSectionsEmpty() {
+        val body = JSONObject().put("ok", true)
+            .put("nodes", org.json.JSONArray()
+                .put(JSONObject().put("id", "skill-a").put("label", "Skill A")
+                    .put("kind", "skill").put("category", "tools").put("useCount", 4))
+                .put(JSONObject().put("id", "")))
+            .put("edges", org.json.JSONArray()
+                .put(JSONObject().put("source", "skill-a").put("target", "memory:user:0:abc")))
+            .put("clusters", org.json.JSONArray().put(JSONObject().put("category", "tools").put("count", 1)))
+            .put("stats", JSONObject().put("learned_skills", 1).put("memory_nodes", 2))
+
+        val graph = parseLearningGraph(body)
+        assertEquals(1, graph.nodes.size)
+        assertEquals("Skill A", graph.nodes.single().label)
+        assertEquals(4, graph.nodes.single().useCount)
+        assertEquals("memory:user:0:abc", graph.edges.single().target)
+        assertEquals("tools", graph.clusters.single().category)
+        assertEquals("2", graph.stats["memory_nodes"])
+
+        val empty = parseLearningGraph(JSONObject().put("ok", true))
+        assertTrue(empty.nodes.isEmpty())
+        assertTrue(empty.edges.isEmpty())
+        assertTrue(empty.stats.isEmpty())
+    }
 }

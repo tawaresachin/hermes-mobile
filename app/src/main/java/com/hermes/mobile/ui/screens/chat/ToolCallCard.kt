@@ -96,10 +96,13 @@ fun ToolCallCard(toolCall: ToolCallInfo) {
                 Spacer(modifier = Modifier.weight(1f))
                 // Status label
                 Text(
-                    text = when (toolCall.status) {
-                        ToolCallStatus.RUNNING -> "Running..."
-                        ToolCallStatus.COMPLETED -> "Done"
-                        ToolCallStatus.FAILED -> "Failed"
+                    text = buildString {
+                        append(when (toolCall.status) {
+                            ToolCallStatus.RUNNING -> "Running..."
+                            ToolCallStatus.COMPLETED -> "Done"
+                            ToolCallStatus.FAILED -> "Failed"
+                        })
+                        if (toolCall.duration.isNotBlank()) append(" · ").append(toolCall.duration)
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = when (toolCall.status) {

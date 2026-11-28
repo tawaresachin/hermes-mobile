@@ -581,10 +581,14 @@ class HermesRepository @Inject constructor(
     suspend fun putAgentProfileSoul(name: String, body: org.json.JSONObject) = apiService.putAgentProfileSoul(name, body)
 
     // ─── Capabilities Inspection (server-side per-agent capabilities) ───
-    suspend fun listCapabilitiesPlugins() = apiService.listCapabilitiesPlugins()
-    suspend fun listCapabilitiesMcpServers() = apiService.listCapabilitiesMcpServers()
-    suspend fun listCapabilitiesProjects() = apiService.listCapabilitiesProjects()
-    suspend fun listCapabilitiesSkills() = apiService.listCapabilitiesSkills()
+    suspend fun listCapabilitiesPlugins(profile: String? = null) = apiService.listCapabilitiesPlugins(profile)
+    suspend fun listCapabilitiesMcpServers(profile: String? = null) = apiService.listCapabilitiesMcpServers(profile)
+    suspend fun listCapabilitiesProjects(profile: String? = null) = apiService.listCapabilitiesProjects(profile)
+    suspend fun listCapabilitiesSkills(profile: String? = null) = apiService.listCapabilitiesSkills(profile)
+    suspend fun getAllCapabilities(profile: String? = null) = apiService.getAllCapabilities(profile)
+
+    // Host-owned learning graph; no local graph logic or mutation surface.
+    suspend fun getLearningGraph(profile: String? = null) = apiService.getLearningGraph(profile)
 
     /** Expand a skill slash command via the server (Telegram-parity
      * injection); null = not a skill command. */
@@ -836,8 +840,8 @@ class HermesRepository @Inject constructor(
     }
 
     // Grouped provider inventory — same source as the Hermes picker.
-    suspend fun getJson(path: String): org.json.JSONObject? =
-        apiService.getJson(path)
+    suspend fun getJson(path: String, profile: String? = null): org.json.JSONObject? =
+        apiService.getJson(path + apiService.profileQuery(profile))
 
     suspend fun fetchModelOptions(): ModelListResponse? {
         return apiService.fetchModelOptionsCached()

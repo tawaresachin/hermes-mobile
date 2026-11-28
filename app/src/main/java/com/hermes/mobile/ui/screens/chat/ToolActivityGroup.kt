@@ -21,6 +21,8 @@ import com.hermes.mobile.ui.theme.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
+private data class ToolLine(val head: String, val label: String, val status: String, val duration: String)
+
 @Composable
 fun ToolActivityGroup(jsonLines: String) {
     var expanded by remember(jsonLines) { mutableStateOf(false) }
@@ -29,10 +31,11 @@ fun ToolActivityGroup(jsonLines: String) {
             val arr = org.json.JSONArray(jsonLines)
             (0 until arr.length()).map { i ->
                 val o = arr.getJSONObject(i)
-                Triple(
+                ToolLine(
                     o.optString("e", "⚙️") + " " + o.optString("n", "tool"),
                     o.optString("l", ""),
-                    o.optString("s", "completed")
+                    o.optString("s", "completed"),
+                    o.optString("u", "")
                 )
             }
         } catch (_: Exception) { emptyList() }
@@ -63,15 +66,15 @@ fun ToolActivityGroup(jsonLines: String) {
                     modifier = Modifier.padding(bottom = 2.dp)
                 )
             }
-            shown.forEach { (head, label, status) ->
+            shown.forEach { line ->
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(vertical = 0.5.dp)
                 ) {
                     Text(
-                        text = if (status == "failed") "✕" else if (status == "running") "◌" else "✓",
+                        text = if (line.status == "failed") "✕" else if (line.status == "running") "◌" else "✓",
                         style = MaterialTheme.typography.labelSmall,
-                        color = when (status) {
+                        color = when (line.status) {
                             "failed" -> ErrorRed
                             "running" -> WarningAmber
                             else -> SuccessGreen
@@ -79,16 +82,16 @@ fun ToolActivityGroup(jsonLines: String) {
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = head,
+                        text = line.head,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Medium,
                         color = HermesPrimary.copy(alpha = 0.95f),
                         maxLines = 1
                     )
-                    if (label.isNotBlank()) {
+                    if (line.label.isNotBlank()) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = label,
+                            text = line.label,
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace,
                             color = HermesPrimary.copy(alpha = 0.6f),
@@ -96,6 +99,11 @@ fun ToolActivityGroup(jsonLines: String) {
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
+                    }
+                    if (line.duration.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(line.duration, style = MaterialTheme.typography.labelSmall,
+                            color = HermesPrimary.copy(alpha = 0.6f), maxLines = 1)
                     }
                 }
             }

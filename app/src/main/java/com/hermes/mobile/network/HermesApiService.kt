@@ -1417,13 +1417,17 @@ class HermesApiService @Inject constructor(
     // ─── Capabilities Inspection (plugin /api/mobile/capabilities/*) ───
     // List plugins, MCP servers, projects, skills
 
+    /** Optional active-profile scope (old servers ignore unknown query keys). */
+    internal fun profileQuery(profile: String?): String =
+        profile?.trim()?.takeIf { it.isNotBlank() }?.let { "?profile=${q(it)}" } ?: ""
+
     /** GET /api/mobile/capabilities/plugins — List installed plugins. */
-    suspend fun listCapabilitiesPlugins(): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+    suspend fun listCapabilitiesPlugins(profile: String? = null): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
         val cfg = config ?: getConfig()
         val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
             ?: return@withContext FetchResult(null, 0)
         try {
-            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/plugins").get()
+            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/plugins${profileQuery(profile)}").get()
             cfg.apiKey?.takeIf { it.isNotBlank() }
                 ?.let { builder.header("Authorization", "Bearer $it") }
             client.newCall(builder.build())
@@ -1438,12 +1442,12 @@ class HermesApiService @Inject constructor(
     }
 
     /** GET /api/mobile/capabilities/mcp-servers — List MCP servers. */
-    suspend fun listCapabilitiesMcpServers(): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+    suspend fun listCapabilitiesMcpServers(profile: String? = null): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
         val cfg = config ?: getConfig()
         val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
             ?: return@withContext FetchResult(null, 0)
         try {
-            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/mcp-servers").get()
+            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/mcp-servers${profileQuery(profile)}").get()
             cfg.apiKey?.takeIf { it.isNotBlank() }
                 ?.let { builder.header("Authorization", "Bearer $it") }
             client.newCall(builder.build())
@@ -1458,12 +1462,12 @@ class HermesApiService @Inject constructor(
     }
 
     /** GET /api/mobile/capabilities/projects — List projects. */
-    suspend fun listCapabilitiesProjects(): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+    suspend fun listCapabilitiesProjects(profile: String? = null): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
         val cfg = config ?: getConfig()
         val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
             ?: return@withContext FetchResult(null, 0)
         try {
-            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/projects").get()
+            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/projects${profileQuery(profile)}").get()
             cfg.apiKey?.takeIf { it.isNotBlank() }
                 ?.let { builder.header("Authorization", "Bearer $it") }
             client.newCall(builder.build())
@@ -1478,12 +1482,12 @@ class HermesApiService @Inject constructor(
     }
 
     /** GET /api/mobile/capabilities/skills — List skills with enabled state. */
-    suspend fun listCapabilitiesSkills(): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+    suspend fun listCapabilitiesSkills(profile: String? = null): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
         val cfg = config ?: getConfig()
         val baseUrl = cfg?.baseUrl?.takeIf { it.isNotBlank() }
             ?: return@withContext FetchResult(null, 0)
         try {
-            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/skills").get()
+            val builder = Request.Builder().url("$baseUrl/api/mobile/capabilities/skills${profileQuery(profile)}").get()
             cfg.apiKey?.takeIf { it.isNotBlank() }
                 ?.let { builder.header("Authorization", "Bearer $it") }
             client.newCall(builder.build())
@@ -1498,8 +1502,13 @@ class HermesApiService @Inject constructor(
     }
 
     /** GET /api/mobile/capabilities/all — Get all capabilities in one call. */
-    suspend fun getAllCapabilities(): JSONObject? =
-        getJson("/api/mobile/capabilities/all")
+    suspend fun getAllCapabilities(profile: String? = null): JSONObject? =
+        getJson("/api/mobile/capabilities/all${profileQuery(profile)}")
+
+    /** GET /api/mobile/learning/graph — host-owned learning graph, read-only.
+     *  404/503 is reported by the caller as "not supported by this agent". */
+    suspend fun getLearningGraph(profile: String? = null): FetchResult<JSONObject> =
+        getJsonResult("/api/mobile/learning/graph${profileQuery(profile)}")
 
     /** Live server-side context fill for a session (active-row token sum;
      * accurate even after a compression rotation while the app was away).

@@ -86,7 +86,8 @@ data class ToolCallInfo(
     val arguments: String,
     val result: String? = null,
     val id: String = "",
-    val status: ToolCallStatus = ToolCallStatus.RUNNING
+    val status: ToolCallStatus = ToolCallStatus.RUNNING,
+    val duration: String = "",
 )
 
 enum class ToolCallStatus { RUNNING, COMPLETED, FAILED }
@@ -664,6 +665,7 @@ class ChatViewModel @Inject constructor(
                     _toolCalls.value = turn?.toolLines?.map {
                         ToolCallInfo(
                             id = it.name, name = it.name, arguments = it.label,
+                            duration = it.duration,
                             status = when (it.status) {
                                 "completed" -> ToolCallStatus.COMPLETED
                                 "failed" -> ToolCallStatus.FAILED

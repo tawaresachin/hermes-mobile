@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -41,15 +42,13 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -60,7 +59,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -80,8 +78,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.hermes.mobile.KanbanNav
+import com.hermes.mobile.ui.theme.DarkBg
+import com.hermes.mobile.ui.theme.DarkSurface
 import com.hermes.mobile.ui.theme.ErrorRed
 import com.hermes.mobile.ui.theme.HermesPrimary
+import com.hermes.mobile.ui.theme.LightBg
+import com.hermes.mobile.ui.theme.LightSurface
 import com.hermes.mobile.ui.theme.LocalDarkTheme
 import com.hermes.mobile.ui.theme.SuccessGreen
 import com.hermes.mobile.ui.theme.WarningAmber
@@ -133,55 +135,29 @@ fun KanbanScreen(
     }
 
     Scaffold(
-        modifier = Modifier.padding(paddingValues).imePadding(),
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Kanban", fontWeight = FontWeight.SemiBold)
-                        if (state.mode.enabled) {
-                            Spacer(Modifier.width(8.dp))
-                            Box {
-                                TextButton(onClick = { boardMenu = true }) {
-                                    Text(
-                                        state.board?.board ?: state.selectedBoard ?: "default",
-                                        style = MaterialTheme.typography.labelLarge,
-                                    )
-                                }
-                                DropdownMenu(expanded = boardMenu, onDismissRequest = { boardMenu = false }) {
-                                    (state.board?.boards ?: state.mode.boards).forEach { slug ->
-                                        DropdownMenuItem(
-                                            text = { Text(slug) },
-                                            onClick = {
-                                                boardMenu = false
-                                                viewModel.selectBoard(slug)
-                                            },
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.refresh() }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh board")
-                    }
-                },
-            )
-        },
+        // NavHost already applies the bottom-bar padding (see Navigation), so
+        // applying `paddingValues` here again left an 80dp dead strip under the
+        // last stage card. Settings and Sessions ignore it for the same reason.
+        modifier = Modifier.imePadding(),
         snackbarHost = { SnackbarHost(snackbar) },
-        floatingActionButton = {
-            if (state.mode.enabled && state.mode.available) {
-                ExtendedFloatingActionButton(
-                    onClick = { showCreate = true },
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                    text = { Text("New task") },
-                )
-            }
-        },
+        containerColor = MaterialTheme.colorScheme.background,
+        // The Navigation scaffold already pads for the bottom bar, so taking
+        // the system bar insets here too left an 80dp dead strip of background
+        // under the last stage card.
+        contentWindowInsets = WindowInsets(0.dp),
     ) { inner ->
-        Box(Modifier.fillMaxSize().padding(inner)) {
+        Column(Modifier.fillMaxSize().padding(inner)) {
+            KanbanHeader(
+                title = "Kanban",
+                board = state.board?.board ?: state.selectedBoard ?: "default",
+                boards = (state.board?.boards ?: state.mode.boards).ifEmpty { listOf("default") },
+                showBoardPicker = state.mode.enabled,
+                showNewTask = state.mode.enabled && state.mode.available,
+                onRefresh = { viewModel.refresh() },
+                onNewTask = { showCreate = true },
+                onSelectBoard = { viewModel.selectBoard(it) },
+            )
+            Box(Modifier.fillMaxSize()) {
             when {
                 state.modeLoading && state.board == null ->
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -227,6 +203,7 @@ fun KanbanScreen(
                 }
             }
         }
+        }
     }
 
     if (showCreate) {
@@ -251,6 +228,88 @@ fun KanbanScreen(
             onComment = { viewModel.postComment(it) },
             onAction = { action, extra -> viewModel.act(action, extra) },
         )
+    }
+}
+
+/** Screen header matching Settings exactly: 20dp side padding, 12dp top,
+ * titleLarge / Medium / onBackground on the left, 26dp-tinted actions on
+ * the right. The board picker sits beside the title as a compact chip. */
+@Composable
+private fun KanbanHeader(
+    title: String,
+    board: String,
+    boards: List<String>,
+    showBoardPicker: Boolean,
+    showNewTask: Boolean,
+    onRefresh: () -> Unit,
+    onNewTask: () -> Unit,
+    onSelectBoard: (String) -> Unit,
+) {
+    var boardMenu by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 20.dp, top = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        if (showBoardPicker) {
+            Spacer(Modifier.width(4.dp))
+            Box {
+                TextButton(
+                    onClick = { boardMenu = true },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier.heightIn(min = 36.dp),
+                ) {
+                    Text(
+                        text = board,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = HermesPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Icon(
+                        Icons.Filled.ExpandMore,
+                        contentDescription = "Choose board",
+                        tint = HermesPrimary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                DropdownMenu(expanded = boardMenu, onDismissRequest = { boardMenu = false }) {
+                    boards.forEach { slug ->
+                        DropdownMenuItem(
+                            text = { Text(slug) },
+                            onClick = { boardMenu = false; onSelectBoard(slug) },
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        IconButton(onClick = onRefresh, modifier = Modifier.minimumInteractiveComponentSize()) {
+            Icon(
+                Icons.Filled.Refresh,
+                contentDescription = "Refresh board",
+                tint = HermesPrimary,
+                modifier = Modifier.size(26.dp),
+            )
+        }
+        // New task lives top-right like the chat screen's compose action.
+        if (showNewTask) {
+            IconButton(onClick = onNewTask, modifier = Modifier.minimumInteractiveComponentSize()) {
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = "New task",
+                    tint = HermesPrimary,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+        }
     }
 }
 
@@ -315,10 +374,10 @@ private fun KanbanEnableCard(state: KanbanUiState, onEnable: () -> Unit) {
     }
 }
 
-/** Explicit three-level palette. The theme's surface/surfaceVariant tokens
- * are only a few RGB units apart in light mode, which made the stage/task
- * nesting invisible. These values give a clearly readable hierarchy in both
- * themes (stage darkest gray → task white → child mid-gray). */
+/** Three distinct levels: stage band, task card, sub-task card.
+ * The theme's surface tokens are only a few RGB units apart in light mode, so
+ * the nesting disappears; these named palette tokens keep it readable and
+ * follow the app's light/dark scheme. */
 private data class KanbanPalette(
     val stageBg: Color,
     val taskBg: Color,
@@ -330,22 +389,24 @@ private data class KanbanPalette(
 @Composable
 private fun kanbanPalette(): KanbanPalette = if (LocalDarkTheme.current) {
     KanbanPalette(
-        // Stage cards use the exact same surface token as Settings cards.
-        stageBg = MaterialTheme.colorScheme.surface,
-        taskBg = Color(0xFF304253),
-        childBg = Color(0xFF1C2833),
-        border = Color(0xFF6E8AA3),
-        mutedText = Color(0xFFB9C6D3),
+        stageBg = MaterialTheme.colorScheme.surfaceVariant,
+        taskBg = DarkSurface,
+        childBg = DarkBg,
+        border = MaterialTheme.colorScheme.outlineVariant,
+        mutedText = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 } else {
     KanbanPalette(
-        stageBg = MaterialTheme.colorScheme.surface,
-        taskBg = Color.White,
-        childBg = Color(0xFFD8D8DE),
-        border = Color(0xFFA6A6B0),
-        mutedText = Color(0xFF54585D),
+        stageBg = MaterialTheme.colorScheme.surfaceVariant,
+        taskBg = LightBg,
+        childBg = LightSurface,
+        border = MaterialTheme.colorScheme.outlineVariant,
+        mutedText = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
+
+private fun KanbanTaskCard.needsAttention(): Boolean =
+    status == "blocked" || blockKind == "needs_input"
 
 @Composable
 private fun KanbanBoardView(
@@ -361,12 +422,14 @@ private fun KanbanBoardView(
         // its tasks are sub-cards nested underneath. No per-task status badge
         // is needed (and therefore no truncated status text) — the stage
         // title is the single source of truth for the status.
+        // Padding matches Settings screen: 20dp horizontal gutters like its
+        // scroll content, 8dp top under the header. No FAB anymore, so the
+        // bottom inset is just breathing room — not 88dp of dead space.
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            // Extra bottom inset keeps the last card clear of the FAB.
             contentPadding = PaddingValues(
-                start = 10.dp, end = 10.dp, top = 10.dp, bottom = 88.dp,
+                start = 20.dp, end = 20.dp, top = 8.dp, bottom = 16.dp,
             ),
         ) {
             items(board.columns, key = { it.key }) { column ->
@@ -383,6 +446,7 @@ private fun KanbanStageCard(
 ) {
     val stageColor = statusColor(column.key)
     val pal = kanbanPalette()
+    val needsAttention = column.tasks.count { it.needsAttention() }
     // Expansion state lives at the stage level so one tap can collapse every
     // open task card in this stage.
     var expandedTaskIds by remember { mutableStateOf(setOf<String>()) }
@@ -390,14 +454,12 @@ private fun KanbanStageCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
-            // Full-opacity gray stage container — clearly darker than the
-            // white task sub-cards nested inside it.
             containerColor = pal.stageBg,
         ),
-        border = androidx.compose.foundation.BorderStroke(1.dp, pal.border),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
-        Column(Modifier.padding(12.dp)) {
+        // Padding matches Settings cards: horizontal=16.dp, vertical=12.dp
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             // ── Stage title (full name, never trimmed) ──
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -423,6 +485,21 @@ private fun KanbanStageCard(
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                     )
+                }
+                if (needsAttention > 0) {
+                    Spacer(Modifier.width(6.dp))
+                    Surface(
+                        color = WarningAmber.copy(alpha = 0.18f),
+                        shape = RoundedCornerShape(6.dp),
+                    ) {
+                        Text(
+                            if (needsAttention == 1) "1 needs you" else "$needsAttention need you",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = WarningAmber,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                        )
+                    }
                 }
                 Spacer(Modifier.weight(1f))
                 if (expandedTaskIds.isNotEmpty()) {
@@ -486,12 +563,14 @@ private fun KanbanTaskCardView(
                 indication = null,
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
             ) { onToggleExpand() },
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = pal.taskBg),
-        border = androidx.compose.foundation.BorderStroke(1.dp, pal.border),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, pal.border.copy(alpha = 0.6f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
-        Column(Modifier.padding(12.dp)) {
+        // Padding matches Settings cards: horizontal=16.dp, vertical=12.dp
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     task.title,
@@ -501,6 +580,21 @@ private fun KanbanTaskCardView(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                if (task.needsAttention()) {
+                    Spacer(Modifier.width(6.dp))
+                    Surface(
+                        color = ErrorRed.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(6.dp),
+                    ) {
+                        Text(
+                            "Needs you",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = ErrorRed,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
                 Spacer(Modifier.width(6.dp))
                 Icon(
                     imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
@@ -563,17 +657,6 @@ private fun KanbanTaskCardView(
                         color = kanbanPalette().mutedText,
                     )
                 }
-                if (task.blockKind == "needs_input") {
-                    Spacer(Modifier.height(6.dp))
-                    Surface(color = ErrorRed.copy(alpha = 0.15f), shape = RoundedCornerShape(6.dp)) {
-                        Text(
-                            "Needs your input",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = ErrorRed,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                    }
-                }
                 Spacer(Modifier.height(8.dp))
                 TextButton(onClick = onClick) { Text("Open details") }
             }
@@ -585,15 +668,18 @@ private fun KanbanTaskCardView(
 private fun KanbanSubtaskView(subtask: KanbanSubtask, onClick: () -> Unit) {
     val stageColor = statusColor(subtask.status)
     val pal = kanbanPalette()
-    Surface(
+    Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().padding(start = 12.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = pal.childBg,
-        border = androidx.compose.foundation.BorderStroke(1.dp, pal.border),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = pal.childBg),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, pal.border.copy(alpha = 0.5f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
+        // Padding consistent with Settings nested content
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Surface(color = stageColor.copy(alpha = 0.18f), shape = RoundedCornerShape(4.dp)) {
@@ -617,7 +703,7 @@ private fun KanbanSubtaskView(subtask: KanbanSubtask, onClick: () -> Unit) {
             Text(
                 subtask.assignee.ifBlank { "—" },
                 style = MaterialTheme.typography.labelSmall,
-                color = kanbanPalette().mutedText,
+                color = pal.mutedText,
             )
         }
     }

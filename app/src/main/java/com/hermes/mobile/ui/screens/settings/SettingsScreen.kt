@@ -635,6 +635,11 @@ fun SettingsScreen(
                 CapabilitiesCard(viewModel = viewModel, uiState = uiState)
             }
 
+            // ─── 7b-2. LEARNING GRAPH (host-owned, read-only) ───
+            SettingsSection("Learning Graph") {
+                LearningGraphCard(viewModel = viewModel, uiState = uiState)
+            }
+
             // ─── 7c. PROVIDERS (server-side model provider CRUD) ───
             SettingsSection("Providers") {
                 ProvidersCard(viewModel = viewModel, uiState = uiState)
