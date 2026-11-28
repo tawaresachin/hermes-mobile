@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
         com.hermes.mobile.wake.WakeWordService.reconcile(this)
         // Deep link from the "response ready" notification → open the session.
         val deepLinkSession = intent.getStringExtra(EXTRA_SESSION_ID)
+        val deepLinkKanbanTask = intent.getStringExtra(EXTRA_KANBAN_TASK)
         // Full-screen wake alert / tap fallback → open Chat and dictate.
         if (intent.getBooleanExtra(EXTRA_WAKE, false)) consumeWakeIntent()
         setContent {
@@ -79,7 +80,11 @@ class MainActivity : ComponentActivity() {
             }
             CompositionLocalProvider(LocalDarkTheme provides actualDark) {
                 HermesMobileTheme(darkTheme = actualDark) {
-                    MainNavigation(isLoggedIn = apiPaired, initialSessionId = deepLinkSession)
+                    MainNavigation(
+                        isLoggedIn = apiPaired,
+                        initialSessionId = deepLinkSession,
+                        initialKanbanTask = deepLinkKanbanTask,
+                    )
                 }
             }
         }
@@ -89,6 +94,10 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.getBooleanExtra(EXTRA_WAKE, false)) consumeWakeIntent()
+        intent.getStringExtra(EXTRA_KANBAN_TASK)?.takeIf { it.isNotBlank() }?.let {
+            com.hermes.mobile.KanbanNav.pendingTaskId = it
+            intent.removeExtra(EXTRA_KANBAN_TASK)
+        }
     }
 
     /** Clear the transient alert and hand off to the global wake coordinator. */
@@ -102,5 +111,6 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_SESSION_ID = "session_id"
         const val EXTRA_WAKE = "wake"
+        const val EXTRA_KANBAN_TASK = "kanban_task"
     }
 }

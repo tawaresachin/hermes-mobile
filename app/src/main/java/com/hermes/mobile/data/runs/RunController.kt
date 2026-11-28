@@ -235,7 +235,7 @@ class RunController @Inject constructor(
                 val serverId = api.serverIdFor(sessionId)?.takeIf { it.isNotBlank() } ?: sessionId
 
                 runId = api.startRun(serverId, wire, safeModel, provider,
-                    TurnText.buildInstructions(applyTerse, api.isSwarmForSession(sessionId)))
+                    TurnText.buildInstructions(applyTerse))
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {

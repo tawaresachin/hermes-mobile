@@ -36,6 +36,9 @@ class HermesApp : Application(), ImageLoaderFactory {
         // persisted run id once, finalize completed ones (notification!),
         // re-attach watchers for still-running ones.
         runController.recover()
+        // Re-arm the Kanban watcher if the user left it on. Safe when the app
+        // is foreground; a background-start denial is swallowed by the service.
+        com.hermes.mobile.notifications.KanbanWatcherService.reconcile(this)
         syncCrashDumps()
         // Foreground tracking for the response-notification (only ping when
         // the user is NOT looking at the app).

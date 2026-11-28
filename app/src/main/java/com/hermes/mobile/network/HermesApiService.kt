@@ -179,17 +179,6 @@ class HermesApiService @Inject constructor(
             .apply()
     }
 
-    // ── Per-session Swarm mode ──
-    // ON = the run carries SWARM_DIRECTIVE: the agent may split substantive
-    // work into a real Kanban Swarm graph (official CLI + gateway
-    // dispatcher). Sticky per session like the model pick.
-    fun isSwarmForSession(sessionId: String): Boolean =
-        prefs.getBoolean("session_swarm:$sessionId", false)
-
-    fun saveSwarmForSession(sessionId: String, on: Boolean) {
-        prefs.edit().putBoolean("session_swarm:$sessionId", on).apply()
-    }
-
     /** Purge every per-session key this class owns. Called on session
      * delete — without it, srv_session:/session_model(:_slug)/session_swarm
      * entries for dead sessions accumulate in prefs forever. */
@@ -1233,6 +1222,68 @@ class HermesApiService @Inject constructor(
             throw e
         } catch (_: Exception) { null }
     }
+
+    /** GET $path keeping the HTTP status (501/404 distinguish "plugin too old"
+     * from "offline"). Used by optional feature probes like Kanban. */
+    suspend fun getJsonResult(path: String): FetchResult<JSONObject> = withContext(Dispatchers.IO) {
+        val cfg = config ?: getConfig()
+        val base = cfg?.baseUrl?.takeIf { it.isNotBlank() }
+            ?: return@withContext FetchResult(null, 0)
+        val key = cfg.apiKey?.takeIf { it.isNotBlank() } ?: ""
+        try {
+            val builder = Request.Builder().url(base.trimEnd('/') + path).get()
+            if (key.isNotBlank()) builder.header("Authorization", "Bearer $key")
+            client.newCall(builder.build()).execute().use { resp ->
+                val json = resp.body?.string()?.let { runCatching { JSONObject(it) }.getOrNull() }
+                FetchResult(json, resp.code)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) { FetchResult(null, 0) }
+    }
+
+    // ─── Kanban (plugin /api/mobile/kanban/*) ───
+    // The dedicated Kanban screen talks to the agent's kanban kernel through
+    // the mobile plugin. A 501 means the connected agent predates the kernel.
+
+    private fun q(value: String): String =
+        java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
+    suspend fun kanbanMode(): FetchResult<JSONObject> =
+        getJsonResult("/api/mobile/kanban/mode")
+
+    suspend fun setKanbanMode(enabled: Boolean): FetchResult<JSONObject> =
+        postJsonResult("/api/mobile/kanban/mode", JSONObject().put("enabled", enabled), JsonMethod.PUT)
+
+    suspend fun kanbanBoard(board: String? = null): FetchResult<JSONObject> =
+        getJsonResult("/api/mobile/kanban/board" + (board?.takeIf { it.isNotBlank() }?.let { "?board=${q(it)}" } ?: ""))
+
+    suspend fun kanbanBoards(): FetchResult<JSONObject> =
+        getJsonResult("/api/mobile/kanban/boards")
+
+    suspend fun kanbanAssignees(board: String? = null): FetchResult<JSONObject> =
+        getJsonResult("/api/mobile/kanban/assignees" + (board?.takeIf { it.isNotBlank() }?.let { "?board=${q(it)}" } ?: ""))
+
+    suspend fun kanbanCreateTask(body: JSONObject): FetchResult<JSONObject> =
+        postJsonResult("/api/mobile/kanban/tasks", body)
+
+    suspend fun kanbanTask(taskId: String, board: String? = null): FetchResult<JSONObject> =
+        getJsonResult("/api/mobile/kanban/tasks/${q(taskId)}" +
+            (board?.takeIf { it.isNotBlank() }?.let { "?board=${q(it)}" } ?: ""))
+
+    suspend fun kanbanComment(taskId: String, text: String, board: String? = null): FetchResult<JSONObject> =
+        postJsonResult("/api/mobile/kanban/tasks/${q(taskId)}/comments" +
+            (board?.takeIf { it.isNotBlank() }?.let { "?board=${q(it)}" } ?: ""),
+            JSONObject().put("body", text))
+
+    suspend fun kanbanAction(taskId: String, action: String, extra: JSONObject? = null): FetchResult<JSONObject> {
+        val body = (extra ?: JSONObject()).put("action", action)
+        return postJsonResult("/api/mobile/kanban/tasks/${q(taskId)}/actions", body)
+    }
+
+    suspend fun kanbanEvents(since: Long, board: String? = null, limit: Int = 200): FetchResult<JSONObject> =
+        getJsonResult("/api/mobile/kanban/events?since=$since&limit=$limit" +
+            (board?.takeIf { it.isNotBlank() }?.let { "&board=${q(it)}" } ?: ""))
 
     /** POST $path with a JSON body (Bearer auth). Null on any failure;
      * HTTP errors surface the parsed body when it is JSON (the plugin's

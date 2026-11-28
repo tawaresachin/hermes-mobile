@@ -22,6 +22,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.compose.ui.platform.LocalHapticFeedback
 import com.hermes.mobile.ui.screens.chat.ChatScreen
 import com.hermes.mobile.ui.screens.home.HomeScreen
+import com.hermes.mobile.ui.screens.kanban.KanbanScreen
 import com.hermes.mobile.ui.screens.sessions.SessionsScreen
 import com.hermes.mobile.ui.screens.settings.SettingsScreen
 import com.hermes.mobile.ui.screens.terminal.TerminalScreen
@@ -53,6 +54,11 @@ object VoiceNav {
     var pendingNewSession: Boolean by androidx.compose.runtime.mutableStateOf(false)
 }
 
+/** One-shot task delivery from a Kanban notification. */
+object KanbanNav {
+    var pendingTaskId: String? by androidx.compose.runtime.mutableStateOf(null)
+}
+
 sealed class Screen(
     val route: String,
     val label: String,
@@ -60,6 +66,7 @@ sealed class Screen(
 ) {
     data object Home : Screen("home", "Home", Icons.Filled.Home)
     data object Chat : Screen("chat", "Chat", Icons.Filled.Chat)
+    data object Kanban : Screen("kanban", "Kanban", Icons.Filled.Dashboard)
     data object Voice : Screen("voice", "Voice", Icons.Filled.Mic)
     data object Sessions : Screen("sessions", "Sessions", Icons.Filled.History)
     data object Settings : Screen("settings", "Settings", Icons.Filled.Settings)
@@ -77,6 +84,7 @@ val bottomNavScreens = listOf(Screen.Home, Screen.Chat, Screen.Settings)
 fun MainNavigation(
     isLoggedIn: Boolean,
     initialSessionId: String? = null,
+    initialKanbanTask: String? = null,
     navController: NavHostController = rememberNavController()
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -126,12 +134,25 @@ fun MainNavigation(
         }
     }
 
+    // Deep link from a Kanban notification: open the dedicated board + task.
+    LaunchedEffect(initialKanbanTask, isLoggedIn) {
+        if (initialKanbanTask != null && isLoggedIn) {
+            KanbanNav.pendingTaskId = initialKanbanTask
+            navController.navigate(Screen.Kanban.route) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+    }
+
     // Security: leave gated screens (Chat/Voice/Sessions) IMMEDIATELY when
     // the user signs out — an already-open screen must not stay usable.
     LaunchedEffect(isLoggedIn, currentDestination) {
         if (!isLoggedIn) {
             val route = currentDestination?.route
-            if (route == Screen.Chat.route || route == Screen.Voice.route || route == Screen.Sessions.route) {
+            if (route == Screen.Chat.route || route == Screen.Voice.route ||
+                route == Screen.Sessions.route || route == Screen.Kanban.route) {
                 navController.navigate(Screen.Home.route) {
                     popUpTo(navController.graph.findStartDestination().id)
                     launchSingleTop = true
@@ -205,6 +226,13 @@ fun MainNavigation(
                             restoreState = true
                         }
                     },
+                    onNavigateToKanban = {
+                        navController.navigate(Screen.Kanban.route) {
+                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                     onNavigateToTerminal = {
                         // Terminal entry moved off the bottom bar into Home's
                         // feature panel; the SSH session holder is
@@ -268,8 +296,30 @@ fun MainNavigation(
                     )
                 }
             }
+            composable(Screen.Kanban.route) {
+                if (isLoggedIn) {
+                    KanbanScreen(paddingValues = scaffoldPadding)
+                } else {
+                    KanbanNav.pendingTaskId = null
+                    SignInRequired(
+                        feature = "Kanban",
+                        onGoToSettings = {
+                            navController.navigate(Screen.Settings.route) { launchSingleTop = true }
+                        }
+                    )
+                }
+            }
             composable(Screen.Settings.route) {
-                SettingsScreen(paddingValues = scaffoldPadding)
+                SettingsScreen(
+                    paddingValues = scaffoldPadding,
+                    onNavigateToKanban = {
+                        navController.navigate(Screen.Kanban.route) {
+                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                )
             }
             composable(Screen.Terminal.route) {
                 TerminalScreen(paddingValues = scaffoldPadding)

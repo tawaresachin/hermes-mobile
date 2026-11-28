@@ -9,6 +9,8 @@ import com.hermes.mobile.data.model.ConnectionStatus
 import com.hermes.mobile.data.model.ServerConfig
 import com.hermes.mobile.data.repository.HermesRepository
 import com.hermes.mobile.network.FetchResult
+import com.hermes.mobile.ui.screens.kanban.KanbanMode
+import com.hermes.mobile.ui.screens.kanban.parseKanbanMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -195,6 +197,11 @@ data class SettingsUiState(
     val profilesError: String? = null,
     val activeProfile: AgentProfile? = null,
     val capabilities: CapabilitiesState = CapabilitiesState(),
+    // Agent-side Kanban mode (toolset + gateway dispatcher)
+    val kanban: KanbanMode = KanbanMode(),
+    val kanbanLoading: Boolean = false,
+    val kanbanUpdating: Boolean = false,
+    val kanbanError: String? = null,
 )
 
 @HiltViewModel
@@ -1145,6 +1152,63 @@ class SettingsViewModel @Inject constructor(
         }
         testConnection()
     }
+
+    // ─── Kanban mode (agent-side board + dispatcher) ───────────────────────
+
+    /** Read the agent's Kanban mode. Called on screen open and every 10 s so a
+     * change made from the desktop/dashboard flips this switch automatically. */
+    fun loadKanbanMode(silent: Boolean = false) {
+        if (_uiState.value.kanbanUpdating) return
+        viewModelScope.launch {
+            if (!silent) _uiState.update { it.copy(kanbanLoading = true, kanbanError = null) }
+            val res = repository.kanbanMode()
+            val parsed = parseKanbanMode(res.body).let { mode ->
+                if (res.status == 501 || res.status == 404) mode.copy(
+                    available = false,
+                    error = "This Hermes Agent does not expose Kanban yet.",
+                ) else mode
+            }
+            _uiState.update {
+                it.copy(
+                    kanban = parsed,
+                    kanbanLoading = false,
+                    kanbanError = parsed.error,
+                )
+            }
+        }
+    }
+
+    /** Flip the agent-side Kanban mode. Optimistic so the switch responds, then
+     * reconciled from the server response (a failed write snaps back). */
+    fun setKanbanMode(enabled: Boolean) {
+        if (_uiState.value.kanbanUpdating) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    kanbanUpdating = true,
+                    kanbanError = null,
+                    kanban = it.kanban.copy(enabled = enabled),
+                )
+            }
+            val res = repository.setKanbanMode(enabled)
+            val parsed = res.body?.let(::parseKanbanMode)
+            if (parsed == null) {
+                _uiState.update {
+                    it.copy(
+                        kanbanUpdating = false,
+                        kanban = it.kanban.copy(enabled = !enabled),
+                        kanbanError = "Could not update Kanban mode (HTTP ${res.status}).",
+                    )
+                }
+            } else {
+                _uiState.update {
+                    it.copy(kanbanUpdating = false, kanban = parsed, kanbanError = parsed.error)
+                }
+                // New board/first enable: make sure the app is looking at it.
+            }
+        }
+    }
+
 
 }
 

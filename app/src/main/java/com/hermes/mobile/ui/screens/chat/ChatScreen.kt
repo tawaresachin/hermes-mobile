@@ -272,21 +272,8 @@ class ChatViewModel @Inject constructor(
         }
         _currentModel.value = model ?: ""
         _currentProviderSlug.value = slug
-        _swarmEnabled.value = repository.isSwarmForSession(sessionId)
         _contextTotal.value = 0L
         _contextUsed.value = 0L
-    }
-
-    // ── Swarm mode (sticky per session, like the model pick) ──
-    // ON: each run carries SWARM_DIRECTIVE — the agent may split substantive
-    // work into a real Kanban Swarm graph (official `hermes kanban swarm`
-    // CLI + gateway dispatcher spawns the workers; proven E2E on this box).
-    private val _swarmEnabled = MutableStateFlow(false)
-    val swarmEnabled: StateFlow<Boolean> = _swarmEnabled.asStateFlow()
-
-    fun setSwarmEnabled(on: Boolean) {
-        _swarmEnabled.value = on
-        _sessionId.value?.let { repository.saveSwarmForSession(it, on) }
     }
 
     private suspend fun createNewSession() {
@@ -1774,16 +1761,6 @@ fun ChatScreen(
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                // Swarm mode toggle for THIS session (icon-only, vertically centered —
-                // matches the layout before the 8191f9c "header declutter")
-                val swarmOn by vm.swarmEnabled.collectAsState()
-                IconButton(onClick = { vm.setSwarmEnabled(!swarmOn) }) {
-                    Icon(
-                        imageVector = Icons.Filled.Hive,
-                        contentDescription = if (swarmOn) "Swarm mode ON" else "Swarm mode OFF",
-                        tint = if (swarmOn) HermesPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
                 // Search
                 IconButton(onClick = { showSearch = !showSearch; searchQuery = "" }) {
                     Icon(

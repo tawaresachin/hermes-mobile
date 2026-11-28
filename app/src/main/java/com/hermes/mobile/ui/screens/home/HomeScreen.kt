@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Error
@@ -153,7 +154,9 @@ data class HomeUiState(
     val error: String? = null,
     val sessions: List<Session> = emptyList(),
     /** Full server-synced count; [sessions] is capped to the recent 10. */
-    val sessionTotal: Int = 0
+    val sessionTotal: Int = 0,
+    /** Agent-side Kanban mode — gates the drawer entry (server truth, polled). */
+    val kanbanEnabled: Boolean = false
 )
 
 // ─── ViewModel ───
@@ -186,6 +189,7 @@ class HomeViewModel @Inject constructor(
         observeSessions()
         updateGreeting()
         checkConnection()
+        refreshKanbanMode()
         // Poll connection every 5s when not connected
         viewModelScope.launch {
             while (isActive) {
@@ -194,6 +198,21 @@ class HomeViewModel @Inject constructor(
                 if (current != ConnectionStatus.CONNECTED) {
                     checkConnection()
                 }
+                refreshKanbanMode()
+            }
+        }
+    }
+
+    /** Kanban is an agent-side switch; poll it so the Home drawer entry
+     * appears/disappears without a Settings round-trip. */
+    fun refreshKanbanMode() {
+        viewModelScope.launch {
+            val res = repository.kanbanMode()
+            val enabled = res.body?.optBoolean("ok", false) == true &&
+                res.body?.optBoolean("available", true) == true &&
+                res.body?.optBoolean("enabled", false) == true
+            if (_uiState.value.kanbanEnabled != enabled) {
+                _uiState.update { it.copy(kanbanEnabled = enabled) }
             }
         }
     }
@@ -318,6 +337,7 @@ fun HomeScreen(
     onNavigateToSessions: () -> Unit,
     onNavigateToVoice: () -> Unit,
     onNavigateToTerminal: () -> Unit,
+    onNavigateToKanban: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -486,7 +506,9 @@ fun HomeScreen(
                     onDismiss = { menuGate.run(closeDrawer) },
                     onVoiceInput = { menuGate.run { closeDrawer(); onNavigateToVoice() } },
                     onResumeSession = { menuGate.run { closeDrawer(); onNavigateToSessions() } },
-                    onTerminal = { menuGate.run { closeDrawer(); onNavigateToTerminal() } }
+                    onTerminal = { menuGate.run { closeDrawer(); onNavigateToTerminal() } },
+                    kanbanEnabled = uiState.kanbanEnabled,
+                    onKanban = { menuGate.run { closeDrawer(); onNavigateToKanban() } }
                 )
             }
         }
@@ -652,7 +674,9 @@ internal fun FeatureDrawerCard(
     onDismiss: () -> Unit,
     onVoiceInput: () -> Unit,
     onResumeSession: () -> Unit,
-    onTerminal: () -> Unit
+    onTerminal: () -> Unit,
+    kanbanEnabled: Boolean = false,
+    onKanban: () -> Unit = {}
 ) {
     // Opaque and uniform: exactly the page surface color, 100% alpha.
     Surface(
@@ -686,6 +710,13 @@ internal fun FeatureDrawerCard(
             Spacer(modifier = Modifier.height(10.dp))
             FeaturePill(Icons.Filled.Terminal, "Terminal", onTerminal,
                 accent = Color(0xFFE8710A))
+            // Kanban is an opt-in agent feature: only show the entry once the
+            // Settings toggle has actually enabled it on the server.
+            if (kanbanEnabled) {
+                Spacer(modifier = Modifier.height(10.dp))
+                FeaturePill(Icons.Filled.Dashboard, "Kanban", onKanban,
+                    accent = Color(0xFF6366F1))
+            }
         }
     }
 }

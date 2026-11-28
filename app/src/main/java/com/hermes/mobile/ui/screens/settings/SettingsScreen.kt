@@ -42,11 +42,13 @@ import com.hermes.mobile.wake.WakeDiagnostics
 import com.hermes.mobile.wake.WakeWordBus
 import com.hermes.mobile.wake.WakeWordPrefs
 import com.hermes.mobile.wake.WakeWordService
+import com.hermes.mobile.notifications.KanbanWatcherService
 import com.hermes.mobile.ui.components.HermesWatermark
 import com.hermes.mobile.ui.theme.*
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -54,6 +56,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun SettingsScreen(
     paddingValues: PaddingValues,
+    onNavigateToKanban: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -98,6 +101,18 @@ fun SettingsScreen(
     LaunchedEffect(Unit) {
         viewModel.loadSystemStatus()
         viewModel.checkSavedConnection()
+        viewModel.loadKanbanMode()
+    }
+    // Kanban mode is agent state: poll so a change made on the desktop flips
+    // this switch automatically instead of showing a stale toggle.
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(10_000)
+            viewModel.loadKanbanMode(silent = true)
+        }
+    }
+    LaunchedEffect(uiState.kanban.available, uiState.kanban.enabled) {
+        KanbanWatcherService.sync(context, uiState.kanban.available && uiState.kanban.enabled)
     }
 
     /** Private/Tailscale/LAN-only guard for QR-derived server URLs. */
@@ -518,7 +533,53 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ─── 6b. WAKE WORD (on-device, no audio leaves the phone) ───
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ─── 6b. KANBAN MODE (agent-side board + dispatcher) ───
+            SettingsSection("Kanban") {
+                SettingsToggle(
+                    icon = Icons.Filled.Dashboard,
+                    title = "Kanban Mode",
+                    subtitle = when {
+                        uiState.kanbanLoading && uiState.kanban.boards.isEmpty() -> "Checking agent…"
+                        !uiState.kanban.available -> "Not supported by this Hermes Agent"
+                        uiState.kanbanUpdating -> "Applying…"
+                        uiState.kanban.enabled ->
+                            "Board enabled · dispatcher " +
+                                if (uiState.kanban.dispatchInGateway) "running" else "off"
+                        else -> "Off — the agent can't run board tasks"
+                    },
+                    checked = uiState.kanban.enabled,
+                    onCheckedChange = { viewModel.setKanbanMode(it) },
+                    enabled = uiState.kanban.available && !uiState.kanbanUpdating,
+                )
+                if (uiState.kanban.enabled) {
+                    TextButton(onClick = onNavigateToKanban) {
+                        Icon(Icons.Filled.Dashboard, contentDescription = null,
+                            modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Open Kanban board")
+                    }
+                }
+                if (uiState.kanban.restartRequired) {
+                    Text(
+                        "Restart the Hermes gateway to apply the dispatcher change.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                uiState.kanbanError?.let { err ->
+                    Text(
+                        err,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ─── 6c. WAKE WORD (on-device, no audio leaves the phone) ───
             SettingsSection("Wake word") {
                 SettingsToggle(
                     icon = Icons.Filled.Mic,

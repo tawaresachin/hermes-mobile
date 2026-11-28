@@ -859,8 +859,20 @@ class HermesRepository @Inject constructor(
 
     fun saveModelForSession(sessionId: String, modelId: String, providerSlug: String) =
         apiService.saveModelForSession(sessionId, modelId, providerSlug)
-    fun isSwarmForSession(sessionId: String): Boolean = apiService.isSwarmForSession(sessionId)
-    fun saveSwarmForSession(sessionId: String, on: Boolean) = apiService.saveSwarmForSession(sessionId, on)
+    // ─── Kanban (agent-side board; plugin /api/mobile/kanban/*) ───
+    suspend fun kanbanMode() = apiService.kanbanMode()
+    suspend fun setKanbanMode(enabled: Boolean) = apiService.setKanbanMode(enabled)
+    suspend fun kanbanBoard(board: String? = null) = apiService.kanbanBoard(board)
+    suspend fun kanbanBoards() = apiService.kanbanBoards()
+    suspend fun kanbanAssignees(board: String? = null) = apiService.kanbanAssignees(board)
+    suspend fun kanbanCreateTask(body: org.json.JSONObject) = apiService.kanbanCreateTask(body)
+    suspend fun kanbanTask(taskId: String, board: String? = null) = apiService.kanbanTask(taskId, board)
+    suspend fun kanbanComment(taskId: String, text: String, board: String? = null) =
+        apiService.kanbanComment(taskId, text, board)
+    suspend fun kanbanAction(taskId: String, action: String, extra: org.json.JSONObject? = null) =
+        apiService.kanbanAction(taskId, action, extra)
+    suspend fun kanbanEvents(since: Long, board: String? = null, limit: Int = 200) =
+        apiService.kanbanEvents(since, board, limit)
 
     // ─── Dark Theme ───
 

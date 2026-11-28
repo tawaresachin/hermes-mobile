@@ -50,6 +50,13 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- Polls the agent Kanban board while Kanban mode is on and posts
+             action-required / completion notifications. -->
+        <service
+            android:name=".notifications.KanbanWatcherService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- Attachment viewer fallback: expose cache files to the system
              viewer via content:// URIs (no storage permission needed). -->
         <provider
