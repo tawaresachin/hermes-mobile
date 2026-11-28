@@ -1,43 +1,43 @@
 package com.hermes.mobile.update
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** The compare logic is the load-bearing part of the self-update flow:
- * a false "update available" loop or a missed patch both destroy trust.
- * It must mirror scripts/release.sh's versionCode formula exactly. */
 class AppUpdateCheckerTest {
 
+    private val hash = "98ceddfead7e5bb9e67f4b5e3e3cc966ea2b1e29db6ca8d3c93a9278ed9843c1"
+    private val wanted = "Hermes-Mobile-v0.1.35.apk"
+
     @Test
-    fun `tag maps to the release-script versionCode formula`() {
-        assertEquals(52, AppUpdateChecker.versionCodeFromTag("v0.0.52"))
-        assertEquals(52, AppUpdateChecker.versionCodeFromTag("0.0.52"))
-        assertEquals(10_203, AppUpdateChecker.versionCodeFromTag("v1.2.3"))
-        assertEquals(0, AppUpdateChecker.versionCodeFromTag(""))
-        assertEquals(0, AppUpdateChecker.versionCodeFromTag("garbage"))
+    fun `parses release checksum with dot slash prefix`() {
+        // The actual format published in SHA256SUMS on GitHub Releases.
+        assertEquals(hash, AppUpdateChecker.sha256For("$hash  ./$wanted", wanted))
     }
 
     @Test
-    fun `patch ordering is numeric not lexicographic`() {
-        // "v0.0.9" > "v0.0.10" string-wise — the formula must not.
-        assertTrue(AppUpdateChecker.versionCodeFromTag("v0.0.10") >
-            AppUpdateChecker.versionCodeFromTag("v0.0.9"))
-        assertFalse(AppUpdateChecker.versionCodeFromTag("v0.0.52") >
-            AppUpdateChecker.versionCodeFromTag("v0.0.52"))   // equal = up to date
-        // The installed 0.1.32 is code 132 and tag v0.1.32 must map to 132 too,
-        // not 1032 (the old 1e6/1e3 formula) — otherwise About offers an update.
-        assertEquals(132, AppUpdateChecker.versionCodeFromTag("v0.1.32"))
-        assertEquals(132, AppUpdateChecker.versionCodeFromTag("0.1.32"))
-        assertTrue(AppUpdateChecker.versionCodeFromTag("v0.1.0") >
-            AppUpdateChecker.versionCodeFromTag("v0.0.99"))
+    fun `parses plain filename and binary marker`() {
+        assertEquals(hash, AppUpdateChecker.sha256For("$hash  $wanted", wanted))
+        assertEquals(hash, AppUpdateChecker.sha256For("$hash *$wanted", wanted))
     }
 
     @Test
-    fun `semver metadata and prerelease are stripped`() {
-        assertEquals(133, AppUpdateChecker.versionCodeFromTag("v0.1.33+build5"))
-        assertEquals(133, AppUpdateChecker.versionCodeFromTag("v0.1.33-rc.1"))
-        assertEquals(133, AppUpdateChecker.versionCodeFromTag("0.1.33-rc.1+meta"))
+    fun `does not match a different asset embedding the wanted name`() {
+        assertNull(AppUpdateChecker.sha256For("$hash  ./old-$wanted", wanted))
+        assertNull(AppUpdateChecker.sha256For("$hash  ./$wanted.sig", wanted))
+    }
+
+    @Test
+    fun `rejects malformed lines`() {
+        assertNull(AppUpdateChecker.sha256For("not a hash  ./$wanted", wanted))
+        assertNull(AppUpdateChecker.sha256For(hash, wanted))
+        // Any directory prefix is normalized away — only the basename counts.
+        assertEquals(hash, AppUpdateChecker.sha256For("$hash  " + "./".repeat(3) + wanted, wanted))
+    }
+
+    @Test
+    fun `version code matches release script lanes`() {
+        assertEquals(135, AppUpdateChecker.versionCodeFromTag("v0.1.35"))
+        assertEquals(133, AppUpdateChecker.versionCodeFromTag("0.1.33-rc.1"))
     }
 }

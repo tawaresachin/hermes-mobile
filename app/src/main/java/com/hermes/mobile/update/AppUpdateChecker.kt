@@ -190,14 +190,7 @@ class AppUpdateChecker @Inject constructor(
                         if (!res.isSuccessful) return@use null
                         val wanted = "Hermes-Mobile-v$latest.apk"
                         res.body?.string()?.lineSequence()
-                            // SHA256SUMS is "<hash>  <filename>"; match the
-                            // filename token EXACTLY. contains() could pick a
-                            // different asset whose name embeds this one.
-                            ?.firstOrNull { line ->
-                                line.trim().split(Regex("\\s+")).lastOrNull() == wanted
-                            }
-                            ?.trim()?.substringBefore(' ')?.lowercase()
-                            ?.takeIf { it.length == 64 }
+                            ?.firstNotNullOfOrNull { line -> sha256For(line, wanted) }
                     }
                 } catch (e: Exception) { null }
             }
@@ -308,6 +301,22 @@ class AppUpdateChecker @Inject constructor(
                 (p.getOrNull(1)?.toIntOrNull() ?: 0) * 100 +
                 (p.getOrNull(2)?.toIntOrNull() ?: 0)
         } catch (e: Exception) { 0 }
+
+        /**
+         * Parse one SHA256SUMS line for [wantedName]. Release checksum files
+         * prefix the filename with "./" (GNU coreutils style) and may mark
+         * binary mode with a leading "*"; both must still match. Compare the
+         * basename exactly so a different asset whose name embeds ours can
+         * never be selected.
+         */
+        internal fun sha256For(line: String, wantedName: String): String? {
+            val parts = line.trim().split(Regex("\\s+"), limit = 2)
+            if (parts.size < 2) return null
+            val hash = parts[0].removePrefix("*").lowercase()
+            if (hash.length != 64 || hash.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
+            val name = parts[1].trim().removePrefix("*").substringAfterLast('/')
+            return hash.takeIf { name == wantedName }
+        }
 
         private fun sha256(f: File): String {
             val md = MessageDigest.getInstance("SHA-256")

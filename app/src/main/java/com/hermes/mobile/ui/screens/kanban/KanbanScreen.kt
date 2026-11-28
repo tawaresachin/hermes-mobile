@@ -267,7 +267,7 @@ private fun KanbanMessage(title: String, body: String, action: String, onAction:
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(6.dp))
         Text(body, style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+            color = kanbanPalette().mutedText)
         Spacer(Modifier.height(16.dp))
         OutlinedButton(onClick = onAction) { Text(action) }
     }
@@ -292,7 +292,7 @@ private fun KanbanEnableCard(state: KanbanUiState, onEnable: () -> Unit) {
                 "create tasks with a description, watch every stage, and get " +
                 "notified when one needs you.",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = kanbanPalette().mutedText,
         )
         Spacer(Modifier.height(18.dp))
         Button(
@@ -310,7 +310,7 @@ private fun KanbanEnableCard(state: KanbanUiState, onEnable: () -> Unit) {
         Text(
             "This changes the agent's api_server toolset and kanban.dispatch_in_gateway.",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = kanbanPalette().mutedText,
         )
     }
 }
@@ -330,17 +330,18 @@ private data class KanbanPalette(
 @Composable
 private fun kanbanPalette(): KanbanPalette = if (LocalDarkTheme.current) {
     KanbanPalette(
-        stageBg = Color(0xFF243342),
-        taskBg = Color(0xFF3B4E62),
+        // Stage cards use the exact same surface token as Settings cards.
+        stageBg = MaterialTheme.colorScheme.surface,
+        taskBg = Color(0xFF304253),
         childBg = Color(0xFF1C2833),
-        border = Color(0xFF5C748B),
+        border = Color(0xFF6E8AA3),
         mutedText = Color(0xFFB9C6D3),
     )
 } else {
     KanbanPalette(
-        stageBg = Color(0xFFD8D8DE),
+        stageBg = MaterialTheme.colorScheme.surface,
         taskBg = Color.White,
-        childBg = Color(0xFFC7C7CE),
+        childBg = Color(0xFFD8D8DE),
         border = Color(0xFFA6A6B0),
         mutedText = Color(0xFF54585D),
     )
@@ -382,6 +383,9 @@ private fun KanbanStageCard(
 ) {
     val stageColor = statusColor(column.key)
     val pal = kanbanPalette()
+    // Expansion state lives at the stage level so one tap can collapse every
+    // open task card in this stage.
+    var expandedTaskIds by remember { mutableStateOf(setOf<String>()) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
@@ -420,6 +424,21 @@ private fun KanbanStageCard(
                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                     )
                 }
+                Spacer(Modifier.weight(1f))
+                if (expandedTaskIds.isNotEmpty()) {
+                    TextButton(
+                        onClick = { expandedTaskIds = emptySet() },
+                        modifier = Modifier.heightIn(min = 36.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.ExpandLess,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Collapse all")
+                    }
+                }
             }
             Spacer(Modifier.height(10.dp))
 
@@ -435,6 +454,12 @@ private fun KanbanStageCard(
                 column.tasks.forEach { task ->
                     KanbanTaskCardView(
                         task,
+                        expanded = task.id in expandedTaskIds,
+                        onToggleExpand = {
+                            expandedTaskIds = if (task.id in expandedTaskIds) {
+                                expandedTaskIds - task.id
+                            } else expandedTaskIds + task.id
+                        },
                         onClick = { onTaskClick(task.id) },
                         onSubtaskClick = onTaskClick,
                     )
@@ -448,10 +473,11 @@ private fun KanbanStageCard(
 @Composable
 private fun KanbanTaskCardView(
     task: KanbanTaskCard,
+    expanded: Boolean,
+    onToggleExpand: () -> Unit,
     onClick: () -> Unit,
     onSubtaskClick: (String) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
     val pal = kanbanPalette()
     Card(
         modifier = Modifier
@@ -459,7 +485,7 @@ private fun KanbanTaskCardView(
             .clickable(
                 indication = null,
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-            ) { expanded = !expanded },
+            ) { onToggleExpand() },
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = pal.taskBg),
         border = androidx.compose.foundation.BorderStroke(1.dp, pal.border),
@@ -479,7 +505,7 @@ private fun KanbanTaskCardView(
                 Icon(
                     imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = if (expanded) "Collapse task" else "Expand task",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = kanbanPalette().mutedText,
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -489,7 +515,7 @@ private fun KanbanTaskCardView(
                     Text(
                         task.bodyPreview,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = kanbanPalette().mutedText,
                         maxLines = 6,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -499,7 +525,7 @@ private fun KanbanTaskCardView(
                     Text(
                         "${task.commentCount} ${if (task.commentCount == 1) "comment" else "comments"}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = kanbanPalette().mutedText,
                     )
                     Spacer(Modifier.height(6.dp))
                 }
@@ -522,19 +548,19 @@ private fun KanbanTaskCardView(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Person, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = kanbanPalette().mutedText,
                         modifier = Modifier.size(12.dp))
                     Spacer(Modifier.width(3.dp))
                     Text(
                         task.assignee.ifBlank { "unassigned" },
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = kanbanPalette().mutedText,
                         modifier = Modifier.weight(1f),
                     )
                     Text(
                         shortAge(task.createdAt),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        color = kanbanPalette().mutedText,
                     )
                 }
                 if (task.blockKind == "needs_input") {
@@ -591,7 +617,7 @@ private fun KanbanSubtaskView(subtask: KanbanSubtask, onClick: () -> Unit) {
             Text(
                 subtask.assignee.ifBlank { "—" },
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = kanbanPalette().mutedText,
             )
         }
     }
@@ -654,7 +680,7 @@ private fun CreateTaskDialog(
                         Text(
                             "Lets the agent split the work before dispatching",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = kanbanPalette().mutedText,
                         )
                     }
                 }
@@ -705,7 +731,7 @@ private fun TaskDetailSheet(
                     Text(
                         "${kanbanStatusLabel(task.status)} · ${task.assignee.ifBlank { "unassigned" }}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = kanbanPalette().mutedText,
                     )
                 }
                 if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -793,7 +819,7 @@ private fun TaskDetailSheet(
                     Text(
                         "${shortAge(run.startedAt)} · ${run.status}${if (run.outcome.isNotBlank()) " / ${run.outcome}" else ""}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = kanbanPalette().mutedText,
                     )
                 }
                 Spacer(Modifier.height(12.dp))
@@ -802,7 +828,7 @@ private fun TaskDetailSheet(
                 fontWeight = FontWeight.Bold)
             if (detail.comments.isEmpty()) {
                 Text("No comments yet", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = kanbanPalette().mutedText)
             } else {
                 detail.comments.takeLast(8).forEach { c ->
                     Text(
@@ -874,13 +900,13 @@ private fun ActionButton(
 
 @Composable
 private fun statusColor(status: String): Color = when (status) {
-    "triage", "todo", "scheduled" -> MaterialTheme.colorScheme.onSurfaceVariant
+    "triage", "todo", "scheduled" -> kanbanPalette().mutedText
     "ready" -> HermesPrimary
     "running" -> WarningAmber
     "blocked" -> ErrorRed
     "review" -> Color(0xFF6366F1)
     "done" -> SuccessGreen
-    else -> MaterialTheme.colorScheme.onSurfaceVariant
+    else -> kanbanPalette().mutedText
 }
 
 private fun shortAge(epochSeconds: Long): String {
