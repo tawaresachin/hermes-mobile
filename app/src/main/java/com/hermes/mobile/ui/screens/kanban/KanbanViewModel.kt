@@ -213,7 +213,8 @@ class KanbanViewModel @Inject constructor(
     }
 
     fun act(action: String, extra: JSONObject? = null) {
-        val id = _state.value.detail?.task?.id ?: return
+        val task = _state.value.detail?.task ?: return
+        val id = task.id
         if (_state.value.busyTaskId != null) return
         viewModelScope.launch {
             _state.value = _state.value.copy(busyTaskId = id, actionMessage = null)
@@ -228,7 +229,7 @@ class KanbanViewModel @Inject constructor(
                         "retry" -> "Task queued for retry"
                         "approve" -> "Task approved"
                         "archive" -> "Task archived"
-                        "delete" -> "Task deleted"
+                        "delete" -> "Deleted \"${task.title}\""
                         else -> "Task updated"
                     }
                 } else body?.optString("error")?.ifBlank { null } ?: "Action failed",

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -432,7 +433,11 @@ private fun KanbanStageCard(
                 )
             } else {
                 column.tasks.forEach { task ->
-                    KanbanTaskCardView(task, onClick = { onTaskClick(task.id) })
+                    KanbanTaskCardView(
+                        task,
+                        onClick = { onTaskClick(task.id) },
+                        onChildClick = onTaskClick,
+                    )
                     Spacer(Modifier.height(8.dp))
                 }
             }
@@ -441,7 +446,11 @@ private fun KanbanStageCard(
 }
 
 @Composable
-private fun KanbanTaskCardView(task: KanbanTaskCard, onClick: () -> Unit) {
+private fun KanbanTaskCardView(
+    task: KanbanTaskCard,
+    onClick: () -> Unit,
+    onChildClick: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     val pal = kanbanPalette()
     Card(
@@ -504,7 +513,9 @@ private fun KanbanTaskCardView(task: KanbanTaskCard, onClick: () -> Unit) {
                     )
                     Spacer(Modifier.height(6.dp))
                     task.children.forEach { child ->
-                        KanbanChildCardView(child, onClick = { onClick() })
+                        // Open the child's own detail so it can be acted on
+                        // (comment/unblock/delete) independently of the parent.
+                        KanbanChildCardView(child, onClick = { onChildClick(child.id) })
                         Spacer(Modifier.height(4.dp))
                     }
                     Spacer(Modifier.height(6.dp))
@@ -834,10 +845,13 @@ private fun TaskDetailSheet(
             title = { Text("Delete task?") },
             text = { Text("\"${task.title}\" and all its comments, events and child links will be permanently removed. This cannot be undone.") },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmDelete = false
-                    onAction("delete", null)
-                }) { Text("Delete", color = ErrorRed) }
+                TextButton(
+                    onClick = {
+                        confirmDelete = false
+                        onAction("delete", null)
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp).padding(horizontal = 8.dp),
+                ) { Text("Delete", color = ErrorRed) }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
