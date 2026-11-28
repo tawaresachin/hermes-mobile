@@ -3,9 +3,9 @@ package com.hermes.mobile.ui.screens.kanban
 import androidx.compose.runtime.Immutable
 import org.json.JSONObject
 
-/** A linked child task rendered under its parent with its stage badge. */
+/** A sub-task linked under a parent task, with its own stage (status). */
 @Immutable
-data class KanbanChildCard(
+data class KanbanSubtask(
     val id: String,
     val title: String,
     val status: String,
@@ -29,7 +29,7 @@ data class KanbanTaskCard(
     val progressDone: Int,
     val progressTotal: Int,
     val currentRunStartedAt: Long,
-    val children: List<KanbanChildCard> = emptyList(),
+    val subtasks: List<KanbanSubtask> = emptyList(),
 )
 
 @Immutable
@@ -144,11 +144,11 @@ private fun parseTaskCard(json: JSONObject): KanbanTaskCard? {
         progressDone = progress?.optInt("done", 0) ?: 0,
         progressTotal = progress?.optInt("total", 0) ?: 0,
         currentRunStartedAt = json.long("current_run_started_at"),
-        children = json.optJSONArray("children")?.let { arr ->
+        subtasks = json.optJSONArray("children")?.let { arr ->
             (0 until arr.length()).mapNotNull { i ->
                 val c = arr.optJSONObject(i)?.str("id")?.ifBlank { null } ?: return@mapNotNull null
                 val obj = arr.optJSONObject(i)!!
-                KanbanChildCard(
+                KanbanSubtask(
                     id = c,
                     title = obj.str("title").ifBlank { "Untitled" },
                     status = obj.str("status").ifBlank { "todo" },

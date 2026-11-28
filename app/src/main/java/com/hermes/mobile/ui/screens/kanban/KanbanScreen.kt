@@ -436,7 +436,7 @@ private fun KanbanStageCard(
                     KanbanTaskCardView(
                         task,
                         onClick = { onTaskClick(task.id) },
-                        onChildClick = onTaskClick,
+                        onSubtaskClick = onTaskClick,
                     )
                     Spacer(Modifier.height(8.dp))
                 }
@@ -449,7 +449,7 @@ private fun KanbanStageCard(
 private fun KanbanTaskCardView(
     task: KanbanTaskCard,
     onClick: () -> Unit,
-    onChildClick: (String) -> Unit,
+    onSubtaskClick: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val pal = kanbanPalette()
@@ -503,19 +503,19 @@ private fun KanbanTaskCardView(
                     )
                     Spacer(Modifier.height(6.dp))
                 }
-                // Child cards keep their own stage badge — a child can be in
-                // a different stage than its parent, so its badge is needed.
-                if (task.children.isNotEmpty()) {
+                // Sub-tasks keep their own stage badge — a sub-task can be
+                // in a different stage than its parent task.
+                if (task.subtasks.isNotEmpty()) {
                     Text(
-                        "Child cards (${task.progressDone}/${task.progressTotal} done)",
+                        "Sub-tasks (${task.progressDone}/${task.progressTotal} done)",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(Modifier.height(6.dp))
-                    task.children.forEach { child ->
-                        // Open the child's own detail so it can be acted on
+                    task.subtasks.forEach { subtask ->
+                        // Open the sub-task's own detail so it can be acted on
                         // (comment/unblock/delete) independently of the parent.
-                        KanbanChildCardView(child, onClick = { onChildClick(child.id) })
+                        KanbanSubtaskView(subtask, onClick = { onSubtaskClick(subtask.id) })
                         Spacer(Modifier.height(4.dp))
                     }
                     Spacer(Modifier.height(6.dp))
@@ -556,8 +556,8 @@ private fun KanbanTaskCardView(
 }
 
 @Composable
-private fun KanbanChildCardView(child: KanbanChildCard, onClick: () -> Unit) {
-    val stageColor = statusColor(child.status)
+private fun KanbanSubtaskView(subtask: KanbanSubtask, onClick: () -> Unit) {
+    val stageColor = statusColor(subtask.status)
     val pal = kanbanPalette()
     Surface(
         onClick = onClick,
@@ -572,7 +572,7 @@ private fun KanbanChildCardView(child: KanbanChildCard, onClick: () -> Unit) {
         ) {
             Surface(color = stageColor.copy(alpha = 0.18f), shape = RoundedCornerShape(4.dp)) {
                 Text(
-                    kanbanStatusLabel(child.status),
+                    kanbanStatusLabel(subtask.status),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = stageColor,
@@ -581,7 +581,7 @@ private fun KanbanChildCardView(child: KanbanChildCard, onClick: () -> Unit) {
             }
             Spacer(Modifier.width(8.dp))
             Text(
-                child.title,
+                subtask.title,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -589,7 +589,7 @@ private fun KanbanChildCardView(child: KanbanChildCard, onClick: () -> Unit) {
             )
             Spacer(Modifier.width(6.dp))
             Text(
-                child.assignee.ifBlank { "—" },
+                subtask.assignee.ifBlank { "—" },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

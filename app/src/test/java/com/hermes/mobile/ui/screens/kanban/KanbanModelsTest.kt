@@ -56,8 +56,8 @@ class KanbanModelsTest {
         assertEquals("ready", task.status)
         assertEquals(1, task.progressDone)
         assertEquals(3, task.progressTotal)
-        assertEquals(1, task.children.size)
-        assertEquals("running", task.children.first().status)
+        assertEquals(1, task.subtasks.size)
+        assertEquals("running", task.subtasks.first().status)
         assertEquals(42L, board.latestEventId)
     }
 
