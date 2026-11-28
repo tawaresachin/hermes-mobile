@@ -81,6 +81,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.hermes.mobile.KanbanNav
 import com.hermes.mobile.ui.theme.ErrorRed
 import com.hermes.mobile.ui.theme.HermesPrimary
+import com.hermes.mobile.ui.theme.LocalDarkTheme
 import com.hermes.mobile.ui.theme.SuccessGreen
 import com.hermes.mobile.ui.theme.WarningAmber
 import java.text.SimpleDateFormat
@@ -313,6 +314,37 @@ private fun KanbanEnableCard(state: KanbanUiState, onEnable: () -> Unit) {
     }
 }
 
+/** Explicit three-level palette. The theme's surface/surfaceVariant tokens
+ * are only a few RGB units apart in light mode, which made the stage/task
+ * nesting invisible. These values give a clearly readable hierarchy in both
+ * themes (stage darkest gray → task white → child mid-gray). */
+private data class KanbanPalette(
+    val stageBg: Color,
+    val taskBg: Color,
+    val childBg: Color,
+    val border: Color,
+    val mutedText: Color,
+)
+
+@Composable
+private fun kanbanPalette(): KanbanPalette = if (LocalDarkTheme.current) {
+    KanbanPalette(
+        stageBg = Color(0xFF243342),
+        taskBg = Color(0xFF3B4E62),
+        childBg = Color(0xFF1C2833),
+        border = Color(0xFF5C748B),
+        mutedText = Color(0xFFB9C6D3),
+    )
+} else {
+    KanbanPalette(
+        stageBg = Color(0xFFD8D8DE),
+        taskBg = Color.White,
+        childBg = Color(0xFFC7C7CE),
+        border = Color(0xFFA6A6B0),
+        mutedText = Color(0xFF54585D),
+    )
+}
+
 @Composable
 private fun KanbanBoardView(
     board: KanbanBoard,
@@ -323,41 +355,85 @@ private fun KanbanBoardView(
         if (refreshing) {
             androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
         }
-        // Vertical stage sections: each column becomes a stacked band with a
-        // stage badge header and its cards beneath — easier to scan on a
-        // phone than a horizontally-paged board, and it keeps parent/child
-        // cards in one scroll flow.
+        // Each stage is ONE gray card: the stage name is the card title and
+        // its tasks are sub-cards nested underneath. No per-task status badge
+        // is needed (and therefore no truncated status text) — the stage
+        // title is the single source of truth for the status.
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+            // Extra bottom inset keeps the last card clear of the FAB.
+            contentPadding = PaddingValues(
+                start = 10.dp, end = 10.dp, top = 10.dp, bottom = 88.dp,
+            ),
         ) {
-            board.columns.forEach { column ->
-                // Render every stage — an empty stage must be visible as a
-                // "No tasks" band, otherwise "empty" is indistinguishable
-                // from "stage missing".
-                item(key = "header_${column.key}") {
-                    KanbanStageHeader(column)
+            items(board.columns, key = { it.key }) { column ->
+                KanbanStageCard(column, onTaskClick)
+            }
+        }
+    }
+}
+
+@Composable
+private fun KanbanStageCard(
+    column: KanbanColumn,
+    onTaskClick: (String) -> Unit,
+) {
+    val stageColor = statusColor(column.key)
+    val pal = kanbanPalette()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            // Full-opacity gray stage container — clearly darker than the
+            // white task sub-cards nested inside it.
+            containerColor = pal.stageBg,
+        ),
+        border = androidx.compose.foundation.BorderStroke(1.dp, pal.border),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            // ── Stage title (full name, never trimmed) ──
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(10.dp).clip(CircleShape).background(stageColor)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    column.label,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(8.dp))
+                Surface(
+                    color = stageColor.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(6.dp),
+                ) {
+                    Text(
+                        column.tasks.size.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        // Dark on light tint: readable at 11sp for every stage.
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                    )
                 }
-                if (column.tasks.isEmpty()) {
-                    item(key = "empty_${column.key}") {
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
-                            shape = RoundedCornerShape(8.dp),
-                        ) {
-                            Text(
-                                "No tasks in this stage",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                            )
-                        }
-                    }
-                } else {
-                    items(column.tasks, key = { it.id }) { task ->
-                        KanbanTaskCardView(task, onClick = { onTaskClick(task.id) })
-                    }
+            }
+            Spacer(Modifier.height(10.dp))
+
+            // ── Task sub-cards ──
+            if (column.tasks.isEmpty()) {
+                Text(
+                    "No tasks in this stage",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = pal.mutedText,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+            } else {
+                column.tasks.forEach { task ->
+                    KanbanTaskCardView(task, onClick = { onTaskClick(task.id) })
+                    Spacer(Modifier.height(8.dp))
                 }
             }
         }
@@ -365,61 +441,23 @@ private fun KanbanBoardView(
 }
 
 @Composable
-private fun KanbanStageHeader(column: KanbanColumn) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        Surface(
-            color = statusColor(column.key).copy(alpha = 0.18f),
-            shape = RoundedCornerShape(6.dp),
-        ) {
-            Text(
-                column.label.uppercase(),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = statusColor(column.key),
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Text(
-            "${column.tasks.size} ${if (column.tasks.size == 1) "task" else "tasks"}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.weight(1f))
-        Box(
-            Modifier.size(8.dp).clip(CircleShape).background(statusColor(column.key))
-        )
-    }
-}
-
-@Composable
 private fun KanbanTaskCardView(task: KanbanTaskCard, onClick: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    val stageColor = statusColor(task.status)
+    val pal = kanbanPalette()
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { expanded = !expanded },
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            .clickable(
+                indication = null,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            ) { expanded = !expanded },
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = pal.taskBg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, pal.border),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Stage badge on every card
-                Surface(
-                    color = stageColor.copy(alpha = 0.16f),
-                    shape = RoundedCornerShape(6.dp),
-                ) {
-                    Text(
-                        kanbanStatusLabel(task.status),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = stageColor,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
                 Text(
                     task.title,
                     style = MaterialTheme.typography.bodyMedium,
@@ -428,9 +466,10 @@ private fun KanbanTaskCardView(task: KanbanTaskCard, onClick: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                Spacer(Modifier.width(6.dp))
                 Icon(
                     imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    contentDescription = if (expanded) "Collapse task" else "Expand task",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp),
                 )
@@ -442,7 +481,7 @@ private fun KanbanTaskCardView(task: KanbanTaskCard, onClick: () -> Unit) {
                         task.bodyPreview,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 4,
+                        maxLines = 6,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.height(8.dp))
@@ -455,7 +494,8 @@ private fun KanbanTaskCardView(task: KanbanTaskCard, onClick: () -> Unit) {
                     )
                     Spacer(Modifier.height(6.dp))
                 }
-                // Child cards with their own stage badge, nested under parent.
+                // Child cards keep their own stage badge — a child can be in
+                // a different stage than its parent, so its badge is needed.
                 if (task.children.isNotEmpty()) {
                     Text(
                         "Child cards (${task.progressDone}/${task.progressTotal} done)",
@@ -507,11 +547,13 @@ private fun KanbanTaskCardView(task: KanbanTaskCard, onClick: () -> Unit) {
 @Composable
 private fun KanbanChildCardView(child: KanbanChildCard, onClick: () -> Unit) {
     val stageColor = statusColor(child.status)
+    val pal = kanbanPalette()
     Surface(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().padding(start = 12.dp),
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        color = pal.childBg,
+        border = androidx.compose.foundation.BorderStroke(1.dp, pal.border),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
